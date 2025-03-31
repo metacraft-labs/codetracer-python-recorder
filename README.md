@@ -11,7 +11,7 @@ An unfinished prototype of a recorder of Python programs that produces [CodeTrac
 you can currently use it directly with
 
 ```bash
-python trace.rb <path to python file>
+python trace.py <path to python file>
 # produces several trace json files in the current directory
 # or in the folder of `$CODETRACER_DB_TRACE_PATH` if such an env var is defined
 ```
