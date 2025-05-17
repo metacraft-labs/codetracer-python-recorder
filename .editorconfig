@@ -1,0 +1,20 @@
+# EditorConfig helps maintain consistent coding styles for multiple developers
+# http://EditorConfig.org
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.py]
+indent_size = 4
+
+[*.md]
+# Two trailing spaces yield a hard line break in Markdown.
+# https://spec.commonmark.org/0.30/#hard-line-breaks
+trim_trailing_whitespace = false
