@@ -2,6 +2,8 @@ import os
 import sys
 import pprint
 import json
+import runpy
+from pathlib import Path
 from typing import NewType, List, Any, Dict
 from dataclasses import dataclass
 
@@ -63,7 +65,7 @@ class TraceRecord:
     calls: List[Call]
     types: List[Type]
     events: List[Any]
-    variables: List[List[Value]]
+    variables: List[List[ArgRecord]]
     flow: List[Any]
     paths: List[str]
     
@@ -89,6 +91,12 @@ class TraceRecord:
         self.step_stack = [top_level.step_id]
         # self.path_map = {}
         self.current_call_key = CallKey(top_level.key + 1)
+
+    def register_variables(self, frame):
+        vars_snapshot = []
+        for name, val in frame.f_locals.items():
+            vars_snapshot.append(ArgRecord(name, self.load_value(val)))
+        self.variables.append(vars_snapshot)
 
     def register_step(self, path: str, line_arg: Any):
         try:
@@ -179,25 +187,37 @@ TRACE.types.append(NO_TYPE)
 
 
 def trace_func(frame, event: str, arg):
+    filename = frame.f_code.co_filename
+    if not filename.startswith(PROGRAM_DIR):
+        return
     if event == 'call':
-        if not frame.f_code.co_filename.startswith('<frozen '):
-            TRACE.register_call(frame.f_code.co_filename, frame.f_code.co_name, frame.f_lineno)
+        TRACE.register_call(filename, frame.f_lineno, frame.f_code.co_name)
+        TRACE.register_variables(frame)
         return trace_in_func
 
 def trace_in_func(frame, event: str, arg):
-    # print(dir(frame.f_code))
-    if not frame.f_code.co_filename.startswith('<frozen '):
-        if event == 'line':
-            TRACE.register_step(frame.f_code.co_filename, frame.f_lineno)
-        elif event == 'call':
-            print('CALL')
-        elif event == 'return':
-            TRACE.register_return(frame.f_code.co_filename, frame.f_lineno, arg)
+    filename = frame.f_code.co_filename
+    if not filename.startswith(PROGRAM_DIR):
+        return
+    if event == 'line':
+        TRACE.register_step(filename, frame.f_lineno)
+        TRACE.register_variables(frame)
+    elif event == 'call':
+        pass
+    elif event == 'return':
+        TRACE.register_return(filename, frame.f_lineno, arg)
+        TRACE.register_variables(frame)
     return trace_in_func
+
+if len(sys.argv) < 2:
+    raise SystemExit("Usage: trace.py <program.py>")
+
+program_path = os.path.abspath(sys.argv[1])
+PROGRAM_DIR = str(Path(program_path).parent)
 
 sys.settrace(trace_func)
 
-import calc
+runpy.run_path(program_path, run_name="__main__")
 
 sys.settrace(None)
 
