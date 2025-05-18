@@ -1,0 +1,1150 @@
+[
+  {
+    "Type": {
+      "kind": 7,
+      "lang_type": "Integer",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 9,
+      "lang_type": "String",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 12,
+      "lang_type": "Bool",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 9,
+      "lang_type": "Symbol",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 24,
+      "lang_type": "No type",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 8,
+      "lang_type": "Float",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 27,
+      "lang_type": "Tuple",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 16,
+      "lang_type": "Bytes",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 6,
+      "lang_type": "Complex",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Path": ""
+  },
+  {
+    "Function": {
+      "path_id": 0,
+      "line": 1,
+      "name": "<top-level>"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 0,
+      "args": []
+    }
+  },
+  {
+    "Path": "new_types.py"
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 1,
+      "name": "<module>"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 1,
+      "args": []
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 1
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 14
+    }
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 1,
+      "name": "demo"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 2,
+      "args": []
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 2
+    }
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 2,
+      "name": "MyObj"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 3,
+      "args": []
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 2
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 3
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 3
+    }
+  },
+  {
+    "VariableName": "<return_value>"
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 7
+    }
+  },
+  {
+    "VariableName": "MyObj"
+  },
+  {
+    "Type": {
+      "kind": 6,
+      "lang_type": "type",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 6,
+      "lang_type": "function",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 16,
+      "lang_type": "Object",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 8
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "VariableName": "fl"
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 9
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "VariableName": "tpl"
+  },
+  {
+    "Value": {
+      "variable_id": 3,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 10
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 3,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "VariableName": "bb"
+  },
+  {
+    "Value": {
+      "variable_id": 4,
+      "value": {
+        "kind": "Raw",
+        "type_id": 7,
+        "r": "b'xy'"
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 11
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 3,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 4,
+      "value": {
+        "kind": "Raw",
+        "type_id": 7,
+        "r": "b'xy'"
+      }
+    }
+  },
+  {
+    "VariableName": "cmplx"
+  },
+  {
+    "Value": {
+      "variable_id": 5,
+      "value": {
+        "kind": "Struct",
+        "type_id": 8,
+        "field_values": [
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 1.0
+          },
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 2.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 3,
+      "name": "__init__"
+    }
+  },
+  {
+    "VariableName": "self"
+  },
+  {
+    "Type": {
+      "kind": 6,
+      "lang_type": "MyObj",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Call": {
+      "function_id": 4,
+      "args": [
+        {
+          "variable_id": 6,
+          "value": {
+            "kind": "Struct",
+            "type_id": 12,
+            "field_values": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 4
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 6,
+      "value": {
+        "kind": "Struct",
+        "type_id": 12,
+        "field_values": []
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 5
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 6,
+      "value": {
+        "kind": "Struct",
+        "type_id": 12,
+        "field_values": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 10
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 5
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 6,
+      "value": {
+        "kind": "Struct",
+        "type_id": 12,
+        "field_values": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 10
+          },
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "hi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 12
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 3,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 4,
+      "value": {
+        "kind": "Raw",
+        "type_id": 7,
+        "r": "b'xy'"
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 5,
+      "value": {
+        "kind": "Struct",
+        "type_id": 8,
+        "field_values": [
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 1.0
+          },
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 2.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "VariableName": "obj"
+  },
+  {
+    "Value": {
+      "variable_id": 7,
+      "value": {
+        "kind": "Struct",
+        "type_id": 12,
+        "field_values": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 10
+          },
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "hi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 12
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Struct",
+        "type_id": 9,
+        "field_values": [
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "__main__"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 10,
+            "field_values": []
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__dict__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "Raw",
+            "type_id": 11,
+            "r": "<attribute '__weakref__' of 'MyObj' objects>"
+          },
+          {
+            "kind": "None",
+            "type_id": 4
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 2,
+      "value": {
+        "kind": "Float",
+        "type_id": 5,
+        "f": 1.5
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 3,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 4,
+      "value": {
+        "kind": "Raw",
+        "type_id": 7,
+        "r": "b'xy'"
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 5,
+      "value": {
+        "kind": "Struct",
+        "type_id": 8,
+        "field_values": [
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 1.0
+          },
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 2.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 7,
+      "value": {
+        "kind": "Struct",
+        "type_id": 12,
+        "field_values": [
+          {
+            "kind": "Int",
+            "type_id": 0,
+            "i": 10
+          },
+          {
+            "kind": "String",
+            "type_id": 1,
+            "text": "hi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 1.5
+          },
+          {
+            "kind": "Tuple",
+            "type_id": 6,
+            "elements": [
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 1
+              },
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 2
+              },
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 3
+              }
+            ]
+          },
+          {
+            "kind": "Raw",
+            "type_id": 7,
+            "r": "b'xy'"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 8,
+            "field_values": [
+              {
+                "kind": "Float",
+                "type_id": 5,
+                "f": 1.0
+              },
+              {
+                "kind": "Float",
+                "type_id": 5,
+                "f": 2.0
+              }
+            ]
+          },
+          {
+            "kind": "Struct",
+            "type_id": 12,
+            "field_values": [
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 10
+              },
+              {
+                "kind": "String",
+                "type_id": 1,
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "Tuple",
+        "type_id": 6,
+        "elements": [
+          {
+            "kind": "Float",
+            "type_id": 5,
+            "f": 1.5
+          },
+          {
+            "kind": "Tuple",
+            "type_id": 6,
+            "elements": [
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 1
+              },
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 2
+              },
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 3
+              }
+            ]
+          },
+          {
+            "kind": "Raw",
+            "type_id": 7,
+            "r": "b'xy'"
+          },
+          {
+            "kind": "Struct",
+            "type_id": 8,
+            "field_values": [
+              {
+                "kind": "Float",
+                "type_id": 5,
+                "f": 1.0
+              },
+              {
+                "kind": "Float",
+                "type_id": 5,
+                "f": 2.0
+              }
+            ]
+          },
+          {
+            "kind": "Struct",
+            "type_id": 12,
+            "field_values": [
+              {
+                "kind": "Int",
+                "type_id": 0,
+                "i": 10
+              },
+              {
+                "kind": "String",
+                "type_id": 1,
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 14
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  }
+]
