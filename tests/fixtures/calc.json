@@ -1,437 +1,206 @@
-{
-    "program": "/workspace/codetracer-python-recorder/src/trace.py",
-    "args": [
-        "/workspace/codetracer-python-recorder/tests/programs/calc.py"
-    ],
-    "workdir": "/tmp/tmp.pYVZWB9yqr",
-    "steps": [
-        {
-            "step_id": 0,
-            "path_id": 1,
-            "line": 0,
-            "call_key": 2
-        },
-        {
-            "step_id": 1,
-            "path_id": 1,
-            "line": 1,
-            "call_key": 2
-        },
-        {
-            "step_id": 2,
-            "path_id": 1,
-            "line": 6,
-            "call_key": 2
-        },
-        {
-            "step_id": 3,
-            "path_id": 1,
-            "line": 1,
-            "call_key": 3
-        },
-        {
-            "step_id": 4,
-            "path_id": 1,
-            "line": 2,
-            "call_key": 3
-        },
-        {
-            "step_id": 5,
-            "path_id": 1,
-            "line": 3,
-            "call_key": 3
-        },
-        {
-            "step_id": 6,
-            "path_id": 1,
-            "line": 4,
-            "call_key": 3
-        },
-        {
-            "step_id": 7,
-            "path_id": 1,
-            "line": 4,
-            "call_key": 3
-        },
-        {
-            "step_id": 8,
-            "path_id": 1,
-            "line": 6,
-            "call_key": 3
-        }
-    ],
-    "calls": [
-        {
-            "key": 0,
-            "path_id": 1,
-            "line": 0,
-            "name": "<toplevel>",
-            "args": [],
-            "return_value": {
-                "kind": "None",
-                "ti": 1
-            },
-            "step_id": 0,
-            "depth": 0,
-            "parent_key": -1
-        },
-        {
-            "key": 2,
-            "path_id": 1,
-            "line": 0,
-            "name": "<module>",
-            "args": [],
-            "return_value": {
-                "kind": "None",
-                "ti": 1
-            },
-            "step_id": 0,
-            "depth": 1,
-            "parent_key": 0
-        },
-        {
-            "key": 3,
-            "path_id": 1,
-            "line": 1,
-            "name": "foo",
-            "args": [],
-            "return_value": {
-                "kind": "Error",
-                "ti": 1,
-                "msg": "<not supported>"
-            },
-            "step_id": 3,
-            "depth": 2,
-            "parent_key": 2
-        }
-    ],
-    "variables": [
-        [
-            {
-                "name": "__name__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__doc__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__package__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__loader__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__spec__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__file__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__cached__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__builtins__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            }
-        ],
-        [
-            {
-                "name": "__name__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__doc__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__package__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__loader__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__spec__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__file__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__cached__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__builtins__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            }
-        ],
-        [
-            {
-                "name": "__name__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__doc__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__package__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__loader__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__spec__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__file__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__cached__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__builtins__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "foo",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            }
-        ],
-        [],
-        [],
-        [
-            {
-                "name": "x",
-                "value": {
-                    "kind": "Int",
-                    "ti": 0,
-                    "i": 1
-                }
-            }
-        ],
-        [
-            {
-                "name": "x",
-                "value": {
-                    "kind": "Int",
-                    "ti": 0,
-                    "i": 2
-                }
-            }
-        ],
-        [
-            {
-                "name": "x",
-                "value": {
-                    "kind": "Int",
-                    "ti": 0,
-                    "i": 2
-                }
-            }
-        ],
-        [
-            {
-                "name": "__name__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__doc__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__package__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__loader__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__spec__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__file__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__cached__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "__builtins__",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            },
-            {
-                "name": "foo",
-                "value": {
-                    "kind": "Error",
-                    "ti": 1,
-                    "msg": "<not supported>"
-                }
-            }
-        ]
-    ],
-    "types": [
-        {
-            "kind": 7,
-            "lang_type": "int"
-        },
-        {
-            "kind": 30,
-            "lang_type": "<no type>"
-        }
-    ],
-    "events": [],
-    "paths": [
-        "",
-        "/workspace/codetracer-python-recorder/tests/programs/calc.py"
-    ]
-}
+[
+  {
+    "Type": {
+      "kind": 7,
+      "lang_type": "Integer",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 9,
+      "lang_type": "String",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 12,
+      "lang_type": "Bool",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 9,
+      "lang_type": "Symbol",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 24,
+      "lang_type": "No type",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Path": ""
+  },
+  {
+    "Function": {
+      "path_id": 0,
+      "line": 1,
+      "name": "<top-level>"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 0,
+      "args": []
+    }
+  },
+  {
+    "Path": "/workspace/codetracer-python-recorder/tests/programs/calc.py"
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 1,
+      "name": "<module>"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 1,
+      "args": []
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 1
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 6
+    }
+  },
+  {
+    "Function": {
+      "path_id": 1,
+      "line": 1,
+      "name": "foo"
+    }
+  },
+  {
+    "Call": {
+      "function_id": 2,
+      "args": []
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 2
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 3
+    }
+  },
+  {
+    "VariableName": "x"
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "Int",
+        "type_id": 0,
+        "i": 1
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 4
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "Int",
+        "type_id": 0,
+        "i": 2
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 4
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 0,
+      "value": {
+        "kind": "Int",
+        "type_id": 0,
+        "i": 2
+      }
+    }
+  },
+  {
+    "VariableName": "<return_value>"
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "Int",
+        "type_id": 0,
+        "i": 2
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "Int",
+        "type_id": 0,
+        "i": 2
+      }
+    }
+  },
+  {
+    "Step": {
+      "path_id": 1,
+      "line": 6
+    }
+  },
+  {
+    "Value": {
+      "variable_id": 1,
+      "value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  },
+  {
+    "Return": {
+      "return_value": {
+        "kind": "None",
+        "type_id": 4
+      }
+    }
+  }
+]
