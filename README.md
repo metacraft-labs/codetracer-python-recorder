@@ -6,7 +6,7 @@ An unfinished prototype of a recorder of Python programs that produces [CodeTrac
 > Currently it is in a very early phase: we're welcoming contribution and discussion!
 
 
-### usage
+### Usage
 
 you can currently use it directly with
 
@@ -18,7 +18,7 @@ python trace.py <path to python file>
 
 however you probably want to use it in combination with CodeTracer, which would be released soon.
 
-## future directions
+## Future directions
 
 The current Python support is an unfinished prototype. We can finish it. In the future, it may be expanded to function in a way to similar to the more complete implementations, e.g. [Noir](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer).
 
@@ -49,14 +49,14 @@ It would be useful to have a way to record in detail only certain periods of the
 we plan on expanding the [trace format](https://github.com/metacraft-labs/runtime_tracing/) and CodeTracer' support, so that this is possible. It would let one be able to record interesting
 parts of even long-running or more heavy programs.
 
-### Cooperation
+### Contributing
 
-We'd be very happy if the community finds this useful, and if anyone wants to
+We'd be very happy if the community finds this useful, and if anyone wants to:
 
-* Cooperate with us on supporting/advancing the Python support or CodeTracer 
-* Contribute Python support or anything else to this trace or to [CodeTracer](https://github.com/metacraft-labs/CodeTracer)
-* Just discuss various ideas with us: here, in the issue tracker, or in our [discord](https://discord.gg/qSDCAFMP)
-* Use and test the ruby support or CodeTracer
+* Use and test the Python support or CodeTracer.
+* Provide feedback and discuss alternative implementation ideas: in the issue tracker, or in our [discord](https://discord.gg/qSDCAFMP).
+* Contribute code to enhance the Python support of CodeTracer.
+* Provide [sponsorship](https://opencollective.com/codetracer), so we can hire dedicated full-time maintainers for this project.
 
 ### Legal info
 
