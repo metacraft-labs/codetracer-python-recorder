@@ -61,7 +61,7 @@
     }
   },
   {
-    "Path": "/workspace/codetracer-python-recorder/tests/programs/calc.py"
+    "Path": "calc.py"
   },
   {
     "Function": {

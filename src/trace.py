@@ -64,6 +64,15 @@ class Tracer:
 
     # -------------------------------------------------------------------- paths
     def _register_path(self, path: str) -> int:
+        """Register a source file path and emit a ``Path`` event."""
+
+        if path:
+            abs_path = os.path.abspath(path)
+            try:
+                path = os.path.relpath(abs_path, self.program_dir)
+            except ValueError:
+                path = abs_path
+
         if path not in self.path_map:
             self.path_map[path] = len(self.paths)
             self.paths.append(path)
