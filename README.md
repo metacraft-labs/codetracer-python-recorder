@@ -8,7 +8,21 @@ An unfinished prototype of a recorder of Python programs that produces [CodeTrac
 
 ### Usage
 
-you can currently use it directly with
+Install the package with `pip` or `uv`:
+
+```bash
+pip install codetracer-python-recorder
+```
+
+Then invoke the recorder as a command line tool:
+
+```bash
+codetracer-record <path to python file>
+# produces several trace json files in the current directory
+# or in the folder of `$CODETRACER_DB_TRACE_PATH` if such an env var is defined
+```
+
+During development you can also run it directly with
 
 ```bash
 python trace.py <path to python file>

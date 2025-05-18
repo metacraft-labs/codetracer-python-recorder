@@ -200,17 +200,23 @@ def trace_program(program: str) -> Tracer:
     return tracer
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: trace.py <program.py>")
+def main(argv: List[str] | None = None) -> None:
+    """Entry point for the command line interface."""
 
-    program_path = sys.argv[1]
+    if len(argv) < 1:
+        raise SystemExit("Usage: codetracer-record <program.py>")
+
+    program_path = argv[0]
     tracer = trace_program(program_path)
 
-    meta = {"workdir": os.getcwd(), "program": sys.argv[0], "args": sys.argv[1:]}
+    meta = {"workdir": os.getcwd(), "program": sys.argv[0], "args": argv}
     with open("trace_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
     with open("trace_paths.json", "w") as f:
         json.dump(tracer.paths, f, indent=2)
     with open("trace.json", "w") as f:
         json.dump(tracer.events, f, indent=2)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI passthrough
+    main(sys.argv[1:])
