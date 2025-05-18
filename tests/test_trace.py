@@ -25,7 +25,6 @@ class TraceTests(unittest.TestCase):
                     self.assertTrue(trace_file.exists())
                     with open(trace_file) as f:
                         trace_data = json.load(f)
-                    trace_data.pop("workdir", None)
                     fixture_path = FIXTURES_DIR / f"{program.stem}.json"
                     self.assertTrue(
                         fixture_path.exists(),
@@ -33,7 +32,6 @@ class TraceTests(unittest.TestCase):
                     )
                     with open(fixture_path) as f:
                         expected_data = json.load(f)
-                    expected_data.pop("workdir", None)
                     self.assertEqual(trace_data, expected_data)
 
 
