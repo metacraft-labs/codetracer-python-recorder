@@ -61,6 +61,10 @@ class Tracer:
         self._register_type(12, "Bool")
         self._register_type(9, "Symbol")
         self._register_type(24, "No type")
+        self._register_type(8, "Float")
+        self._register_type(27, "Tuple")
+        self._register_type(16, "Bytes")
+        self._register_type(6, "Complex")
 
     # -------------------------------------------------------------------- paths
     def _register_path(self, path: str) -> int:
@@ -119,12 +123,18 @@ class Tracer:
         return self.types[name]
 
     def _value(self, val: Any) -> Dict[str, Any]:
-        if isinstance(val, int):
-            return {"kind": "Int", "type_id": self.types["Integer"], "i": val}
         if isinstance(val, bool):
             return {"kind": "Bool", "type_id": self.types["Bool"], "b": val}
+        if isinstance(val, int):
+            return {"kind": "Int", "type_id": self.types["Integer"], "i": val}
+        if isinstance(val, float):
+            type_id = self._ensure_type(8, "Float")
+            return {"kind": "Float", "type_id": type_id, "f": val}
         if isinstance(val, str):
             return {"kind": "String", "type_id": self.types["String"], "text": val}
+        if isinstance(val, (bytes, bytearray)):
+            type_id = self._ensure_type(16, "Bytes")
+            return {"kind": "Raw", "type_id": type_id, "r": str(val)}
         if isinstance(val, list):
             type_id = self._ensure_type(0, "Array")
             return {
@@ -133,8 +143,33 @@ class Tracer:
                 "elements": [self._value(v) for v in val],
                 "is_slice": False,
             }
+        if isinstance(val, tuple):
+            type_id = self._ensure_type(27, "Tuple")
+            return {
+                "kind": "Tuple",
+                "type_id": type_id,
+                "elements": [self._value(v) for v in val],
+            }
+        if isinstance(val, complex):
+            type_id = self._ensure_type(6, "Complex")
+            return {
+                "kind": "Struct",
+                "type_id": type_id,
+                "field_values": [self._value(val.real), self._value(val.imag)],
+            }
         if val is None:
             return {"kind": "None", "type_id": self.types["No type"]}
+        if hasattr(val, "__dict__"):
+            type_id = self._ensure_type(6, val.__class__.__name__)
+            fields = [
+                self._value(v)
+                for _, v in sorted(val.__dict__.items(), key=lambda kv: kv[0])
+            ]
+            return {
+                "kind": "Struct",
+                "type_id": type_id,
+                "field_values": fields,
+            }
         type_id = self._ensure_type(16, "Object")
         return {"kind": "Raw", "type_id": type_id, "r": str(val)}
 

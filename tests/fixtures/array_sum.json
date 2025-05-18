@@ -45,6 +45,42 @@
     }
   },
   {
+    "Type": {
+      "kind": 8,
+      "lang_type": "Float",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 27,
+      "lang_type": "Tuple",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 16,
+      "lang_type": "Bytes",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
+    "Type": {
+      "kind": 6,
+      "lang_type": "Complex",
+      "specific_info": {
+        "kind": "None"
+      }
+    }
+  },
+  {
     "Path": ""
   },
   {
@@ -111,7 +147,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -148,7 +184,7 @@
           "variable_id": 0,
           "value": {
             "kind": "Sequence",
-            "type_id": 5,
+            "type_id": 9,
             "elements": [
               {
                 "kind": "Int",
@@ -183,7 +219,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -216,7 +252,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -262,7 +298,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -318,7 +354,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -371,7 +407,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -424,7 +460,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -477,7 +513,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -530,7 +566,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -583,7 +619,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -636,7 +672,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
@@ -718,7 +754,7 @@
       "variable_id": 0,
       "value": {
         "kind": "Sequence",
-        "type_id": 5,
+        "type_id": 9,
         "elements": [
           {
             "kind": "Int",
