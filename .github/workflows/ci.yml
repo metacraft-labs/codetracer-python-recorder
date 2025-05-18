@@ -26,11 +26,13 @@ jobs:
         run: make test
 
   nix-tests:
-    name: NixOS tests
     runs-on: ubuntu-latest
-    container:
-      image: nixos/nix:latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run tests in Nix shell
-        run: nix develop --command python -m unittest discover -v
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.05
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Run tests via Nix
+        run: nix develop --command make test
