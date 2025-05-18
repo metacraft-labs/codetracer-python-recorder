@@ -203,9 +203,6 @@ def trace_program(program: str) -> Tracer:
 def main(argv: List[str] | None = None) -> None:
     """Entry point for the command line interface."""
 
-    if argv is None:
-        argv = sys.argv[1:]
-
     if len(argv) < 1:
         raise SystemExit("Usage: codetracer-record <program.py>")
 
@@ -222,4 +219,4 @@ def main(argv: List[str] | None = None) -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI passthrough
-    main()
+    main(sys.argv[1:])
