@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+AGENTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd $AGENTS_DIR
+
+apt-get update
+apt-get install -y --no-install-recommends just
