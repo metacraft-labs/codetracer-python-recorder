@@ -32,6 +32,15 @@ python trace.py <path to python file>
 
 however you probably want to use it in combination with CodeTracer, which would be released soon.
 
+### Supported value types
+
+The tracer currently understands a subset of Python's built‑in types. It can
+record integers, booleans, strings, lists, floats, tuples, byte strings,
+complex numbers and simple objects (via ``__dict__`` introspection). Values that
+don't fall in these categories are stored as raw strings.
+
+Dictionary and set types are not yet handled.
+
 ## Future directions
 
 The current Python support is an unfinished prototype. We can finish it. In the future, it may be expanded to function in a way to similar to the more complete implementations, e.g. [Noir](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer).
