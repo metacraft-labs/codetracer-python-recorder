@@ -1,20 +1,22 @@
-## codetracer-python-recorder
+## CodeTracer Recorders (Monorepo)
 
-An unfinished prototype of a recorder of Python programs that produces [CodeTracer](https://github.com/metacraft-labs/CodeTracer) traces.
+This repository now hosts two related projects:
+
+- codetracer-pure-python-recorder — the existing pure-Python prototype that records [CodeTracer](https://github.com/metacraft-labs/CodeTracer) traces using sys.settrace.
+- codetracer-python-recorder — a new, Rust-backed Python extension module (PyO3) intended to provide a faster and more featureful recorder.
 
 > [!WARNING]
-> Currently it is in a very early phase: we're welcoming contribution and discussion!
+> Both projects are early-stage prototypes. Contributions and discussion are welcome!
 
+### codetracer-pure-python-recorder
 
-### Usage
-
-Install the package with `pip` or `uv`:
+Install from PyPI:
 
 ```bash
-pip install codetracer-python-recorder
+pip install codetracer-pure-python-recorder
 ```
 
-Then invoke the recorder as a command line tool:
+CLI usage:
 
 ```bash
 codetracer-record <path to python file>
@@ -22,23 +24,34 @@ codetracer-record <path to python file>
 # or in the folder of `$CODETRACER_DB_TRACE_PATH` if such an env var is defined
 ```
 
-During development you can also run it directly with
+During development you can also run it directly:
 
 ```bash
-python trace.py <path to python file>
+python src/trace.py <path to python file>
 # produces several trace json files in the current directory
 # or in the folder of `$CODETRACER_DB_TRACE_PATH` if such an env var is defined
 ```
 
-however you probably want to use it in combination with CodeTracer, which would be released soon.
+### codetracer-python-recorder (Rust-backed)
 
-## Future directions
+A separate Python module implemented in Rust with PyO3 and built via maturin lives under:
+crates/codetracer-python-recorder/
+
+Basic workflow:
+
+- Build/dev install the Rust module:
+  - maturin develop -m crates/codetracer-python-recorder/Cargo.toml
+- Use in Python:
+  - from codetracer_python_recorder import hello
+  - hello()
+
+### Future directions
 
 The current Python support is an unfinished prototype. We can finish it. In the future, it may be expanded to function in a way to similar to the more complete implementations, e.g. [Noir](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer).
 
 Currently it's very similar to our [Ruby tracer](https://github.com/metacraft-labs/ct-ruby-tracer)
 
-### Current approach: sys.settrace API
+#### Current approach: sys.settrace API
 
 Currently we're using the sys.settrace API: https://docs.python.org/3/library/sys.html#sys.settrace .
 This is very flexible and can function with probably multiple Python versions out of the box. 
@@ -49,7 +62,7 @@ However, this is limited:
 
 For other languages, we've used a more deeply integrated approach: patching the interpreter or VM itself (e.g. Noir).
 
-### Patching the VM
+#### Patching the VM
 
 This can be a good approach for Python as well: it can let us record more precisely subvalues, assignments and subexpressions and to let
 some CodeTracer features work in a deeper/better way.
@@ -57,7 +70,7 @@ some CodeTracer features work in a deeper/better way.
 One usually needs to add additional logic to places where new opcodes/lines are being ran, and to call entries/exits. Additionally
 tracking assignments can be a great addition, but it really depends on the interpreter internals.
 
-### Filtering
+#### Filtering
 
 It would be useful to have a way to record in detail only certain periods of the program, or certain functions or modules: 
 we plan on expanding the [trace format](https://github.com/metacraft-labs/runtime_tracing/) and CodeTracer' support, so that this is possible. It would let one be able to record interesting
