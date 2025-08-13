@@ -3,3 +3,4 @@
 .aider*
 .venv/
 **/target/
+build
