@@ -12,7 +12,7 @@
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            packages = with pkgs; [ python3 just git-lfs ];
+            packages = with pkgs; [ bashInteractive python3 just git-lfs ];
           };
         });
     };
