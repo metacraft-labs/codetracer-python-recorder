@@ -50,6 +50,8 @@ jobs:
           command: build
           args: -m crates/codetracer-python-recorder/Cargo.toml --release
       - name: Install built wheel
-        run: python -m pip install --upgrade pip && python -m pip install target/wheels/*.whl
+        shell: bash
+        run: python -m pip install --upgrade pip && python -m pip install crates/codetracer-python-recorder/target/wheels/*.whl
       - name: Import smoke test
+        shell: bash
         run: python -c "import codetracer_python_recorder as m; print(m.hello())"
