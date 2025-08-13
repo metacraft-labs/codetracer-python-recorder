@@ -1,4 +1,4 @@
+# This Makefile is deprecated. Use 'just test' instead.
 .PHONY: test
-
 test:
-	python3 -m unittest discover -v
+	@echo "Deprecated: Use 'just test' instead." && false

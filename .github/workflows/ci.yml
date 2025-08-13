@@ -15,15 +15,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install make on Windows
-        if: runner.os == 'Windows'
-        run: choco install make -y
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
       - name: Run tests
         shell: bash
-        run: make test
+        run: python -m unittest discover -v
 
   nix-tests:
     runs-on: ubuntu-latest
@@ -35,4 +32,24 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Run tests via Nix
-        run: nix develop --command make test
+        run: nix develop --command just test
+
+  rust-smoke:
+    name: Rust module smoke test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - uses: messense/maturin-action@v1
+        with:
+          command: build
+          args: -m crates/codetracer-python-recorder/Cargo.toml --release
+      - name: Install built wheel
+        run: python -m pip install --upgrade pip && python -m pip install target/wheels/*.whl
+      - name: Import smoke test
+        run: python -c "import codetracer_python_recorder as m; print(m.hello())"

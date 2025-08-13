@@ -8,7 +8,7 @@ This repository contains two related projects:
 To run the Python test suite for the pure-Python tracer, execute:
 
 ```
-make test
+just test
 ```
 
 The tester executes a number of sample programs in `tests/programs` and compares their outputs to the fixtures in `tests/fixtures`.
@@ -16,6 +16,8 @@ The tester executes a number of sample programs in `tests/programs` and compares
 To build and locally develop-install the Rust-backed module:
 
 ```
+just build-rust
+# or:
 maturin develop -m crates/codetracer-python-recorder/Cargo.toml
 ```
 

@@ -11,4 +11,4 @@ name = "codetracer_python_recorder"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3 = { version = "0.25.1", features = ["extension-module"] }

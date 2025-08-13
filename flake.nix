@@ -18,6 +18,11 @@
               just
               git-lfs
 
+              # Linters and type checkers for Python code
+              ruff
+              black
+              mypy
+
               # Rust toolchain for the Rust-backed Python module
               cargo
               rustc

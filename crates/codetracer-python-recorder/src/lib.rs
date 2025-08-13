@@ -10,7 +10,8 @@ fn hello() -> PyResult<String> {
 }
 
 #[pymodule]
-fn codetracer_python_recorder(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(hello, m)?)?;
+fn codetracer_python_recorder(_py: Python<'_>, m: Bound<'_, PyModule>) -> PyResult<()> {
+    let hello_fn = wrap_pyfunction!(hello, &m)?;
+    m.add_function(hello_fn)?;
     Ok(())
 }
