@@ -7,51 +7,39 @@ on:
     branches: [main]
 
 jobs:
-  tests:
-    name: Tests on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-      - name: Run tests
-        shell: bash
-        run: python -m unittest discover -v
-
   nix-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-24.05
+          nix_path: nixpkgs=channel:nixos-25.05
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Run tests via Nix
         run: nix develop --command just test
 
-  rust-smoke:
-    name: Rust module smoke test on ${{ matrix.os }}
+  rust-tests:
+    name: Rust module test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["10", "11", "12", "13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: 3.${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v4
       - uses: messense/maturin-action@v1
         with:
           command: build
-          args: -m crates/codetracer-python-recorder/Cargo.toml --release
-      - name: Install built wheel
+          args: --interpreter python3.${{ matrix.python-version }} -m crates/codetracer-python-recorder/Cargo.toml --release
+      - name: Install and test built wheel with uv (pytest)
         shell: bash
-        run: python -m pip install --upgrade pip && python -m pip install crates/codetracer-python-recorder/target/wheels/*.whl
-      - name: Import smoke test
-        shell: bash
-        run: python -c "import codetracer_python_recorder as m; print(m.hello())"
+        run: |
+          v=${{matrix.python-version}}
+          file=(crates/codetracer-python-recorder/target/wheels/*.whl)
+          file="${file[0]}"
+          uv run -p python3.$v --with "${file}" --with pytest -- python -m pytest crates/codetracer-python-recorder/test -q
