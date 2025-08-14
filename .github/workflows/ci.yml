@@ -17,8 +17,8 @@ jobs:
           nix_path: nixpkgs=channel:nixos-25.05
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Run tests via Nix
-        run: nix develop --command just test
+      - name: Build Rust module and run tests via Nix
+        run: nix develop --command bash -lc 'just build-rust && .venv/bin/python -m unittest discover -v'
 
   rust-tests:
     name: Rust module test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
@@ -43,4 +43,5 @@ jobs:
           v=${{matrix.python-version}}
           file=(crates/codetracer-python-recorder/target/wheels/*.whl)
           file="${file[0]}"
-          uv run -p python3.$v --with "${file}" --with pytest -- python -m pytest crates/codetracer-python-recorder/test -q
+          uv run -p python3.$v --with "${file}" --with pytest -- \
+            python -m pytest crates/codetracer-python-recorder/test tests/test_codetracer_api.py -q

@@ -1,3 +1,5 @@
 Implement the Python API described in the design document for the Rust-based module. Write tests. Don't actually implement tracing using `runtime_tracing` yet, just add placeholders.
 --- FOLLOW UP TASK ---
 Implement the Python API described in the design document for the Rust-based module. Write tests. Don't actually implement tracing using runtime_tracing yet, just add placeholders.
+--- FOLLOW UP TASK ---
+The nix-tests task fails, because we haven't compiled the Rust module. The matrix rust tests currently don't run the new test, but they should.
