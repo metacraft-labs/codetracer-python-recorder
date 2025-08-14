@@ -26,5 +26,7 @@ typeCheckingMode = "basic"
 [dependency-groups]
 dev = [
     "pytest>=8.3.5",
+    "codetracer-python-recorder",
+    "codetracer-pure-python-recorder"    
 ]
 
