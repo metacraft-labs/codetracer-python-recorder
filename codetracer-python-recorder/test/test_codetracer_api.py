@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import codetracer
+import codetracer_python_recorder as codetracer
 
 
 class TracingApiTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class TracingApiTests(unittest.TestCase):
             self.assertFalse(codetracer.is_tracing())
 
     def test_environment_auto_start(self) -> None:
-        script = "import codetracer, sys; sys.stdout.write(str(codetracer.is_tracing()))"
+        script = "import codetracer_python_recorder as codetracer, sys; sys.stdout.write(str(codetracer.is_tracing()))"
         with tempfile.TemporaryDirectory() as tmpdir:
             env = os.environ.copy()
             env["CODETRACER_TRACE"] = str(Path(tmpdir) / "trace.bin")

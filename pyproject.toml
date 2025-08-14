@@ -1,28 +1,30 @@
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "codetracer-pure-python-recorder"
+name = "codetracer-python-recorders"
 version = "0.1.0"
-description = "Pure-Python prototype recorder producing CodeTracer traces"
-authors = [{name = "Metacraft Labs Ltd"}]
-license = {text = "MIT"}
-readme = "README.md"
 requires-python = ">=3.8"
-classifiers = [
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
+dependencies = []
+
+[tool.uv]
+managed = true
+
+[tool.uv.workspace]
+members = [
+  "codetracer-python-recorder",
+  "codetracer-pure-python-recorder",
 ]
 
-[tool.setuptools]
-py-modules = ["trace"]
-package-dir = {"" = "src"}
+[tool.uv.sources]
+codetracer-python-recorder = {workspace= true}
+codetracer-pure-python-recorder = {workspace= true}
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.ruff]
+line-length = 100
 
-[project.scripts]
-codetracer-record = "codetracer_pure_python_recorder.cli:main"
-codetracer-record-pure = "codetracer_pure_python_recorder.cli:main"
+[tool.pyright]
+typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
+
