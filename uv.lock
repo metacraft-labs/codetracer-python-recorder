@@ -30,6 +30,8 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "codetracer-pure-python-recorder" },
+    { name = "codetracer-python-recorder" },
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
@@ -37,7 +39,11 @@ dev = [
 [package.metadata]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3.5" }]
+dev = [
+    { name = "codetracer-pure-python-recorder", editable = "codetracer-pure-python-recorder" },
+    { name = "codetracer-python-recorder", editable = "codetracer-python-recorder" },
+    { name = "pytest", specifier = ">=8.3.5" },
+]
 
 [[package]]
 name = "colorama"
