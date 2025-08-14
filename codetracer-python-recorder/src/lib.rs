@@ -40,19 +40,12 @@ fn flush_tracing() -> PyResult<()> {
     Ok(())
 }
 
-/// Trivial function kept for smoke tests verifying the module builds.
-#[pyfunction]
-fn hello() -> PyResult<String> {
-    Ok("Hello from codetracer-python-recorder (Rust)".to_string())
-}
-
 /// Python module definition.
 #[pymodule]
-fn codetracer_python_recorder(_py: Python<'_>, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(start_tracing, &m)?)?;
-    m.add_function(wrap_pyfunction!(stop_tracing, &m)?)?;
-    m.add_function(wrap_pyfunction!(is_tracing, &m)?)?;
-    m.add_function(wrap_pyfunction!(flush_tracing, &m)?)?;
-    m.add_function(wrap_pyfunction!(hello, &m)?)?;
+fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(start_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(stop_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(is_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(flush_tracing, m)?)?;
     Ok(())
 }

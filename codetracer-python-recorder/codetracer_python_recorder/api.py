@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
-from codetracer_python_recorder import (
+from .codetracer_python_recorder import (
     flush_tracing as _flush_backend,
     is_tracing as _is_tracing_backend,
     start_tracing as _start_backend,
