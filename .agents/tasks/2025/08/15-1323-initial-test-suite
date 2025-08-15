@@ -1,0 +1,2 @@
+--- FOLLOW UP TASK ---
+Create a script which will be used in future to set-up the Codex environment for development and testing of this project. Base this on what you see in Justfile and flake.nix. Note that not all packages described in flake.nix will be needed in the Codex environment, but we do care about building the project and running the tests.
