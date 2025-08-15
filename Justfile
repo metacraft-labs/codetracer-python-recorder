@@ -23,34 +23,31 @@ clean:
     rm -rf codetracer-python-recorder/target codetracer-python-recorder/**/*.so
 
 
-# Create a local virtualenv for Python tooling
+# Create a clean local virtualenv for Python tooling (without editable packages installed)
 venv:
-    uv venv -p python{{PYTHON_DEV_VERSION}}
+    uv sync -p python{{PYTHON_DEV_VERSION}}
 
+# Build the module in dev mode
 dev:
     just venv
     uv run --directory codetracer-python-recorder maturin develop --uv
 
+# Run unit tests of dev build
 test:
-    just venv
-    uv run pytest
+    uv run --group dev --group test pytest
 
+# Build the module in release mode
 build:
-    uv run --directory codetracer-python-recorder maturin build
-
-# Run the test suite across multiple Python versions using uv
-test-uv-all:
-    uv python install {{PY_VERSIONS}}
-    for v in {{PY_VERSIONS}}; do uv run -p "$v" -m unittest discover -v; done
+    just venv \
+    uv run --directory codetracer-python-recorder maturin build --release
 
 # Build wheels for all target Python versions with maturin
-build-rust-uv-all:
-    for v in {{PY_VERSIONS}}; do \
-        uv run -p "$v" --directory codetracer-python-recorder maturin build --release; \
-    done
+build-all:
+    just venv
+    uv run --directory codetracer-python-recorder maturin build --release --interpreter {{PY_VERSIONS}}
 
 # Smoke the built Rust wheels across versions using uv
-test-rust-uv-all:
+test-all:
     for v in {{PY_SHORT_VERSIONS}}; do \
         file=(codetracer-python-recorder/target/wheels/codetracer_python_recorder-*-cp3$v-cp3$v-*.whl); \
         file="${file[0]}"; \
