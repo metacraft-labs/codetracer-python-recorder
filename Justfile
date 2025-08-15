@@ -4,7 +4,7 @@ default:
 # Development helpers for the monorepo
 
 # Python version used for development
-PYTHON_DEV_VERSION := "3.13"
+PYTHON_DEFAULT_VERSION := "3.13"
 
 # Python versions used for multi-version testing/building with uv
 PY_VERSIONS := "3.10 3.11 3.12 3.13"
@@ -24,17 +24,20 @@ clean:
 
 
 # Create a clean local virtualenv for Python tooling (without editable packages installed)
-venv:
-    uv sync -p python{{PYTHON_DEV_VERSION}}
+venv version=PYTHON_DEFAULT_VERSION:
+    uv sync -p {{version}}
 
 # Build the module in dev mode
 dev:
-    just venv
     uv run --directory codetracer-python-recorder maturin develop --uv
 
 # Run unit tests of dev build
 test:
     uv run --group dev --group test pytest
+
+# Run tests only on the pure recorder
+test-pure:
+    uv run --group dev --group test pytest codetracer-pure-python-recorder
 
 # Build the module in release mode
 build:
