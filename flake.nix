@@ -36,6 +36,9 @@
               maturin
               uv
               pkg-config
+
+              # CapNProto
+	      capnproto
             ];
 
 	    shellHook = ''
