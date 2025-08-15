@@ -10,3 +10,16 @@ If a test can be written both in Python and in Rust prefer writing it in Python.
 If a code modification needs to be done in the module and it is possible to do it both in Python and in Rust, prefer writing it in Python.
 
 If there is any item in the test suite which doesn't contain enough 
+--- FOLLOW UP TASK ---
+Create a script Hit:2 https://mise.jdx.dev/deb stable InRelease
+Hit:1 https://apt.llvm.org/noble llvm-toolchain-noble-20 InRelease
+Hit:3 http://archive.ubuntu.com/ubuntu noble InRelease
+Hit:4 http://security.ubuntu.com/ubuntu noble-security InRelease
+Hit:5 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:6 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+just is already the newest version (1.21.0-1).
+0 upgraded, 0 newly installed, 0 to remove and 25 not upgraded. which will be used in future to set-up the Codex environment for development and testing of this project. Base this on what you see in Justfile and flake.nix. Note that not all packages described in flake.nix will be needed in the Codex environment, but we do care about building the project and running the tests.
