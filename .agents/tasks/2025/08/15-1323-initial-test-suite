@@ -1,0 +1,12 @@
+Create an initial test suite for codetracer-python-recorder.
+
+Following TDD we want to start by writing tests.
+
+The test suite should follow the specification at design-docs/test-design-001.md
+The tests should be written in the `/tests` subdirectory and it should be possible to run them using our current approach of `just venv dev test`.
+
+If the module turns out to be missing functions or types required for the test, add them but with empty bodies. (for Python functions raise `NotImplemented` exception in the body of the function)
+If a test can be written both in Python and in Rust prefer writing it in Python.
+If a code modification needs to be done in the module and it is possible to do it both in Python and in Rust, prefer writing it in Python.
+
+If there is any item in the test suite which doesn't contain enough 
