@@ -5,20 +5,16 @@ This repository contains two related projects:
 - codetracer-pure-python-recorder — the original pure-Python tracer.
 - codetracer-python-recorder — a Rust-backed Python module built with PyO3 and maturin.
 
-To run the Python test suite for the pure-Python tracer, execute:
+To build the modules in development mode run:
 
-```
+```sh
+just venv 3.13 dev #You can use any other Python version >=3.12
+``
+
+Then to run the tests do
+
+```sh
 just test
-```
-
-The tester executes a number of sample programs in `tests/programs` and compares their outputs to the fixtures in `tests/fixtures`.
-
-To build and locally develop-install the Rust-backed module:
-
-```
-just build-rust
-# or:
-maturin develop -m crates/codetracer-python-recorder/Cargo.toml
 ```
 
 # Code quality guidelines
