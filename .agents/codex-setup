@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+# Install the tooling required to build and test the CodeTracer project.
+# The list of packages is derived from `Justfile` and `flake.nix`.
 
 AGENTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-cd $AGENTS_DIR
+cd "$AGENTS_DIR"
 
 apt-get update
-apt-get install -y --no-install-recommends just
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev \
+    cargo rustc just pkg-config capnproto
+
+pip3 install --no-cache-dir --break-system-packages maturin uv
