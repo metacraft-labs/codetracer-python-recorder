@@ -2,10 +2,10 @@ use std::sync::Mutex;
 
 use bitflags::bitflags;
 use pyo3::{
-    exceptions::PyRuntimeError,
+    exceptions::{PyRuntimeError, PyTypeError},
+    ffi,
     prelude::*,
     types::{PyModule, PyTuple},
-    ffi,
 };
 
 bitflags! {
@@ -33,7 +33,9 @@ pub enum Event {
 /// about.
 pub trait Tracer: Send {
     /// Return the set of events the tracer wants to receive.
-    fn interest(&self) -> EventMask { EventMask::empty() }
+    fn interest(&self) -> EventMask {
+        EventMask::empty()
+    }
 
     /// Called on Python function calls.
     fn on_call(&mut self, _py: Python<'_>, _frame: *mut ffi::PyFrameObject) {}
@@ -83,7 +85,21 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
         return Err(PyRuntimeError::new_err("tracer already installed"));
     }
     let monitoring = py.import("sys")?.getattr("monitoring")?;
-    let tool_id: u8 = monitoring.call_method1("use_tool_id", ("codetracer",))?.extract()?;
+    // `use_tool_id` changed its signature between Python versions.
+    // Try calling it with the newer single-argument form first and fall back to
+    // the older two-argument variant if that fails with a `TypeError`.
+    const FALLBACK_ID: u8 = 5;
+    let tool_id: u8 = match monitoring.call_method1("use_tool_id", ("codetracer",)) {
+        Ok(obj) => obj.extract()?,
+        Err(err) => {
+            if err.is_instance_of::<PyTypeError>(py) {
+                monitoring.call_method1("use_tool_id", (FALLBACK_ID, "codetracer"))?;
+                FALLBACK_ID
+            } else {
+                return Err(err);
+            }
+        }
+    };
     let events = monitoring.getattr("events")?;
     let module = PyModule::new(py, "_codetracer_callbacks")?;
 
@@ -102,9 +118,21 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
         monitoring.call_method("register_callback", (tool_id, ev, &cb), None)?;
         callbacks.push(cb.unbind());
     }
-    monitoring.call_method("set_events", (tool_id, mask.bits(), mask.bits()), None)?;
+    if let Err(err) =
+        monitoring.call_method("set_events", (tool_id, mask.bits(), mask.bits()), None)
+    {
+        if err.is_instance_of::<PyTypeError>(py) {
+            monitoring.call_method1("set_events", (tool_id, mask.bits()))?;
+        } else {
+            return Err(err);
+        }
+    }
 
-    *guard = Some(Global { dispatcher: Dispatcher::new(tracer), tool_id, callbacks });
+    *guard = Some(Global {
+        dispatcher: Dispatcher::new(tracer),
+        tool_id,
+        callbacks,
+    });
     Ok(())
 }
 
@@ -122,7 +150,17 @@ pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
             let ev = events.getattr("LINE")?;
             monitoring.call_method("register_callback", (global.tool_id, ev, py.None()), None)?;
         }
-        monitoring.call_method("set_events", (global.tool_id, 0u32, global.dispatcher.mask.bits()), None)?;
+        if let Err(err) = monitoring.call_method(
+            "set_events",
+            (global.tool_id, 0u32, global.dispatcher.mask.bits()),
+            None,
+        ) {
+            if err.is_instance_of::<PyTypeError>(py) {
+                monitoring.call_method1("set_events", (global.tool_id, 0u32))?;
+            } else {
+                return Err(err);
+            }
+        }
         monitoring.call_method1("free_tool_id", (global.tool_id,))?;
     }
     Ok(())
@@ -146,4 +184,3 @@ fn callback_line(py: Python<'_>, args: &Bound<'_, PyTuple>) -> PyResult<()> {
     }
     Ok(())
 }
-

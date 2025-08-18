@@ -36,7 +36,7 @@ test: cargo-test py-test
 
 # Run Rust unit tests without default features to link Python C library
 cargo-test:
-    cargo test --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
+    uv run cargo test --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
 
 py-test:
     uv run --group dev --group test pytest
