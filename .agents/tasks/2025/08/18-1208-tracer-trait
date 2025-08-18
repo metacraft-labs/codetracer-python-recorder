@@ -1,0 +1,80 @@
+1. Create a trait for a tracer implemented using the Python monitoring API. The methods of the trait should correspond to the events that one can subscribe to via the API.
+
+Here's a sketch of the design of the trait. We want to support tracers which implement only some of the methods.
+
+``rs
+use bitflags::bitflags;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct EventMask: u32 {
+        const CALL       = 1 << 0;
+        //CODEX: write this
+        ...
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Call,
+    //CODEX: write this
+    ...
+    // Non-exhaustive for forward compatibility.
+}
+
+pub trait Tracer: Send {
+    /// Tell the dispatcher what you want to receive. Default: nothing (fast path).
+    fn interest(&self) -> EventMask { EventMask::empty() }
+
+    // Default no-ops let implementers pick only what they need.
+    fn on_call(&mut self, ...) {}
+    //CODEX: write this
+}
+
+// Example tracer: only cares about CALL.
+struct CallsOnly;
+impl Tracer for CallsOnly {
+    fn interest(&self) -> EventMask { EventMask::CALL | ... }
+    fn on_call(&mut self, ...)  { println!("call:   {:?}", ...); }
+    ...
+}
+
+// Dispatcher checks the mask to avoid vtable calls it doesn’t need.
+pub struct Dispatcher {
+    tracer: Box<dyn Tracer>,
+    mask: EventMask,
+}
+
+impl Dispatcher {
+    pub fn new(tracer: Box<dyn Tracer>) -> Self {
+        let mask = tracer.interest();
+        Self { tracer, mask }
+    }
+
+    pub fn dispatch_call(&mut self, ...) {
+        if self.mask.contains(EventMask::CALL) {
+            self.tracer.on_call(...);
+        }
+        
+    }
+    // CODEX: ... same for other events
+}
+``
+
+2. Create code which takes a trait implementation and hooks it to the global tracing. Follow the design-docs for the specific API that needs to be implemented. 
+
+3. Create a test implementation of the trait which prints text to stdout. Run the test implementation. Note that the test implementation should not be included in the final build 
+artefact, it will be used only for testing.
+
+4. Update the testing framework to be able to use `just test` also for Rust tests. Specifically we want to run our test implementation from point 2. using `just test`
+
+Refer to the design-docs folder for the current planned design. Add/update files in the folder to match what was implemented in this task.
+
+
+--- FOLLOW UP TASK ---
+1. In codetracer-python-recorder/Cargo.toml, move pyo3’s extension-module feature to an optional crate feature and enable it only for release builds.
+2. Update Justfile (and CI scripts) to run cargo test --no-default-features so the test binary links with the Python C library.
+3. Add pyo3 with auto-initialize under [dev-dependencies] if tests require the interpreter to be initialized automatically.
+--- FOLLOW UP TASK ---
+thread 'tracer_prints_on_call' panicked at tests/print_tracer.rs:21:51:\ncalled `Result::unwrap()` on an `Err` value: PyErr { type: <class 'AttributeError'>, value: AttributeError("module 'sys' has no attribute 'monitoring'"), traceback: None }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tracer_prints_on_call\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
