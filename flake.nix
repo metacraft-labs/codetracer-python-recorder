@@ -1,7 +1,7 @@
 {
-  description = "Development environment for codetracer-python-recorder";
+  description = "Development environment for CodeTracer recorders (pure-python and rust-backed)";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
 
   outputs = { self, nixpkgs }:
     let
@@ -12,7 +12,32 @@
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            packages = with pkgs; [ python3 just git-lfs ];
+            packages = with pkgs; [
+              bashInteractive
+              python310
+	      python311
+	      python312
+	      python313
+              just
+              git-lfs
+
+              # Linters and type checkers for Python code
+              ruff
+              black
+              mypy
+              python3Packages.pytest
+
+              # Rust toolchain for the Rust-backed Python module
+              cargo
+              rustc
+              rustfmt
+              clippy
+
+              # Build tooling for Python extensions
+              maturin
+              uv
+              pkg-config
+            ];
           };
         });
     };

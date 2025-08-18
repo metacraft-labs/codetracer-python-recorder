@@ -1,2 +1,6 @@
 .direnv/
 **/__pycache__/
+.aider*
+.venv/
+**/target/
+build

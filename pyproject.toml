@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codetracer-python-recorder"
+name = "codetracer-pure-python-recorder"
 version = "0.1.0"
-description = "Prototype recorder of Python programs producing CodeTracer traces"
+description = "Pure-Python prototype recorder producing CodeTracer traces"
 authors = [{name = "Metacraft Labs Ltd"}]
 license = {text = "MIT"}
 readme = "README.md"
@@ -20,5 +20,9 @@ classifiers = [
 py-modules = ["trace"]
 package-dir = {"" = "src"}
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.scripts]
-codetracer-record = "trace:main"
+codetracer-record = "codetracer_pure_python_recorder.cli:main"
+codetracer-record-pure = "codetracer_pure_python_recorder.cli:main"
