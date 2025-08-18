@@ -71,3 +71,8 @@ artefact, it will be used only for testing.
 
 Refer to the design-docs folder for the current planned design. Add/update files in the folder to match what was implemented in this task.
 
+
+--- FOLLOW UP TASK ---
+1. In codetracer-python-recorder/Cargo.toml, move pyo3’s extension-module feature to an optional crate feature and enable it only for release builds.
+2. Update Justfile (and CI scripts) to run cargo test --no-default-features so the test binary links with the Python C library.
+3. Add pyo3 with auto-initialize under [dev-dependencies] if tests require the interpreter to be initialized automatically.

@@ -32,10 +32,15 @@ dev:
     uv run --directory codetracer-python-recorder maturin develop --uv
 
 # Run unit tests of dev build
-test:
-    uv run --group dev --group test pytest
-    uv run --group dev --group test cargo test --manifest-path codetracer-python-recorder/Cargo.toml
+test: cargo-test py-test
 
+# Run Rust unit tests without default features to link Python C library
+cargo-test:
+    cargo test --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
+
+py-test:
+    uv run --group dev --group test pytest
+    
 # Run tests only on the pure recorder
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder

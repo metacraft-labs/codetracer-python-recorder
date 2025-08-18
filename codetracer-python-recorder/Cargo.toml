@@ -10,7 +10,14 @@ repository = "https://github.com/metacraft-labs/codetracer-python-recorder"
 name = "codetracer_python_recorder"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
+
 [dependencies]
-pyo3 = { version = "0.25.1", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.25.1" }
 runtime_tracing = "0.14.0"
 bitflags = "2.4"
+
+[dev-dependencies]
+pyo3 = { version = "0.25.1", features = ["auto-initialize"] }
