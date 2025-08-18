@@ -34,6 +34,7 @@ dev:
 # Run unit tests of dev build
 test:
     uv run --group dev --group test pytest
+    uv run --group dev --group test cargo test --manifest-path codetracer-python-recorder/Cargo.toml
 
 # Run tests only on the pure recorder
 test-pure:

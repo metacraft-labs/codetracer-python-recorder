@@ -8,6 +8,13 @@ The tracer collects `sys.monitoring` events, converts them to `runtime_tracing` 
 
 ## Architecture
 
+### Tracer Abstraction
+Rust code exposes a `Tracer` trait representing callbacks for Python
+`sys.monitoring` events. Implementations advertise their desired events via an
+`EventMask` bit flag returned from `interest`. A `Dispatcher` wraps a trait
+object and forwards events only when the mask contains the corresponding flag,
+allowing tracers to implement just the methods they care about.
+
 ### Tool Initialization
 - Acquire a tool identifier via `sys.monitoring.use_tool_id`; store it for the lifetime of the tracer.
   ```rs
