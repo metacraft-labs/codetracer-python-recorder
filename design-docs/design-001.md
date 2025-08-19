@@ -17,14 +17,42 @@ The tracer collects `sys.monitoring` events, converts them to `runtime_tracing` 
   ```
 - Register one callback per event using `sys.monitoring.register_callback`.
   ```rs
-  pub enum MonitoringEvent { PyStart, PyResume, PyReturn, PyYield, StopIteration, PyUnwind, PyThrow, Reraise, Call, Line, Instruction, Jump, Branch, Raise, ExceptionHandled, CReturn, CRaise }
-  pub type CallbackFn = unsafe extern "C" fn(event: MonitoringEvent, frame: *mut PyFrameObject);
-  pub fn register_callback(tool: &ToolId, event: MonitoringEvent, cb: CallbackFn);
+  #[repr(transparent)]
+  pub struct EventId(pub u64); // Exact value loaded from sys.monitoring.events.*
+
+  pub struct MonitoringEvents {
+      pub BRANCH: EventId,
+      pub CALL: EventId,
+      pub C_RAISE: EventId,
+      pub C_RETURN: EventId,
+      pub EXCEPTION_HANDLED: EventId,
+      pub INSTRUCTION: EventId,
+      pub JUMP: EventId,
+      pub LINE: EventId,
+      pub PY_RESUME: EventId,
+      pub PY_RETURN: EventId,
+      pub PY_START: EventId,
+      pub PY_THROW: EventId,
+      pub PY_UNWIND: EventId,
+      pub PY_YIELD: EventId,
+      pub RAISE: EventId,
+      pub RERAISE: EventId,
+      pub STOP_ITERATION: EventId,
+  }
+
+  pub fn load_monitoring_events(py: Python<'_>) -> PyResult<MonitoringEvents>;
+
+  // Python-level callback registered via sys.monitoring.register_callback
+  pub type CallbackFn = PyObject;
+  pub fn register_callback(tool: &ToolId, event: &EventId, cb: &CallbackFn) -> PyResult<()>;
   ```
 - Enable all desired events by bitmask with `sys.monitoring.set_events`.
   ```rs
-  pub const ALL_EVENTS_MASK: u64 = 0xffff;
-  pub fn enable_events(tool: &ToolId, mask: u64);
+  #[derive(Clone, Copy)]
+  pub struct EventSet(pub u64);
+
+  pub fn events_union(ids: &[EventId]) -> EventSet;
+  pub fn set_events(tool: &ToolId, set: EventSet) -> PyResult<()>;
   ```
 
 ### Writer Management
@@ -45,108 +73,165 @@ The tracer collects `sys.monitoring` events, converts them to `runtime_tracing` 
   ```
 
 ### Frame and Thread Tracking
-- Maintain a per-thread stack of frame identifiers to correlate `CALL`, `PY_START`, and returns.
+- Maintain a per-thread stack of activation identifiers to correlate `CALL`, `PY_START`, yields, and returns. Since `sys.monitoring` callbacks provide `CodeType` and offsets (not frames), we rely on the nesting order of events to track activations.
   ```rs
-  pub type FrameId = u64;
-  pub struct ThreadState { pub stack: Vec<FrameId> }
+  pub type ActivationId = u64;
+  pub struct ThreadState { pub stack: Vec<ActivationId> }
   pub fn current_thread_state() -> &'static mut ThreadState;
   ```
-- Map `frame` objects to internal IDs for cross-referencing events.
+- Associate activations with `CodeType` objects and instruction/line offsets as needed for cross-referencing, without depending on `PyFrameObject`.
   ```rs
-  pub struct FrameRegistry { next: FrameId, map: HashMap<*mut PyFrameObject, FrameId> }
-  pub fn intern_frame(reg: &mut FrameRegistry, frame: *mut PyFrameObject) -> FrameId;
+  pub struct Activation {
+      pub id: ActivationId,
+      // Hold a GIL-independent handle to the CodeType object.
+      // Access required attributes via PyO3 attribute lookup (getattr) under the GIL.
+      pub code: PyObject,
+  }
   ```
-- Record thread start/end events when a new thread registers callbacks.
+- Record thread start/end events when a thread first emits a monitoring event and when it finishes.
   ```rs
   pub fn on_thread_start(thread_id: u64);
   pub fn on_thread_stop(thread_id: u64);
   ```
+
+### Code Object Access Strategy (no reliance on PyCodeObject internals)
+- Rationale: PyO3 exposes `ffi::PyCodeObject` as an opaque type. Instead of touching its unstable layout, treat code objects as generic Python objects and access only stable Python-level attributes via PyO3's `getattr` on `&PyAny`.
+  ```rs
+  use pyo3::{prelude::*, types::PyAny};
+
+  #[derive(Clone)]
+  pub struct CodeInfo {
+      pub filename: String,
+      pub qualname: String,
+      pub firstlineno: u32,
+      pub flags: u32,
+  }
+
+  /// Stable identity for a code object during its lifetime.
+  /// Uses the object's address while GIL-held; equivalent to Python's id(code).
+  pub fn code_id(py: Python<'_>, code: &PyAny) -> usize {
+      code.as_ptr() as usize
+  }
+
+  /// Extract just the attributes we need, via Python attribute access.
+  pub fn extract_code_info(py: Python<'_>, code: &PyAny) -> PyResult<CodeInfo> {
+      let filename: String = code.getattr("co_filename")?.extract()?;
+      // Prefer co_qualname if present, else fallback to co_name
+      let qualname: String = match code.getattr("co_qualname") {
+          Ok(q) => q.extract()?,
+          Err(_) => code.getattr("co_name")?.extract()?,
+      };
+      let firstlineno: u32 = code.getattr("co_firstlineno")?.extract()?;
+      let flags: u32 = code.getattr("co_flags")?.extract()?;
+      Ok(CodeInfo { filename, qualname, firstlineno, flags })
+  }
+
+  /// Cache minimal info to avoid repeated getattr and to assign stable IDs.
+  pub struct CodeRegistry {
+      pub map: std::collections::HashMap<usize, CodeInfo>,
+  }
+
+  impl CodeRegistry {
+      pub fn new() -> Self { Self { map: Default::default() } }
+      pub fn intern(&mut self, py: Python<'_>, code: &PyAny) -> PyResult<usize> {
+          let id = code_id(py, code);
+          if !self.map.contains_key(&id) {
+              let info = extract_code_info(py, code)?;
+              self.map.insert(id, info);
+          }
+          Ok(id)
+      }
+  }
+  ```
+- Event handler inputs use `PyObject` for the `code` parameter. Borrow to `&PyAny` with `let code = code.bind(py);` when needed, then consult `CodeRegistry`.
+- For line numbers: rely on the `LINE` event’s provided `line_number`. If instruction offsets need mapping, call `code.getattr("co_lines")()?.call0()?` and iterate lazily; avoid caching unless necessary.
 
 ## Event Handling
 
 Each bullet below represents a low-level operation translating a single `sys.monitoring` event into the `runtime_tracing` stream.
 
 ### Control Flow
-- **PY_START** – Create a `Function` event for the code object and push a new frame ID onto the thread's stack.
+- **PY_START** – Create a `Function` event for the code object and push a new activation ID onto the thread's stack.
   ```rs
-  pub fn on_py_start(frame: *mut PyFrameObject);
+  pub fn on_py_start(code: PyObject, instruction_offset: i32);
   ```
-- **PY_RESUME** – Emit an `Event` log noting resumption and update the current frame's state.
+- **PY_RESUME** – Emit an `Event` log noting resumption and update the current activation's state.
   ```rs
-  pub fn on_py_resume(frame: *mut PyFrameObject);
+  pub fn on_py_resume(code: PyObject, instruction_offset: i32);
   ```
-- **PY_RETURN** – Pop the frame ID, write a `Return` event with the value (if retrievable), and link to the caller.
+- **PY_RETURN** – Pop the activation ID, write a `Return` event with the value (if retrievable), and link to the caller.
   ```rs
-  pub struct ReturnRecord { pub frame: FrameId, pub value: Option<ValueRecord> }
-  pub fn on_py_return(frame: *mut PyFrameObject, value: *mut PyObject);
+  pub struct ReturnRecord { pub activation: ActivationId, pub value: Option<ValueRecord> }
+  pub fn on_py_return(code: PyObject, instruction_offset: i32, retval: *mut PyObject);
   ```
-- **PY_YIELD** – Record a `Return` event flagged as a yield and keep the frame on the stack for later resumes.
+- **PY_YIELD** – Record a `Return` event flagged as a yield and keep the activation on the stack for later resumes.
   ```rs
-  pub fn on_py_yield(frame: *mut PyFrameObject, value: *mut PyObject);
+  pub fn on_py_yield(code: PyObject, instruction_offset: i32, retval: *mut PyObject);
   ```
-- **STOP_ITERATION** – Emit an `Event` indicating iteration exhaustion for the current frame.
+- **STOP_ITERATION** – Emit an `Event` indicating iteration exhaustion for the current activation.
   ```rs
-  pub fn on_stop_iteration(frame: *mut PyFrameObject);
+  pub fn on_stop_iteration(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 - **PY_UNWIND** – Mark the beginning of stack unwinding and note the target handler in an `Event`.
   ```rs
-  pub fn on_py_unwind(frame: *mut PyFrameObject);
+  pub fn on_py_unwind(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 - **PY_THROW** – Emit an `Event` describing the thrown value and the target generator/coroutine.
   ```rs
-  pub fn on_py_throw(frame: *mut PyFrameObject, value: *mut PyObject);
+  pub fn on_py_throw(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 - **RERAISE** – Log a re-raise event referencing the original exception.
   ```rs
-  pub fn on_reraise(frame: *mut PyFrameObject, exc: *mut PyObject);
+  pub fn on_reraise(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 
 ### Call and Line Tracking
-- **CALL** – Record a `Call` event, capturing argument values and the callee's `Function` ID.
+- **CALL** – Record a `Call` event, capturing the `callable` and the first argument if available (`arg0` as provided by `sys.monitoring`), and associate a new activation.
   ```rs
-  pub fn on_call(callee: *mut PyObject, args: &PyTupleObject) -> FrameId;
+  pub fn on_call(code: PyObject, instruction_offset: i32, callable: *mut PyObject, arg0: Option<*mut PyObject>) -> ActivationId;
   ```
 - **LINE** – Write a `Step` event with current path and line number; ensure the path is registered.
   ```rs
-  pub fn on_line(frame: *mut PyFrameObject, lineno: u32);
+  pub fn on_line(code: PyObject, line_number: u32);
   ```
-- **INSTRUCTION** – Optionally emit a fine-grained `Event` containing the opcode name for detailed traces.
+- **INSTRUCTION** – Optionally emit a fine-grained `Event` keyed by `instruction_offset`. Opcode names can be derived from the `CodeType` if desired.
   ```rs
-  pub fn on_instruction(frame: *mut PyFrameObject, opcode: u8);
+  pub fn on_instruction(code: PyObject, instruction_offset: i32);
   ```
 - **JUMP** – Append an `Event` describing the jump target offset for control-flow visualization.
   ```rs
-  pub fn on_jump(frame: *mut PyFrameObject, target: u32);
+  pub fn on_jump(code: PyObject, instruction_offset: i32, destination_offset: i32);
   ```
-- **BRANCH** – Record an `Event` with branch outcome (taken or not) to aid coverage analysis.
+- **BRANCH** – Record an `Event` with `destination_offset`; whether the branch was taken can be inferred by comparing to the fallthrough offset.
   ```rs
-  pub fn on_branch(frame: *mut PyFrameObject, taken: bool);
+  pub fn on_branch(code: PyObject, instruction_offset: i32, destination_offset: i32);
   ```
+  _Note_: Current runtime_tracing doesn't support branching events, but instead relies on AST tree-sitter analysis. So for the initial version we will ignore them and can add support after modifications to the tracing format.
 
 ### Exception Lifecycle
 - **RAISE** – Emit an `Event` containing exception type and message when raised.
   ```rs
-  pub fn on_raise(frame: *mut PyFrameObject, exc: *mut PyObject);
+  pub fn on_raise(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 - **EXCEPTION_HANDLED** – Log an `Event` marking when an exception is caught.
   ```rs
-  pub fn on_exception_handled(frame: *mut PyFrameObject);
+  pub fn on_exception_handled(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
 
 ### C API Boundary
-- **C_RETURN** – On returning from a C function, emit a `Return` event tagged as foreign and include result summary.
+- **C_RETURN** – On returning from a C function, emit a `Return` event tagged as foreign. Note: `sys.monitoring` does not provide the result object for `C_RETURN`.
   ```rs
-  pub fn on_c_return(func: *mut PyObject, result: *mut PyObject);
+  pub fn on_c_return(code: PyObject, instruction_offset: i32, callable: *mut PyObject, arg0: Option<*mut PyObject>);
   ```
-- **C_RAISE** – When a C function raises, record an `Event` with the exception info and current frame ID.
+- **C_RAISE** – When a C function raises, record an `Event` that a C-level callable raised. Note: `sys.monitoring` does not pass the exception object for `C_RAISE`.
   ```rs
-  pub fn on_c_raise(func: *mut PyObject, exc: *mut PyObject);
+  pub fn on_c_raise(code: PyObject, instruction_offset: i32, callable: *mut PyObject, arg0: Option<*mut PyObject>);
   ```
 
 ### No Events
 - **NO_EVENTS** – Special constant; used only to disable monitoring. No runtime event is produced.
   ```rs
-  pub const NO_EVENTS: u64 = 0;
+  pub const NO_EVENTS: EventSet = EventSet(0);
   ```
 
 ## Metadata and File Capture
