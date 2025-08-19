@@ -25,7 +25,6 @@
               ruff
               black
               mypy
-              python3Packages.pytest
 
               # Rust toolchain for the Rust-backed Python module
               cargo
@@ -38,6 +37,12 @@
               uv
               pkg-config
             ];
+
+	    shellHook = ''
+	      # When having more than one python version in the shell this variable breaks `maturin build`
+	      # because it always leads to having SOABI be the one from the highest version
+	      unset PYTHONPATH
+	    '';
           };
         });
     };
