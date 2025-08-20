@@ -1,0 +1,11 @@
+Write tests for the complete Tracer trait
+
+Currently in print_tracer.rs we have only one test for the CALL event. We want tests for all other events. The test must verify that the corresponding event was raised and handled at least once.Write tests for the complete Tracer trait
+
+Currently in print_tracer.rs we have only one test for the CALL event. We want tests for all other events. The test must verify that the corresponding event was raised and handled at least once.
+--- FOLLOW UP TASK ---
+Write tests for the complete Tracer trait\nCurrently in print_tracer.rs we have only one test for the CALL event. We want tests for all other events. The test must verify that the corresponding event was raised and handled at least once.
+--- FOLLOW UP TASK ---
+For each handler in CountingTracer also print the line at which the event fired. Refer to the sys.monitoring API and specifically to the CodeObject type for details.
+--- FOLLOW UP TASK ---
+A test is missing for the STOP_ITERATION event
