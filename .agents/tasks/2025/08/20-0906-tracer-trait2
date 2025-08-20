@@ -1,0 +1,3 @@
+Write tests for the complete Tracer trait
+
+Currently in print_tracer.rs we have only one test for the CALL event. We want tests for all other events. The test must verify that the corresponding event was raised and handled at least once.
