@@ -58,6 +58,7 @@ static PY_UNWIND_COUNT: AtomicUsize = AtomicUsize::new(0);
 static RAISE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static RERAISE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static EXCEPTION_HANDLED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static STOP_ITERATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 static C_RETURN_COUNT: AtomicUsize = AtomicUsize::new(0);
 static C_RAISE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -93,6 +94,7 @@ impl Tracer for CountingTracer {
             events.PY_YIELD,
             events.PY_THROW,
             events.PY_UNWIND,
+            events.STOP_ITERATION,
             events.RAISE,
             events.RERAISE,
             events.EXCEPTION_HANDLED,
@@ -264,6 +266,19 @@ impl Tracer for CountingTracer {
         }
     }
 
+    fn on_stop_iteration(
+        &mut self,
+        _py: Python<'_>,
+        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
+        offset: i32,
+        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    ) {
+        STOP_ITERATION_COUNT.fetch_add(1, Ordering::SeqCst);
+        if let Some(line) = offset_to_line(code, offset) {
+            println!("STOP_ITERATION at {}", line);
+        }
+    }
+
     fn on_c_return(
         &mut self,
         _py: Python<'_>,
@@ -309,6 +324,7 @@ fn tracer_handles_all_events() {
         RAISE_COUNT.store(0, Ordering::SeqCst);
         RERAISE_COUNT.store(0, Ordering::SeqCst);
         EXCEPTION_HANDLED_COUNT.store(0, Ordering::SeqCst);
+        STOP_ITERATION_COUNT.store(0, Ordering::SeqCst);
         C_RETURN_COUNT.store(0, Ordering::SeqCst);
         C_RAISE_COUNT.store(0, Ordering::SeqCst);
         if let Err(e) = install_tracer(py, Box::new(CountingTracer)) {
@@ -344,6 +360,10 @@ def test_all():
         pass
     for _ in []:
         pass
+    def gen2():
+        yield 1
+    for _ in gen2():
+        pass
     len("abc")
     try:
         int("a")
@@ -363,6 +383,11 @@ def test_all():
     except OSError:
         pass
 test_all()
+def only_stop_iter():
+    if False:
+        yield
+for _ in only_stop_iter():
+    pass
 "#).expect("CString::new failed");
         if let Err(e) = py.run(code.as_c_str(), None, None) {
             e.print(py);
@@ -383,6 +408,7 @@ test_all()
         assert!(RAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one RAISE event, got {}", RAISE_COUNT.load(Ordering::SeqCst));
         assert!(RERAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one RERAISE event, got {}", RERAISE_COUNT.load(Ordering::SeqCst));
         assert!(EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one EXCEPTION_HANDLED event, got {}", EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst));
+        assert!(STOP_ITERATION_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one STOP_ITERATION event, got {}", STOP_ITERATION_COUNT.load(Ordering::SeqCst));
         assert!(C_RETURN_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one C_RETURN event, got {}", C_RETURN_COUNT.load(Ordering::SeqCst));
         assert!(C_RAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one C_RAISE event, got {}", C_RAISE_COUNT.load(Ordering::SeqCst));
     });
