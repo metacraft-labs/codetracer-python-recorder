@@ -34,3 +34,5 @@ According to the PyO3 documentation it is preferred to use `Bound<'_, T>` instea
 * https://docs.rs/pyo3/0.25.1/pyo3/index.html
 
 Also please add usage examples to the design documentation
+--- FOLLOW UP TASK ---
+Implement the CodeObjectWrapper as designed. Update the Tracer trait as well as the callback_xxx functions accordingly. Write a comprehensive unit tests for CodeObjectWrapper.
