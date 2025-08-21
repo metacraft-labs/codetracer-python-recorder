@@ -1,0 +1,19 @@
+Implement an interface for the CodeType object.
+
+The Python Monitoring API passes a CodeObject to each event handler. In the current implemenation of our Tracer trait the event handlers have an argument `_code: &Bound<'_, PyAny>` which gives
+access to this object. This is not a good interface because the type is too generic. PyO3 has a PyCodeObject type, however it doesn't expose any public members because the type is unstable,
+so we cannot use that one.
+
+We need to create our own type CodeObjectWrapper which can simplify access to the underlying code object type. Then we should use this type in the signature of the methods in the Tracer trait.
+The type should allow easy access to that functionality of the underlying code object which we will need to implement a recorder for a time-travel debugger. 
+On the other hand it is important not to introduce any performance problems. Some ideas to think about:
+- Minimize the copying of values
+- Repeated computations on each event call could be memoized
+- Any other approach that minimizes the performance hit
+
+Propose a design of the CodeObjectWrapper type. Write the design in design-docs/code-object.md. Do not actually implement the type for now, I need to confirm the design first.
+
+Here's relevant information:
+* design-docs/design-001.md - shows how we write design documentation
+* https://docs.python.org/3/library/sys.monitoring.html - Documentation of the Python sys.montoring API
+* https://docs.python.org/3/reference/datamodel.html#code-objects - Description of Python Code Objects.
