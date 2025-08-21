@@ -38,8 +38,8 @@ impl CodeObjectWrapper {
     }
 
     /// Borrow the owned `Py<PyCode>` as a `Bound<'py, PyCode>`.
-    pub fn as_bound<'py>(&'py self, py: Python<'py>) -> Bound<'py, PyCode> {
-        self.obj.bind(py).clone()
+    pub fn as_bound<'py>(&'py self, py: Python<'py>) -> &Bound<'py, PyCode> {
+        self.obj.bind(py)
     }
 
     /// Return the stable identity of the code object (equivalent to `id(code)`).

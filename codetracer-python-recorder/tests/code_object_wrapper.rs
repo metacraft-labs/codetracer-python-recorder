@@ -14,7 +14,6 @@ fn wrapper_basic_attributes() {
         let code: Bound<'_, PyCode> = func
             .getattr("__code__")
             .unwrap()
-            .clone()
             .downcast_into()
             .unwrap();
         let wrapper = CodeObjectWrapper::new(py, &code);
@@ -36,7 +35,6 @@ fn wrapper_line_for_offset() {
         let code: Bound<'_, PyCode> = func
             .getattr("__code__")
             .unwrap()
-            .clone()
             .downcast_into()
             .unwrap();
         let wrapper = CodeObjectWrapper::new(py, &code);
