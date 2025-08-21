@@ -4,7 +4,7 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyCFunction, PyCode, PyModule},
 };
-use crate::code_object::CodeObjectWrapper;
+use crate::code_object::{CodeObjectWrapper, CODE_REGISTRY};
 
 const MONITORING_TOOL_NAME: &str = "codetracer";
 
@@ -473,7 +473,7 @@ fn callback_call(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_call(py, &wrapper, offset, &callable, arg0.as_ref());
     }
     Ok(())
@@ -483,7 +483,7 @@ fn callback_call(
 fn callback_line(py: Python<'_>, code: Bound<'_, PyAny>, lineno: u32) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_line(py, &wrapper, lineno);
     }
     Ok(())
@@ -493,7 +493,7 @@ fn callback_line(py: Python<'_>, code: Bound<'_, PyAny>, lineno: u32) -> PyResul
 fn callback_instruction(py: Python<'_>, code: Bound<'_, PyAny>, instruction_offset: i32) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_instruction(py, &wrapper, instruction_offset);
     }
     Ok(())
@@ -508,7 +508,7 @@ fn callback_jump(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global
             .tracer
             .on_jump(py, &wrapper, instruction_offset, destination_offset);
@@ -525,7 +525,7 @@ fn callback_branch(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global
             .tracer
             .on_branch(py, &wrapper, instruction_offset, destination_offset);
@@ -537,7 +537,7 @@ fn callback_branch(
 fn callback_py_start(py: Python<'_>, code: Bound<'_, PyAny>, instruction_offset: i32) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_start(py, &wrapper, instruction_offset);
     }
     Ok(())
@@ -547,7 +547,7 @@ fn callback_py_start(py: Python<'_>, code: Bound<'_, PyAny>, instruction_offset:
 fn callback_py_resume(py: Python<'_>, code: Bound<'_, PyAny>, instruction_offset: i32) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_resume(py, &wrapper, instruction_offset);
     }
     Ok(())
@@ -562,7 +562,7 @@ fn callback_py_return(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_return(py, &wrapper, instruction_offset, &retval);
     }
     Ok(())
@@ -577,7 +577,7 @@ fn callback_py_yield(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_yield(py, &wrapper, instruction_offset, &retval);
     }
     Ok(())
@@ -592,7 +592,7 @@ fn callback_py_throw(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_throw(py, &wrapper, instruction_offset, &exception);
     }
     Ok(())
@@ -607,7 +607,7 @@ fn callback_py_unwind(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_py_unwind(py, &wrapper, instruction_offset, &exception);
     }
     Ok(())
@@ -622,7 +622,7 @@ fn callback_raise(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_raise(py, &wrapper, instruction_offset, &exception);
     }
     Ok(())
@@ -637,7 +637,7 @@ fn callback_reraise(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global.tracer.on_reraise(py, &wrapper, instruction_offset, &exception);
     }
     Ok(())
@@ -652,7 +652,7 @@ fn callback_exception_handled(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global
             .tracer
             .on_exception_handled(py, &wrapper, instruction_offset, &exception);
@@ -686,7 +686,7 @@ fn callback_c_return(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global
             .tracer
             .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref());
@@ -704,7 +704,7 @@ fn callback_c_raise(
 ) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let code = code.downcast::<PyCode>()?;
-        let wrapper = CodeObjectWrapper::new(py, &code);
+        let wrapper = CODE_REGISTRY.get_or_insert(py, &code);
         global
             .tracer
             .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref());

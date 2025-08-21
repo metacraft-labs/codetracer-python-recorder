@@ -1,4 +1,4 @@
-use codetracer_python_recorder::CodeObjectWrapper;
+use codetracer_python_recorder::{CodeObjectWrapper, CODE_REGISTRY};
 use pyo3::prelude::*;
 use pyo3::types::{PyCode, PyModule};
 use std::ffi::CString;
@@ -51,5 +51,28 @@ fn wrapper_line_for_offset() {
             }
         }
         assert_eq!(wrapper.line_for_offset(py, 10_000).unwrap(), last_line);
+    });
+}
+
+#[test]
+fn registry_reuses_wrappers() {
+    Python::with_gil(|py| {
+        let src = CString::new("def h():\n    return 0\n").unwrap();
+        let filename = CString::new("<string>").unwrap();
+        let module = CString::new("m3").unwrap();
+        let m =
+            PyModule::from_code(py, src.as_c_str(), filename.as_c_str(), module.as_c_str())
+                .unwrap();
+        let func = m.getattr("h").unwrap();
+        let code: Bound<'_, PyCode> = func
+            .getattr("__code__")
+            .unwrap()
+            .clone()
+            .downcast_into()
+            .unwrap();
+        let w1 = CODE_REGISTRY.get_or_insert(py, &code);
+        let w2 = CODE_REGISTRY.get_or_insert(py, &code);
+        assert!(std::sync::Arc::ptr_eq(&w1, &w2));
+        CODE_REGISTRY.remove(w1.id());
     });
 }

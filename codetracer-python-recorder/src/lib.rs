@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 
 pub mod code_object;
 pub mod tracer;
-pub use crate::code_object::CodeObjectWrapper;
+pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper, CODE_REGISTRY};
 pub use crate::tracer::{install_tracer, uninstall_tracer, EventSet, Tracer};
 
 /// Global flag tracking whether tracing is active.

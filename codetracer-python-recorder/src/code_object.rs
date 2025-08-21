@@ -1,6 +1,8 @@
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use pyo3::prelude::*;
 use pyo3::types::PyCode;
+use dashmap::DashMap;
+use std::sync::Arc;
 
 /// A wrapper around Python `code` objects providing cached access to
 /// common attributes and line information.
@@ -128,3 +130,33 @@ impl CodeObjectWrapper {
         }
     }
 }
+
+/// Global registry caching `CodeObjectWrapper` instances by code object id.
+#[derive(Default)]
+pub struct CodeObjectRegistry {
+    map: DashMap<usize, Arc<CodeObjectWrapper>>,
+}
+
+impl CodeObjectRegistry {
+    /// Retrieve the wrapper for `code`, inserting a new one if needed.
+    pub fn get_or_insert(
+        &self,
+        py: Python<'_>,
+        code: &Bound<'_, PyCode>,
+    ) -> Arc<CodeObjectWrapper> {
+        let id = code.as_ptr() as usize;
+        self.map
+            .entry(id)
+            .or_insert_with(|| Arc::new(CodeObjectWrapper::new(py, code)))
+            .clone()
+    }
+
+    /// Remove the wrapper for a given code id, if present.
+    pub fn remove(&self, id: usize) {
+        self.map.remove(&id);
+    }
+}
+
+/// Lazily-initialized global registry instance.
+pub static CODE_REGISTRY: Lazy<CodeObjectRegistry> =
+    Lazy::new(CodeObjectRegistry::default);
