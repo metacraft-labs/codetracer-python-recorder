@@ -66,6 +66,34 @@ impl CodeObjectWrapper {
 }
 ```
 
+### Global registry
+
+To avoid constructing a new wrapper for every tracing event, a global cache
+stores `CodeObjectWrapper` instances keyed by their stable `id`:
+
+```rs
+pub struct CodeObjectRegistry {
+    map: DashMap<usize, Arc<CodeObjectWrapper>>,
+}
+
+impl CodeObjectRegistry {
+    pub fn get_or_insert(
+        &self,
+        py: Python<'_>,
+        code: &Bound<'_, PyCode>,
+    ) -> Arc<CodeObjectWrapper>;
+
+    /// Optional explicit removal for long‑running processes.
+    pub fn remove(&self, id: usize);
+}
+```
+
+`CodeObjectWrapper::new` remains available, but production code is expected to
+obtain instances via `CodeObjectRegistry::get_or_insert` so each unique code
+object is wrapped only once.  The registry is designed to be thread‑safe
+(`DashMap`) and the wrappers are reference counted (`Arc`) so multiple threads
+can hold references without additional locking.
+
 ### Trait Integration
 
 The `Tracer` trait will be adjusted so every callback receives `&CodeObjectWrapper` instead of a generic `&Bound<'_, PyAny>`:
@@ -78,27 +106,20 @@ fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32)
 
 ## Usage Examples
 
-### Constructing the wrapper inside a tracer
+### Retrieving wrappers from the global registry
 
 ```rs
+static CODE_REGISTRY: Lazy<CodeObjectRegistry> = Lazy::new(CodeObjectRegistry::default);
+
 fn on_line(&mut self, py: Python<'_>, code: &Bound<'_, PyCode>, lineno: u32) {
-    let wrapper = CodeObjectWrapper::new(py, code);
+    let wrapper = CODE_REGISTRY.get_or_insert(py, code);
     let filename = wrapper.filename(py).unwrap_or("<unknown>");
     eprintln!("{}:{}", filename, lineno);
 }
 ```
 
-### Reusing a cached wrapper
-
-```rs
-let wrapper = CodeObjectWrapper::new(py, code);
-cache.insert(wrapper.id(), wrapper.clone());
-
-if let Some(saved) = cache.get(&wrapper.id()) {
-    let qualname = saved.qualname(py)?;
-    println!("qualified name: {}", qualname);
-}
-```
+Once cached, subsequent callbacks referencing the same `CodeType` will reuse the
+existing wrapper without recomputing any attributes.
 
 ## Performance Considerations
 - `Py<PyCode>` allows cloning the wrapper without holding the GIL, enabling cheap event propagation.
@@ -106,10 +127,15 @@ if let Some(saved) = cache.get(&wrapper.id()) {
 - Fields are loaded lazily and stored inside `OnceCell` containers to avoid repeated attribute lookups.
 - `line_for_offset` memoizes the full line table the first time it is requested; subsequent calls perform an in‑memory binary search.
 - Storing strings and small integers directly in the cache eliminates conversion cost on hot paths.
+- A global `CodeObjectRegistry` ensures that wrapper construction and attribute
+  discovery happen at most once per `CodeType`.
 
 ## Open Questions
 - Additional attributes such as `co_consts` or `co_varnames` may be required for richer debugging features; these can be added later as new `OnceCell` fields.
 - Thread‑safety requirements may necessitate wrapping the cache in `UnsafeCell` or providing internal mutability strategies compatible with `Send`/`Sync`.
+- The registry currently grows unbounded; strategies for eviction or weak
+  references may be needed for long‑running processes that compile many
+  transient code objects.
 
 ## References
 - [Python `CodeType` objects](https://docs.python.org/3/reference/datamodel.html#code-objects)
