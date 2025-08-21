@@ -38,3 +38,5 @@ Also please add usage examples to the design documentation
 Implement the CodeObjectWrapper as designed. Update the Tracer trait as well as the callback_xxx functions accordingly. Write a comprehensive unit tests for CodeObjectWrapper.
 --- FOLLOW UP TASK ---
 There is an issue in the current implementation. We don't use caching effectively, since we create a new CodeObjectWrapper at each callback_xxx call. We need a global cache, probably keyed by the code object id. Propose design changes and update the design documents. Don't implement the changes themselves before I approve them.
+--- FOLLOW UP TASK ---
+Implement the global code object registry.
