@@ -18,8 +18,9 @@ The Python Monitoring API delivers a generic `CodeType` object to every tracing 
 
 ```rs
 pub struct CodeObjectWrapper {
-    /// Strong reference to the Python `CodeType` object.
-    obj: Py<PyAny>,
+    /// Owned reference to the Python `CodeType` object.
+    /// Stored as `Py<PyCode>` so it can be held outside the GIL.
+    obj: Py<PyCode>,
     /// Stable identity equivalent to `id(code)`.
     id: usize,
     /// Lazily populated cache for expensive lookups.
@@ -42,8 +43,13 @@ pub struct LineEntry {
 }
 
 impl CodeObjectWrapper {
-    /// Construct from a generic Python object. Computes `id` eagerly.
-    pub fn new(py: Python<'_>, obj: &Bound<'_, PyAny>) -> Self;
+    /// Construct from a `CodeType` object. Computes `id` eagerly.
+    pub fn new(py: Python<'_>, obj: &Bound<'_, PyCode>) -> Self;
+
+    /// Borrow the owned `Py<PyCode>` as a `Bound<'py, PyCode>`.
+    /// This follows PyO3's recommendation to prefer `Bound<'_, T>` over `Py<T>`
+    /// for object manipulation.
+    pub fn as_bound<'py>(&'py self, py: Python<'py>) -> Bound<'py, PyCode>;
 
     /// Accessors fetch from the cache or perform a one‑time lookup under the GIL.
     pub fn filename<'py>(&'py self, py: Python<'py>) -> PyResult<&'py str>;
@@ -70,8 +76,33 @@ fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32)
 // ...and similarly for the remaining callbacks.
 ```
 
+## Usage Examples
+
+### Constructing the wrapper inside a tracer
+
+```rs
+fn on_line(&mut self, py: Python<'_>, code: &Bound<'_, PyCode>, lineno: u32) {
+    let wrapper = CodeObjectWrapper::new(py, code);
+    let filename = wrapper.filename(py).unwrap_or("<unknown>");
+    eprintln!("{}:{}", filename, lineno);
+}
+```
+
+### Reusing a cached wrapper
+
+```rs
+let wrapper = CodeObjectWrapper::new(py, code);
+cache.insert(wrapper.id(), wrapper.clone());
+
+if let Some(saved) = cache.get(&wrapper.id()) {
+    let qualname = saved.qualname(py)?;
+    println!("qualified name: {}", qualname);
+}
+```
+
 ## Performance Considerations
-- `Py<PyAny>` allows cloning the wrapper without holding the GIL, enabling cheap event propagation.
+- `Py<PyCode>` allows cloning the wrapper without holding the GIL, enabling cheap event propagation.
+- Methods bind the owned reference to `Bound<'py, PyCode>` on demand, following PyO3's `Bound`‑first guidance and avoiding accidental `Py` clones.
 - Fields are loaded lazily and stored inside `OnceCell` containers to avoid repeated attribute lookups.
 - `line_for_offset` memoizes the full line table the first time it is requested; subsequent calls perform an in‑memory binary search.
 - Storing strings and small integers directly in the cache eliminates conversion cost on hot paths.
