@@ -7,7 +7,7 @@ into `runtime_tracing` and `sys.monitoring`.  For now the Rust side only
 maintains placeholder state and performs no actual tracing.
 """
 
-from .api import *
+from . import api as _api
+from .api import *  # re-export public API symbols
 
-__all__ = api.__all__
-
+__all__ = _api.__all__
