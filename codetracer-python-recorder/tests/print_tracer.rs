@@ -1,4 +1,4 @@
-use codetracer_python_recorder::{install_tracer, uninstall_tracer, EventSet, Tracer};
+use codetracer_python_recorder::{install_tracer, uninstall_tracer, EventSet, Tracer, CodeObjectWrapper};
 use codetracer_python_recorder::tracer::{MonitoringEvents, events_union};
 use pyo3::prelude::*;
 use std::ffi::CString;
@@ -9,17 +9,17 @@ static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 struct PrintTracer;
 
 impl Tracer for PrintTracer {
-    fn interest(&self, events:&MonitoringEvents) -> EventSet {
-	events_union(&[events.CALL])
+    fn interest(&self, events: &MonitoringEvents) -> EventSet {
+        events_union(&[events.CALL])
     }
 
     fn on_call(
         &mut self,
         _py: Python<'_>,
-        _code: &pyo3::Bound<'_, pyo3::types::PyAny>,
+        _code: &CodeObjectWrapper,
         _offset: i32,
-        _callable: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        _arg0: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
+        _callable: &Bound<'_, PyAny>,
+        _arg0: Option<&Bound<'_, PyAny>>,
     ) {
         CALL_COUNT.fetch_add(1, Ordering::SeqCst);
     }
@@ -29,16 +29,10 @@ impl Tracer for PrintTracer {
 fn tracer_prints_on_call() {
     Python::with_gil(|py| {
         CALL_COUNT.store(0, Ordering::SeqCst);
-        if let Err(e) = install_tracer(py, Box::new(PrintTracer)) {
-            e.print(py);
-            panic!("Install Tracer failed");
-        }
-        let code = CString::new("def foo():\n    return 1\nfoo()").expect("CString::new failed");
-        if let Err(e) = py.run(code.as_c_str(), None, None) {
-            e.print(py);
-            uninstall_tracer(py).ok();
-            panic!("Python raised an exception");
-        }
+        uninstall_tracer(py).ok();
+        install_tracer(py, Box::new(PrintTracer)).unwrap();
+        let code = CString::new("def foo():\n    return 1\nfoo()").unwrap();
+        py.run(code.as_c_str(), None, None).unwrap();
         uninstall_tracer(py).unwrap();
         let count = CALL_COUNT.load(Ordering::SeqCst);
         assert!(count >= 1, "expected at least one CALL event, got {}", count);
@@ -64,22 +58,6 @@ static C_RAISE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 struct CountingTracer;
 
-fn offset_to_line(code: &pyo3::Bound<'_, pyo3::types::PyAny>, offset: i32) -> Option<i32> {
-    if offset < 0 {
-        return None;
-    }
-    let lines_iter = code.call_method0("co_lines").ok()?;
-    let iter = lines_iter.try_iter().ok()?;
-    for line_info in iter {
-        let line_info = line_info.ok()?;
-        let (start, end, line): (i32, i32, i32) = line_info.extract().ok()?;
-        if offset >= start && offset < end {
-            return Some(line);
-        }
-    }
-    None
-}
-
 impl Tracer for CountingTracer {
     fn interest(&self, events: &MonitoringEvents) -> EventSet {
         events_union(&[
@@ -103,165 +81,91 @@ impl Tracer for CountingTracer {
         ])
     }
 
-    fn on_line(
-        &mut self,
-        _py: Python<'_>,
-        _code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        lineno: u32,
-    ) {
+    fn on_line(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, lineno: u32) {
         LINE_COUNT.fetch_add(1, Ordering::SeqCst);
         println!("LINE at {}", lineno);
     }
 
-    fn on_instruction(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-    ) {
+    fn on_instruction(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
         INSTRUCTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("INSTRUCTION at {}", line);
         }
     }
 
-    fn on_jump(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _destination_offset: i32,
-    ) {
+    fn on_jump(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
         JUMP_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("JUMP at {}", line);
         }
     }
 
-    fn on_branch(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _destination_offset: i32,
-    ) {
+    fn on_branch(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
         BRANCH_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("BRANCH at {}", line);
         }
     }
 
-    fn on_py_start(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-    ) {
+    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
         PY_START_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_START at {}", line);
         }
     }
 
-    fn on_py_resume(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-    ) {
+    fn on_py_resume(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
         PY_RESUME_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RESUME at {}", line);
         }
     }
 
-    fn on_py_return(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _retval: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_py_return(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _retval: &Bound<'_, PyAny>) {
         PY_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RETURN at {}", line);
         }
     }
 
-    fn on_py_yield(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _retval: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_py_yield(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _retval: &Bound<'_, PyAny>) {
         PY_YIELD_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_YIELD at {}", line);
         }
     }
 
-    fn on_py_throw(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_py_throw(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
         PY_THROW_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_THROW at {}", line);
         }
     }
 
-    fn on_py_unwind(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_py_unwind(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
         PY_UNWIND_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_UNWIND at {}", line);
         }
     }
 
-    fn on_raise(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_raise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
         RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RAISE at {}", line);
         }
     }
 
-    fn on_reraise(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_reraise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
         RERAISE_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RERAISE at {}", line);
         }
     }
 
-    fn on_exception_handled(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _exception: &pyo3::Bound<'_, pyo3::types::PyAny>,
-    ) {
+    fn on_exception_handled(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
         EXCEPTION_HANDLED_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("EXCEPTION_HANDLED at {}", line);
         }
     }
@@ -279,30 +183,16 @@ impl Tracer for CountingTracer {
     //     }
     // }
 
-    fn on_c_return(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _callable: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        _arg0: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
-    ) {
+    fn on_c_return(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _call: &Bound<'_, PyAny>, _arg0: Option<&Bound<'_, PyAny>>) {
         C_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RETURN at {}", line);
         }
     }
 
-    fn on_c_raise(
-        &mut self,
-        _py: Python<'_>,
-        code: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        offset: i32,
-        _callable: &pyo3::Bound<'_, pyo3::types::PyAny>,
-        _arg0: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
-    ) {
+    fn on_c_raise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _call: &Bound<'_, PyAny>, _arg0: Option<&Bound<'_, PyAny>>) {
         C_RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
-        if let Some(line) = offset_to_line(code, offset) {
+        if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RAISE at {}", line);
         }
     }
@@ -414,4 +304,3 @@ for _ in only_stop_iter():
         assert!(C_RAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one C_RAISE event, got {}", C_RAISE_COUNT.load(Ordering::SeqCst));
     });
 }
-
