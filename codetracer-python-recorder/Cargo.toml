@@ -20,6 +20,8 @@ runtime_tracing = "0.14.0"
 bitflags = "2.4"
 once_cell = "1.19"
 dashmap = "5.5"
+log = "0.4"
+env_logger = "0.11"
 
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }

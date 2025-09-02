@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::{Mutex, OnceLock};
 use pyo3::{
     exceptions::PyRuntimeError,
@@ -141,7 +142,11 @@ pub fn free_tool_id(py: Python<'_>, tool: &ToolId) -> PyResult<()> {
 /// Each method corresponds to an event from `sys.monitoring`. Default
 /// implementations allow implementers to only handle the events they care
 /// about.
-pub trait Tracer: Send {
+pub trait Tracer: Send + Any {
+    /// Downcast support for implementations that need to be accessed
+    /// behind a `Box<dyn Tracer>` (e.g., for flushing/finishing).
+    fn as_any(&mut self) -> &mut dyn Any where Self: 'static, Self: Sized { self }
+
     /// Return the set of events the tracer wants to receive.
     fn interest(&self, _events: &MonitoringEvents) -> EventSet {
         NO_EVENTS
@@ -295,6 +300,12 @@ pub trait Tracer: Send {
         _arg0: Option<&Bound<'_, PyAny>>,
     ) {
     }
+
+    /// Flush any buffered state to storage. Default is a no-op.
+    fn flush(&mut self, _py: Python<'_>) -> PyResult<()> { Ok(()) }
+
+    /// Finish and close any underlying writers. Default is a no-op.
+    fn finish(&mut self, _py: Python<'_>) -> PyResult<()> { Ok(()) }
 }
 
 struct Global {
@@ -404,7 +415,10 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
 /// Remove the installed tracer if any.
 pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
-    if let Some(global) = guard.take() {
+    if let Some(mut global) = guard.take() {
+        // Give the tracer a chance to finish underlying writers before
+        // unregistering callbacks.
+        let _ = global.tracer.finish(py);
         let events = monitoring_events(py)?;
         if global.mask.contains(&events.CALL) {
             register_callback(py, &global.tool, &events.CALL, None)?;
@@ -462,6 +476,14 @@ pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
         global.registry.clear();
         set_events(py, &global.tool, NO_EVENTS)?;
         free_tool_id(py, &global.tool)?;
+    }
+    Ok(())
+}
+
+/// Flush the currently installed tracer if any.
+pub fn flush_installed_tracer(py: Python<'_>) -> PyResult<()> {
+    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+        global.tracer.flush(py)?;
     }
     Ok(())
 }
