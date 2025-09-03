@@ -17,6 +17,8 @@ class ParsedTrace:
     calls: List[int]  # sequence of function_id values
     returns: List[Dict[str, Any]]  # raw Return payloads (order preserved)
     steps: List[Tuple[int, int]]  # (path_id, line)
+    varnames: List[str]  # index is variable_id
+    call_records: List[Dict[str, Any]]  # raw Call payloads (order preserved)
 
 
 def _parse_trace(out_dir: Path) -> ParsedTrace:
@@ -30,19 +32,32 @@ def _parse_trace(out_dir: Path) -> ParsedTrace:
     calls: List[int] = []
     returns: List[Dict[str, Any]] = []
     steps: List[Tuple[int, int]] = []
+    varnames: List[str] = []
+    call_records: List[Dict[str, Any]] = []
 
     for item in events:
         if "Function" in item:
             functions.append(item["Function"])
         elif "Call" in item:
             calls.append(int(item["Call"]["function_id"]))
+            call_records.append(item["Call"])  # keep for arg assertions
+        elif "VariableName" in item:
+            varnames.append(item["VariableName"])  # index is VariableId
         elif "Return" in item:
             returns.append(item["Return"])  # keep raw payload for value checks
         elif "Step" in item:
             s = item["Step"]
             steps.append((int(s["path_id"]), int(s["line"])))
 
-    return ParsedTrace(paths=paths, functions=functions, calls=calls, returns=returns, steps=steps)
+    return ParsedTrace(
+        paths=paths,
+        functions=functions,
+        calls=calls,
+        returns=returns,
+        steps=steps,
+        varnames=varnames,
+        call_records=call_records,
+    )
 
 
 def _write_script(tmp: Path) -> Path:
@@ -125,3 +140,58 @@ def test_start_while_active_raises(tmp_path: Path) -> None:
             codetracer.start(out_dir, format=codetracer.TRACE_JSON)
     finally:
         codetracer.stop()
+
+
+def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
+    # Arrange: write a simple script with a function that accepts two args
+    code = (
+        "def foo(a, b):\n"
+        "    return a if len(str(b)) > 0 else 0\n\n"
+        "if __name__ == '__main__':\n"
+        "    foo(1, 'x')\n"
+    )
+    script = tmp_path / "script_args.py"
+    script.write_text(code)
+
+    out_dir = tmp_path / "trace_out"
+    out_dir.mkdir()
+
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+
+    # Locate foo() function id in this script
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+    foo_fids = [i for i, f in enumerate(parsed.functions) if f["name"] == "foo" and f["path_id"] == script_path_id]
+    assert foo_fids, "Expected function entry for foo()"
+    foo_fid = foo_fids[0]
+
+    # Find the first Call to foo() and assert it carries two args with correct names/values
+    foo_calls = [cr for cr in parsed.call_records if int(cr["function_id"]) == foo_fid]
+    assert foo_calls, "Expected a recorded call to foo()"
+    call = foo_calls[0]
+    args = call.get("args", [])
+    assert len(args) == 2, f"Expected 2 args, got: {args}"
+
+    def arg_name(i: int) -> str:
+        return parsed.varnames[int(args[i]["variable_id"])]
+
+    def arg_value(i: int) -> Dict[str, Any]:
+        return args[i]["value"]
+
+    # Validate names and values
+    assert arg_name(0) == "a"
+    assert arg_value(0).get("kind") == "Int" and int(arg_value(0).get("i")) == 1
+    assert arg_name(1) == "b"
+    v1 = arg_value(1)
+    assert v1.get("kind") in ("String", "Raw")  # backend may encode as String or Raw
+    if v1.get("kind") == "String":
+        assert v1.get("text") == "x"
+    else:
+        assert v1.get("r") == "x"

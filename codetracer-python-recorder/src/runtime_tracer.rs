@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny};
 
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 use runtime_tracing::NonStreamingTraceWriter;
@@ -136,7 +136,39 @@ impl Tracer for RuntimeTracer {
             _ => log::debug!("[RuntimeTracer] on_py_start"),
         }
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            TraceWriter::register_call(&mut self.writer, fid, Vec::new());
+            // Attempt to capture function arguments from the current frame.
+            // Fall back to empty args on any error to keep tracing robust.
+            let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
+            let frame_and_args = (|| -> PyResult<()> {
+                // Current Python frame where the function just started executing
+                let sys = py.import("sys")?;
+                let frame = sys.getattr("_getframe")?.call1((0,))?;
+                let locals = frame.getattr("f_locals")?;
+
+                // Argument names come from co_varnames (first co_argcount entries)
+                let argcount = code.arg_count(py)? as usize;
+                let varnames_obj = code.as_bound(py).getattr("co_varnames")?;
+                let varnames: Vec<String> = varnames_obj.extract()?;
+                let take_n = std::cmp::min(argcount, varnames.len());
+                for name in varnames.iter().take(take_n) {
+                    // f_locals[<name>] may not exist in rare cases; skip if missing
+                    match locals.get_item(name) {
+                        Ok(val) => {
+                            let vrec = self.encode_value(py, &val);
+                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                        }
+                        Err(_) => {
+                            // Skip absent or inaccessible locals; continue best-effort
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = frame_and_args {
+                log::debug!("[RuntimeTracer] on_py_start: failed to capture args: {}", e);
+            }
+
+            TraceWriter::register_call(&mut self.writer, fid, args);
         }
     }
 
