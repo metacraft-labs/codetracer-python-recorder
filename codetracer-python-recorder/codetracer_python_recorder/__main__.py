@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("Usage: python -m codetracer_python_recorder [codetracer options] <script.py> [args...]\n")
         return 2
 
-    script_path = Path(unknown[0])
+    script_path = Path(unknown[0]).resolve()
     script_args = unknown[1:]
 
     fmt = ns.format or DEFAULT_FORMAT
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         start_on_enter=script_path,
     )
     try:
-        runpy.run_path(str(script_path.resolve()), run_name="__main__")
+        runpy.run_path(str(script_path), run_name="__main__")
         return 0
     except SystemExit as e:
         # Preserve script's exit code

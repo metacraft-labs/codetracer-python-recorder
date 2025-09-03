@@ -172,7 +172,7 @@ impl Tracer for RuntimeTracer {
         }
         // Determine whether this is the activation owner's return
         let is_activation_return = self.activation_code_id.map(|id| id == code.id()).unwrap_or(false);
-        // Return value is optional per configuration
+        
         let val = self.encode_value(py, retval);
         TraceWriter::register_return(&mut self.writer, val);
         if is_activation_return {
