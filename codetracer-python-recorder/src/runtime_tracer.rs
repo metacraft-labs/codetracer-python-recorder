@@ -158,7 +158,9 @@ impl Tracer for RuntimeTracer {
 
                 // Argument names come from co_varnames in the order defined by CPython:
                 // [positional (pos-only + pos-or-kw)] [+ varargs] [+ kw-only] [+ kwargs]
-                let argcount = code.arg_count(py)? as usize; // includes pos-only + pos-or-kw
+                // Note: `co_argcount` includes only pos-or-keyword parameters.
+                // Positional-only parameters are reported separately via `co_posonlyargcount`.
+                let argcount = code.arg_count(py)? as usize; // pos-or-keyword only
                 let posonly: usize = code
                     .as_bound(py)
                     .getattr("co_posonlyargcount")?
@@ -177,7 +179,8 @@ impl Tracer for RuntimeTracer {
 
                 // 1) Positional parameters (pos-only + pos-or-kw)
                 let mut idx = 0usize;
-                let take_n = std::cmp::min(argcount, varnames.len());
+                let total_positional = posonly.saturating_add(argcount);
+                let take_n = std::cmp::min(total_positional, varnames.len());
                 for name in varnames.iter().take(take_n) {
                     match locals.get_item(name) {
                         Ok(val) => {

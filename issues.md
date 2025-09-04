@@ -63,9 +63,10 @@ to preserve structure.
 Partially done
 
 Implemented varargs (`*args`), keyword-only, and kwargs (`**kwargs`) capture.
-Positional-only parameters are read (`co_posonlyargcount`) but not yet included
-in the positional slice, so they are currently omitted. Follow-up: include
-`posonly + co_argcount` when selecting positional names.
+Positional-only parameters are now included in the positional slice via
+`co_posonlyargcount + co_argcount` (see ISSUE-005). Remaining gap: structured
+encoding for `*args`/`**kwargs` per Definition of Done (currently accepted as
+backend-dependent; tests allow `Raw`).
 
 ## ISSUE-005
 ### Description
@@ -80,7 +81,11 @@ arguments (PEP 570). As a result, names before the `/` in a signature like
 - Tests add a function with positional-only parameters and assert their presence and correct encoding.
 
 ### Status
-Not started
+Done
+
+Implemented by selecting positional names from `co_varnames` with
+`co_posonlyargcount + co_argcount`. Tests in `test_all_argument_kinds_recorded_on_py_start`
+assert presence of the positional-only parameter `p` and pass.
 
 ## ISSUE-003
 ### Description
