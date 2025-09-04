@@ -195,3 +195,81 @@ def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
         assert v1.get("text") == "x"
     else:
         assert v1.get("r") == "x"
+
+
+def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
+    # Arrange: write a script with a function using all Python argument kinds
+    code = (
+        "def g(p, /, q, *args, r, **kwargs):\n"
+        "    # Touch values to ensure they're present in locals\n"
+        "    return (p if p is not None else 0) + (q if q is not None else 0) + (r if r is not None else 0)\n\n"
+        "if __name__ == '__main__':\n"
+        "    g(10, 20, 30, 40, r=50, k=60)\n"
+    )
+    script = tmp_path / "script_args_kinds.py"
+    script.write_text(code)
+
+    out_dir = tmp_path / "trace_out"
+    out_dir.mkdir()
+
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+
+    # Locate g() function id
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+    g_fids = [i for i, f in enumerate(parsed.functions) if f["name"] == "g" and f["path_id"] == script_path_id]
+    assert g_fids, "Expected function entry for g()"
+    g_fid = g_fids[0]
+
+    # Find the first Call to g()
+    g_calls = [cr for cr in parsed.call_records if int(cr["function_id"]) == g_fid]
+    assert g_calls, "Expected a recorded call to g()"
+    call = g_calls[0]
+    args = call.get("args", [])
+    assert args, "Expected arguments for g() call"
+
+    # Build name -> value mapping for convenience
+    def arg_name(i: int) -> str:
+        return parsed.varnames[int(args[i]["variable_id"])]
+
+    def arg_value(i: int) -> Dict[str, Any]:
+        return args[i]["value"]
+
+    name_to_val: Dict[str, Dict[str, Any]] = {arg_name(i): arg_value(i) for i in range(len(args))}
+
+    # Ensure we captured all kinds by name
+    for expected in ("p", "q", "args", "r", "kwargs"):
+        assert expected in name_to_val, f"Missing argument kind: {expected} in {list(name_to_val.keys())}"
+
+    # Validate some concrete values where encoding is unambiguous
+    assert name_to_val["p"].get("kind") == "Int" and int(name_to_val["p"].get("i")) == 10
+    assert name_to_val["q"].get("kind") == "Int" and int(name_to_val["q"].get("i")) == 20
+    assert name_to_val["r"].get("kind") == "Int" and int(name_to_val["r"].get("i")) == 50
+
+    # Varargs may be encoded as a structured sequence or as a Raw string; accept both
+    varargs_val = name_to_val["args"]
+    kind = varargs_val.get("kind")
+    assert kind in ("Sequence", "Raw", "Tuple"), f"Unexpected *args encoding kind: {kind}"
+    if kind in ("Sequence", "Tuple"):
+        elems = varargs_val.get("elements")
+        assert isinstance(elems, list) and len(elems) == 2
+        assert elems[0].get("kind") == "Int" and int(elems[0].get("i")) == 30
+        assert elems[1].get("kind") == "Int" and int(elems[1].get("i")) == 40
+    else:
+        # Raw textual fallback
+        r = varargs_val.get("r", "")
+        assert "30" in r and "40" in r
+
+    # Kwargs presence is sufficient; encoding may vary by backend
+    kwargs_val = name_to_val["kwargs"]
+    assert isinstance(kwargs_val, dict) and "kind" in kwargs_val
+    if kwargs_val.get("kind") == "Raw":
+        r = kwargs_val.get("r", "")
+        assert "k" in r and "60" in r

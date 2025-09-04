@@ -145,21 +145,68 @@ impl Tracer for RuntimeTracer {
                 let frame = sys.getattr("_getframe")?.call1((0,))?;
                 let locals = frame.getattr("f_locals")?;
 
-                // Argument names come from co_varnames (first co_argcount entries)
-                let argcount = code.arg_count(py)? as usize;
+                // Argument names come from co_varnames in the order defined by CPython:
+                // [positional (pos-only + pos-or-kw)] [+ varargs] [+ kw-only] [+ kwargs]
+                let argcount = code.arg_count(py)? as usize; // includes pos-only + pos-or-kw
+                let posonly: usize = code
+                    .as_bound(py)
+                    .getattr("co_posonlyargcount")?
+                    .extract()?;
+                let kwonly: usize = code
+                    .as_bound(py)
+                    .getattr("co_kwonlyargcount")?
+                    .extract()?;
+
+                let flags = code.flags(py)?;
+                const CO_VARARGS: u32 = 0x04;
+                const CO_VARKEYWORDS: u32 = 0x08;
+
                 let varnames_obj = code.as_bound(py).getattr("co_varnames")?;
                 let varnames: Vec<String> = varnames_obj.extract()?;
+
+                // 1) Positional parameters (pos-only + pos-or-kw)
+                let mut idx = 0usize;
                 let take_n = std::cmp::min(argcount, varnames.len());
                 for name in varnames.iter().take(take_n) {
-                    // f_locals[<name>] may not exist in rare cases; skip if missing
                     match locals.get_item(name) {
                         Ok(val) => {
                             let vrec = self.encode_value(py, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
-                        Err(_) => {
-                            // Skip absent or inaccessible locals; continue best-effort
+                        Err(_) => {}
+                    }
+                    idx += 1;
+                }
+
+                // 2) Varargs (*args)
+                if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
+                    let name = &varnames[idx];
+                    if let Ok(val) = locals.get_item(name) {
+                        let vrec = self.encode_value(py, &val);
+                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                    }
+                    idx += 1;
+                }
+
+                // 3) Keyword-only parameters
+                let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
+                for name in varnames.iter().skip(idx).take(kwonly_take) {
+                    match locals.get_item(name) {
+                        Ok(val) => {
+                            let vrec = self.encode_value(py, &val);
+                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
+                        Err(_) => {}
+                    }
+                }
+                idx = idx.saturating_add(kwonly_take);
+
+                // 4) Kwargs (**kwargs)
+                if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
+                    let name = &varnames[idx];
+                    if let Ok(val) = locals.get_item(name) {
+                        let vrec = self.encode_value(py, &val);
+                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                     }
                 }
                 Ok(())

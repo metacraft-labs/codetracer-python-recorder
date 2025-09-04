@@ -48,6 +48,21 @@ via code flags. Encode `*args` as a list value and `**kwargs` as a mapping value
 to preserve structure.
 
 ### Status
+Partially done
+
+Implemented varargs (`*args`), keyword-only, and kwargs (`**kwargs`) capture.
+Positional-only parameters are read (`co_posonlyargcount`) but not yet included
+in the positional slice, so they are currently omitted. Follow-up: include
+`posonly + co_argcount` when selecting positional names.
+
+## ISSUE-005
+### Description
+Include positional-only parameters in argument capture. The current logic uses
+only `co_argcount` for the positional slice, which excludes positional-only
+arguments (PEP 570). As a result, names before the `/` in a signature like
+`def f(p, /, q, *args, r, **kwargs)` are dropped.
+
+### Status
 Not started
 
 ## ISSUE-003
