@@ -37,8 +37,13 @@ f()
 
         # Ensure the error surfaced clearly and didn’t get swallowed
         assert "_getframe" in str(excinfo.value) or "boom" in str(excinfo.value)
+
+        # After the first failure, tracing must be disabled so
+        # subsequent Python function calls do not trigger the same error.
+        # Re-running the same program path should no longer raise.
+        ns = runpy.run_path(str(prog), run_name="__main__")
+        assert isinstance(ns, dict)
     finally:
         # Restore state
         sys._getframe = original_getframe  # type: ignore[attr-defined]
         cpr.stop_tracing()
-
