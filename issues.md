@@ -62,11 +62,19 @@ to preserve structure.
 ### Status
 Partially done
 
-Implemented varargs (`*args`), keyword-only, and kwargs (`**kwargs`) capture.
-Positional-only parameters are now included in the positional slice via
-`co_posonlyargcount + co_argcount` (see ISSUE-005). Remaining gap: structured
-encoding for `*args`/`**kwargs` per Definition of Done (currently accepted as
-backend-dependent; tests allow `Raw`).
+Structured encoding for varargs is implemented in the Rust tracer:
+- Python `tuple` encodes as `Tuple` (elements recursively encoded).
+- Python `list` encodes as `Sequence` (non-slice; elements recursively encoded).
+
+Keyword-only and kwargs capture remain in place; kwargs still encode as `Raw`
+due to the lack of a mapping value in the `runtime_tracing` format. See
+ISSUE-008 for tracking structured kwargs encoding support.
+
+Note: The Definition of Done mentions "list" for `*args`, but CPython passes
+varargs as a tuple; the backend now preserves that shape (`Tuple`), which the
+tests also accept. The remaining gap is structured kwargs.
+
+Dependent issues: ISSUE-008
 
 ## ISSUE-005
 ### Description
@@ -214,3 +222,30 @@ Python, and subsequent `PY_START` events are not delivered. This keeps the
 module-level `ACTIVE` flag unchanged until `stop_tracing()`, making the
 shutdown idempotent. The test `tests/test_fail_fast_on_py_start.py`
 exercises the behavior by re-running the program after the initial failure.
+
+## ISSUE-008
+### Description
+Provide structured encoding for kwargs (`**kwargs`) on function entry. The
+current backend encodes kwargs as `Raw` text because the `runtime_tracing`
+format lacks a mapping value. Introduce a mapping representation so kwargs can
+be recorded losslessly with key/value structure and recursively encoded values.
+
+### Definition of Done
+- `runtime_tracing` supports a mapping value kind (e.g., `Map` with string keys).
+- `RuntimeTracer::encode_value` encodes Python `dict` to the mapping kind with
+  recursively encoded values; key type restricted to `str` (non-`str` keys may
+  be stringified or rejected, behavior documented).
+- `on_py_start` records `**kwargs` using the new mapping encoding.
+- Tests verify kwargs structure and values; large and nested kwargs are covered.
+
+### Proposed solution
+- We can represent our `Map` as a sequenced of tuples. This way we can use the current value record types to encode dictionaries.
+- In the Python recorder, downcast to `dict` and iterate items, encoding values
+  recursively; keep behavior minimal and fail fast on unexpected key types per
+  repo rules (no defensive fallbacks).
+
+### Dependent issues
+- Blocks completion of ISSUE-002
+
+### Status
+Not started

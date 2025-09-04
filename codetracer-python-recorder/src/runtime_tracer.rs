@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny};
+use pyo3::types::{PyAny, PyList, PyTuple};
 
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 use runtime_tracing::NonStreamingTraceWriter;
@@ -84,6 +84,9 @@ impl RuntimeTracer {
     /// - `bool` -> `Bool`
     /// - `int`  -> `Int`
     /// - `str`  -> `String` (canonical for text; do not fall back to Raw)
+    /// - common containers:
+    ///   - Python `tuple` -> `Tuple` with encoded elements
+    ///   - Python `list`  -> `Sequence` with encoded elements (not a slice)
     /// - any other type -> textual `Raw` via `__str__` best-effort
     fn encode_value<'py>(&mut self, _py: Python<'py>, v: &Bound<'py, PyAny>) -> ValueRecord {
         // None
@@ -105,6 +108,27 @@ impl RuntimeTracer {
         if let Ok(s) = v.extract::<String>() {
             let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
             return ValueRecord::String { text: s, type_id: ty };
+        }
+
+        // Python tuple -> ValueRecord::Tuple with recursively-encoded elements
+        if let Ok(t) = v.downcast::<PyTuple>() {
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(t.len());
+            for item in t.iter() {
+                // item: Bound<PyAny>
+                elements.push(self.encode_value(_py, &item));
+            }
+            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
+            return ValueRecord::Tuple { elements, type_id: ty };
+        }
+
+        // Python list -> ValueRecord::Sequence with recursively-encoded elements
+        if let Ok(l) = v.downcast::<PyList>() {
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(l.len());
+            for item in l.iter() {
+                elements.push(self.encode_value(_py, &item));
+            }
+            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "Array");
+            return ValueRecord::Sequence { elements, is_slice: false, type_id: ty };
         }
 
         // Fallback to Raw string representation
