@@ -6,6 +6,12 @@ We need to record function arguments when calling a function
 
 We have a function `encode_value` which is used to convert Python objects to value records. We need to use this function to encode the function arguments. To do that we should modify the `on_py_start` hook to load the current frame and to read the function arguments from it.
 
+### Definition of Done
+- Arguments for positional and pos-or-keyword parameters are recorded on function entry using the current frame's locals.
+- Values are encoded via `encode_value` and attached to the `Call` event payload.
+- A unit test asserts that multiple positional arguments (e.g. `a`, `b`) are present with correct encoded values.
+- Varargs/kwargs and positional-only coverage are tracked in separate issues (see ISSUE-002, ISSUE-005).
+
 ### Status
 Partially done
 
@@ -47,6 +53,12 @@ leverage `co_posonlyargcount` and `co_kwonlyargcount`, and detect varargs/kwargs
 via code flags. Encode `*args` as a list value and `**kwargs` as a mapping value
 to preserve structure.
 
+### Definition of Done
+- All argument kinds are captured on function entry: positional-only, pos-or-keyword, keyword-only, varargs (`*args`), and kwargs (`**kwargs`).
+- `*args` is encoded as a list value; `**kwargs` is encoded as a mapping value.
+- Positional-only and keyword-only parameters are included using `co_posonlyargcount` and `co_kwonlyargcount`.
+- Comprehensive tests cover each argument kind and validate the encoded structure and values.
+
 ### Status
 Partially done
 
@@ -62,6 +74,11 @@ only `co_argcount` for the positional slice, which excludes positional-only
 arguments (PEP 570). As a result, names before the `/` in a signature like
 `def f(p, /, q, *args, r, **kwargs)` are dropped.
 
+### Definition of Done
+- Positional-only parameters are included in the captured argument set.
+- The selection of positional names accounts for `co_posonlyargcount` in addition to `co_argcount`.
+- Tests add a function with positional-only parameters and assert their presence and correct encoding.
+
 ### Status
 Not started
 
@@ -72,6 +89,11 @@ failures to access the frame/locals and proceeds with empty `args`. Per
 `rules/source-code.md` ("Avoid defensive programming"), we should fail fast when
 encountering such edge cases, or make soft-fail behavior explicitly opt-in.
 
+### Definition of Done
+- Silent fallbacks that return empty arguments on failure are removed.
+- The recorder raises a clear, actionable error when it cannot access frame/locals, unless an explicit opt-in flag enables soft-fail behavior.
+- Tests verify both the fail-fast path and the optional soft-fail mode (when enabled), including error messages.
+
 ### Status
 Not started
 
@@ -81,6 +103,11 @@ Stabilize string value encoding for arguments and tighten tests. The new test
 accepts either `String` or `Raw` kinds for the `'x'` argument, which can hide
 regressions. We should standardize encoding of `str` as `String` (or document
 when `Raw` is expected) and update tests to assert the exact kind.
+
+### Definition of Done
+- String values are consistently encoded as `String` (or the expected canonical kind), with any exceptions explicitly documented.
+- Tests assert the exact kind for `str` arguments and fail if an unexpected kind (e.g., `Raw`) is produced.
+- Documentation clarifies encoding rules for string-like types to avoid ambiguity in future changes.
 
 ### Status
 Not started
