@@ -7,7 +7,7 @@ import pytest
 
 def test_fail_fast_when_frame_access_fails(tmp_path: Path):
     # Import the built extension module
-    import codetracer_python_recorder as cpr
+    import codetracer_python_recorder.codetracer_python_recorder as cpr
 
     # Prepare a simple program that triggers a Python function call
     prog = tmp_path / "prog.py"

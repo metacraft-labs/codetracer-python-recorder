@@ -135,10 +135,10 @@ impl Tracer for RuntimeTracer {
         events_union(&[events.PY_START, events.LINE, events.PY_RETURN])
     }
 
-    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, _offset: i32) {
+    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, _offset: i32) -> PyResult<()> {
         // Activate lazily if configured; ignore until then
         self.ensure_started(py, code);
-        if !self.started { return; }
+        if !self.started { return Ok(()); }
         // Trace event entry
         match (code.filename(py), code.qualname(py)) {
             (Ok(fname), Ok(qname)) => {
@@ -148,7 +148,7 @@ impl Tracer for RuntimeTracer {
         }
         if let Ok(fid) = self.ensure_function_id(py, code) {
             // Attempt to capture function arguments from the current frame.
-            // Fall back to empty args on any error to keep tracing robust.
+            // Fail fast on any error per source-code rules.
             let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
             let frame_and_args = (|| -> PyResult<()> {
                 // Current Python frame where the function just started executing
@@ -226,11 +226,18 @@ impl Tracer for RuntimeTracer {
                 Ok(())
             })();
             if let Err(e) = frame_and_args {
-                log::debug!("[RuntimeTracer] on_py_start: failed to capture args: {}", e);
+                // Raise a clear error; do not silently continue with empty args.
+                let rete =Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "on_py_start: failed to capture args: {}",
+                    e
+                )));
+                log::debug!("error {:?}", rete);
+                return rete;
             }
 
             TraceWriter::register_call(&mut self.writer, fid, args);
         }
+        Ok(())
     }
 
     fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) {

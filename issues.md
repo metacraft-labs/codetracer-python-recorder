@@ -100,7 +100,12 @@ encountering such edge cases.
 - Tests verify the fail-fast path.
 
 ### Status
-Not started
+Done
+
+`RuntimeTracer::on_py_start` now returns `PyResult<()>` and raises a
+`RuntimeError` when frame/locals access fails; `callback_py_start` propagates
+the error to Python. A pytest (`tests/test_fail_fast_on_py_start.py`) asserts
+the fail-fast behavior by monkeypatching `sys._getframe` to raise.
 
 ## ISSUE-004
 ### Description
@@ -118,15 +123,3 @@ when `Raw` is expected) and update tests to assert the exact kind.
 Done
 
 Stricter tests now assert `str` values are encoded as `String` with the exact text payload, and runtime docs clarify canonical encoding. No runtime logic change was required since `encode_value` already produced `String` for Python `str`.
-
-## ISSUE-006
-### Description
-Accidental check-in of Cargo cache/artifact files under `codetracer-python-recorder/.cargo/**` (e.g., `registry/CACHEDIR.TAG`, `.package-cache`). These are build/cache directories and should be excluded from version control.
-
-### Definition of Done
-- Add ignore rules to exclude Cargo cache directories (e.g., `.cargo/**`, `target/**`) from version control.
-- Remove already-checked-in cache files from the repository.
-- Verify the working tree is clean after a clean build; no cache artifacts appear as changes.
-
-### Status
-Archived
