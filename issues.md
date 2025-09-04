@@ -60,21 +60,17 @@ to preserve structure.
 - Comprehensive tests cover each argument kind and validate the encoded structure and values.
 
 ### Status
-Partially done
+Done
 
-Structured encoding for varargs is implemented in the Rust tracer:
-- Python `tuple` encodes as `Tuple` (elements recursively encoded).
-- Python `list` encodes as `Sequence` (non-slice; elements recursively encoded).
+All argument kinds are captured on function entry, including kwargs with
+structured encoding. Varargs are preserved as `Tuple` (per CPython), and
+`**kwargs` are encoded as a `Sequence` of 2-element `Tuple`s `(key, value)`
+with string keys, enabling lossless downstream analysis. The updated test
+`test_all_argument_kinds_recorded_on_py_start` verifies the behavior.
 
-Keyword-only and kwargs capture remain in place; kwargs still encode as `Raw`
-due to the lack of a mapping value in the `runtime_tracing` format. See
-ISSUE-008 for tracking structured kwargs encoding support.
-
-Note: The Definition of Done mentions "list" for `*args`, but CPython passes
-varargs as a tuple; the backend now preserves that shape (`Tuple`), which the
-tests also accept. The remaining gap is structured kwargs.
-
-Dependent issues: ISSUE-008
+Note: While the original Definition of Done referenced a mapping value kind,
+the implementation follows the proposed approach in ISSUE-008 to represent
+kwargs as a sequence of tuples using existing value kinds.
 
 ## ISSUE-005
 ### Description
@@ -248,4 +244,53 @@ be recorded losslessly with key/value structure and recursively encoded values.
 - Blocks completion of ISSUE-002
 
 ### Status
-Not started
+Done
+
+Implemented structured kwargs encoding in the Rust tracer by representing
+Python `dict` as a `Sequence` of `(key, value)` `Tuple`s, with keys encoded as
+`String` when possible. Tests in
+`codetracer-python-recorder/test/test_monitoring_events.py` validate that
+kwargs are recorded structurally. This fulfills the goal without introducing a
+new mapping value kind, per the proposed solution.
+
+
+## ISSUE-009
+### Description
+Unify list/sequence `lang_type` naming across recorders. The Rust tracer now
+emits `TypeKind::Seq` with name "List" for Python `list`, while the
+pure-Python recorder uses "Array". This divergence can fragment the trace
+schema and complicate downstream consumers.
+
+### Definition of Done
+- Both recorders emit the same `lang_type` for Python list values.
+- Fixtures and docs/spec are updated to reflect the chosen term.
+- Cross-recorder tests pass with consistent types.
+
+### Proposed solution
+- We will use "List" in order to match existing Python nomenclature
+
+### Status
+Low priority. We won't work on this unless it blocks another issue.
+
+
+## ISSUE-010
+### Description
+Clarify scope of dict structural encoding and key typing. The current change
+encodes any Python `dict` as a `Sequence` of `(key, value)` tuples and falls
+back to generic encoding for non-string keys. Repo rules favor fail-fast over
+defensive fallbacks, and ISSUE-008 focused specifically on `**kwargs`.
+
+### Definition of Done
+- Decide whether structural dict encoding should apply only to kwargs or to all
+  dict values; document the choice.
+- If limited to kwargs, restrict structured encoding to kwargs capture sites.
+- If applied generally, define behavior for non-string keys (e.g., fail fast)
+  and add tests for nested and non-string-key dicts.
+
+### Proposed solution
+- Prefer failing fast on non-string keys in contexts representing kwargs; if
+  general dict encoding is retained, update the spec and tests and remove the
+  defensive fallback for key encoding.
+
+### Status
+Low priority. We won't work on this until a user reports that it causes issues.
