@@ -77,6 +77,14 @@ impl RuntimeTracer {
         }
     }
 
+    /// Encode a Python value into a `ValueRecord` used by the trace writer.
+    ///
+    /// Canonical rules:
+    /// - `None` -> `NONE_VALUE`
+    /// - `bool` -> `Bool`
+    /// - `int`  -> `Int`
+    /// - `str`  -> `String` (canonical for text; do not fall back to Raw)
+    /// - any other type -> textual `Raw` via `__str__` best-effort
     fn encode_value<'py>(&mut self, _py: Python<'py>, v: &Bound<'py, PyAny>) -> ValueRecord {
         // None
         if v.is_none() {
@@ -91,6 +99,9 @@ impl RuntimeTracer {
             let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Int, "Int");
             return ValueRecord::Int { i, type_id: ty };
         }
+        // Strings are encoded canonically as `String` to ensure stable tests
+        // and downstream processing. Falling back to `Raw` for `str` is
+        // not allowed.
         if let Ok(s) = v.extract::<String>() {
             let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
             return ValueRecord::String { text: s, type_id: ty };

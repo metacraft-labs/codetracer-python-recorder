@@ -190,11 +190,10 @@ def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
     assert arg_value(0).get("kind") == "Int" and int(arg_value(0).get("i")) == 1
     assert arg_name(1) == "b"
     v1 = arg_value(1)
-    assert v1.get("kind") in ("String", "Raw")  # backend may encode as String or Raw
-    if v1.get("kind") == "String":
-        assert v1.get("text") == "x"
-    else:
-        assert v1.get("r") == "x"
+    # String encoding must be stable for Python str values.
+    # Enforce canonical kind String and exact text payload.
+    assert v1.get("kind") == "String", f"Expected String encoding for str, got: {v1}"
+    assert v1.get("text") == "x"
 
 
 def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:

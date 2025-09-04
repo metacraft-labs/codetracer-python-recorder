@@ -110,4 +110,18 @@ when `Raw` is expected) and update tests to assert the exact kind.
 - Documentation clarifies encoding rules for string-like types to avoid ambiguity in future changes.
 
 ### Status
-Not started
+Done
+
+Stricter tests now assert `str` values are encoded as `String` with the exact text payload, and runtime docs clarify canonical encoding. No runtime logic change was required since `encode_value` already produced `String` for Python `str`.
+
+## ISSUE-006
+### Description
+Accidental check-in of Cargo cache/artifact files under `codetracer-python-recorder/.cargo/**` (e.g., `registry/CACHEDIR.TAG`, `.package-cache`). These are build/cache directories and should be excluded from version control.
+
+### Definition of Done
+- Add ignore rules to exclude Cargo cache directories (e.g., `.cargo/**`, `target/**`) from version control.
+- Remove already-checked-in cache files from the repository.
+- Verify the working tree is clean after a clean build; no cache artifacts appear as changes.
+
+### Status
+Archived
