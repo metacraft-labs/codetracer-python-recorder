@@ -204,4 +204,13 @@ Behavioral details:
   callback-induced shutdown.
 
 ### Status
-Not started
+Done
+
+Implemented soft-stop on first callback error in `callback_py_start`:
+on error, the tracer finishes writers, unregisters callbacks for the
+configured mask, sets events to `NO_EVENTS`, clears the registry, and
+records `global.mask = NO_EVENTS`. The original error is propagated to
+Python, and subsequent `PY_START` events are not delivered. This keeps the
+module-level `ACTIVE` flag unchanged until `stop_tracing()`, making the
+shutdown idempotent. The test `tests/test_fail_fast_on_py_start.py`
+exercises the behavior by re-running the program after the initial failure.

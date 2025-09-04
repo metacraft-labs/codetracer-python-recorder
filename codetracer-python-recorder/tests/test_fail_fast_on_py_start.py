@@ -47,3 +47,4 @@ f()
         # Restore state
         sys._getframe = original_getframe  # type: ignore[attr-defined]
         cpr.stop_tracing()
+
