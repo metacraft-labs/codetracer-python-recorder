@@ -123,3 +123,85 @@ when `Raw` is expected) and update tests to assert the exact kind.
 Done
 
 Stricter tests now assert `str` values are encoded as `String` with the exact text payload, and runtime docs clarify canonical encoding. No runtime logic change was required since `encode_value` already produced `String` for Python `str`.
+
+## ISSUE-006
+### Description
+Accidental check-in of Cargo cache/artifact files under `codetracer-python-recorder/.cargo/**` (e.g., `registry/CACHEDIR.TAG`, `.package-cache`). These are build/cache directories and should be excluded from version control.
+
+### Definition of Done
+- Add ignore rules to exclude Cargo cache directories (e.g., `.cargo/**`, `target/**`) from version control.
+- Remove already-checked-in cache files from the repository.
+- Verify the working tree is clean after a clean build; no cache artifacts appear as changes.
+
+### Status
+Done
+
+## ISSUE-007
+### Description
+Immediately stop tracing when any monitoring callback raises an error.
+
+Current behavior: `RuntimeTracer::on_py_start` intentionally fails fast when it
+cannot capture function arguments (e.g., when `sys._getframe` is unavailable or
+patched to raise). The callback error is propagated to Python via
+`callback_py_start` (it returns the `PyResult` from `on_py_start`). However, the
+tracer remains installed and active after the error. As a result, any further
+Python function start (even from exception-handling or printing the exception)
+triggers `on_py_start` again, re-raising the same error and interfering with the
+program’s own error handling.
+
+This is observable in `codetracer-python-recorder/tests/test_fail_fast_on_py_start.py`:
+the test simulates `_getframe` failure, which correctly raises in `on_py_start`,
+but `print(e)` inside the test’s `except` block invokes codec machinery that
+emits additional `PY_START` events. Those callbacks raise again, causing the test
+to fail before reaching its assertions.
+
+### Impact
+- Breaks user code paths that attempt to catch and handle exceptions while the
+  tracer is active — routine operations like `print(e)` can cascade failures.
+- Hard to debug because the original error is masked by subsequent callback
+  errors from unrelated modules (e.g., `codecs`).
+
+### Proposed Solution
+Fail fast and disable tracing at the first callback error.
+
+Implementation sketch:
+- In each callback wrapper (e.g., `callback_py_start`), if the underlying
+  tracer method returns `Err`, immediately disable further monitoring before
+  returning the error:
+  - Set events to `NO_EVENTS` (via `set_events`) to prevent any more callbacks.
+  - Unregister all previously registered callbacks for our tool id.
+  - Optionally call `finish()` on the tracer to flush/close writers.
+  - Option A (hard uninstall): call `uninstall_tracer(py)` to release tool id
+    and clear the registry. This fully tears down the tracer. Note that the
+    high-level `ACTIVE` flag in `lib.rs` is not updated by `uninstall_tracer`,
+    so either:
+      - expose an internal “deactivate_from_callback()” in `lib.rs` that clears
+        `ACTIVE`, or
+      - keep a soft-stop in `tracer.rs` by setting `NO_EVENTS` and unregistering
+        callbacks without touching `ACTIVE`, allowing `stop_tracing()` to be a
+        no-op later.
+  - Ensure reentrancy safety: perform the disable sequence only once (e.g., with
+    a guard flag) to avoid nested teardown during callback execution.
+
+Behavioral details:
+- The original callback error must still be propagated to Python so the user
+  sees the true failure cause, but subsequent code should not receive further
+  monitoring callbacks.
+- If error occurs before activation gating triggers, the disable sequence should
+  still run to avoid repeated failures from unrelated modules importing.
+
+### Definition of Done
+- On any callback error (at minimum `on_py_start`, and future callbacks that may
+  return `PyResult`), all further monitoring callbacks from this tool are
+  disabled immediately within the same GIL context.
+- The initial error is propagated unchanged to Python.
+- The failing test `test_fail_fast_on_py_start.py` passes: after the first
+  failure, `print(e)` does not trigger additional tracer errors.
+- Writers are flushed/closed or left in a consistent state (documented), and no
+  additional events are recorded after disablement.
+- Unit/integration tests cover: error in `on_py_start`, repeated calls after
+  disablement are no-ops, and explicit `stop_tracing()` is safe after a
+  callback-induced shutdown.
+
+### Status
+Not started
