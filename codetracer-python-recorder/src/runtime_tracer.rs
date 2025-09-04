@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PyTuple};
+use pyo3::types::{PyAny, PyList, PyTuple, PyDict};
 
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 use runtime_tracing::NonStreamingTraceWriter;
@@ -127,8 +127,36 @@ impl RuntimeTracer {
             for item in l.iter() {
                 elements.push(self.encode_value(_py, &item));
             }
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "Array");
+            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "List");
             return ValueRecord::Sequence { elements, is_slice: false, type_id: ty };
+        }
+
+        // Python dict -> represent as a Sequence of (key, value) Tuples.
+        // Keys are expected to be strings for kwargs; for non-str keys we
+        // fall back to best-effort encoding of the key.
+        if let Ok(d) = v.downcast::<PyDict>() {
+            let seq_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "Dict");
+            let tuple_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
+            let str_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(d.len());
+            let items = d.items();
+            for pair in items.iter() {
+                if let Ok(t) = pair.downcast::<PyTuple>() {
+                    if t.len() == 2 {
+                        let key_obj = t.get_item(0).unwrap();
+                        let val_obj = t.get_item(1).unwrap();
+                        let key_rec = if let Ok(s) = key_obj.extract::<String>() {
+                            ValueRecord::String { text: s, type_id: str_ty }
+                        } else {
+                            self.encode_value(_py, &key_obj)
+                        };
+                        let val_rec = self.encode_value(_py, &val_obj);
+                        let pair_rec = ValueRecord::Tuple { elements: vec![key_rec, val_rec], type_id: tuple_ty };
+                        elements.push(pair_rec);
+                    }
+                }
+            }
+            return ValueRecord::Sequence { elements, is_slice: false, type_id: seq_ty };
         }
 
         // Fallback to Raw string representation
