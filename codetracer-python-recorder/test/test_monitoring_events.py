@@ -266,9 +266,15 @@ def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
         r = varargs_val.get("r", "")
         assert "30" in r and "40" in r
 
-    # Kwargs presence is sufficient; encoding may vary by backend
+    # Kwargs must be encoded structurally as a sequence of (key, value) tuples
     kwargs_val = name_to_val["kwargs"]
-    assert isinstance(kwargs_val, dict) and "kind" in kwargs_val
-    if kwargs_val.get("kind") == "Raw":
-        r = kwargs_val.get("r", "")
-        assert "k" in r and "60" in r
+    assert kwargs_val.get("kind") == "Sequence", f"Expected structured kwargs encoding, got: {kwargs_val}"
+    elements = kwargs_val.get("elements")
+    assert isinstance(elements, list) and len(elements) == 1, f"Expected single kwargs pair, got: {elements}"
+    pair = elements[0]
+    assert pair.get("kind") == "Tuple", f"Expected key/value tuple, got: {pair}"
+    kv = pair.get("elements")
+    assert isinstance(kv, list) and len(kv) == 2, f"Expected 2-tuple for kwargs item, got: {kv}"
+    key_rec, val_rec = kv[0], kv[1]
+    assert key_rec.get("kind") == "String" and key_rec.get("text") == "k", f"Unexpected kwargs key encoding: {key_rec}"
+    assert val_rec.get("kind") == "Int" and int(val_rec.get("i")) == 60, f"Unexpected kwargs value encoding: {val_rec}"
