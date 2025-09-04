@@ -87,12 +87,12 @@ Not started
 Avoid defensive fallback in argument capture. The current change swallows
 failures to access the frame/locals and proceeds with empty `args`. Per
 `rules/source-code.md` ("Avoid defensive programming"), we should fail fast when
-encountering such edge cases, or make soft-fail behavior explicitly opt-in.
+encountering such edge cases.
 
 ### Definition of Done
 - Silent fallbacks that return empty arguments on failure are removed.
-- The recorder raises a clear, actionable error when it cannot access frame/locals, unless an explicit opt-in flag enables soft-fail behavior.
-- Tests verify both the fail-fast path and the optional soft-fail mode (when enabled), including error messages.
+- The recorder raises a clear, actionable error when it cannot access frame/locals.
+- Tests verify the fail-fast path.
 
 ### Status
 Not started
