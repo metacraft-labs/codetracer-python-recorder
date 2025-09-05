@@ -13,15 +13,14 @@ We have a function `encode_value` which is used to convert Python objects to val
 - Varargs/kwargs and positional-only coverage are tracked in separate issues (see ISSUE-002, ISSUE-005).
 
 ### Status
-Partially done
+Done
 
-Implemented for positional (and pos-or-keyword) arguments on function entry using
-`sys._getframe(0)` and `co_varnames[:co_argcount]`. Values are encoded via
-`encode_value` and attached to the `Call` event. A test validates two arguments
-(`a`, `b`) are present with correct values.
-
-Out of scope (follow-ups needed): varargs (`*args`) and keyword-only/kwargs
-(`**kwargs`). See ISSUE-002.
+Implemented for positional (and pos-or-keyword) arguments on function entry
+using `sys._getframe(0)` and `co_varnames[:co_argcount]`, with counting fixed to
+use `co_argcount` directly (includes positional-only; avoids double-counting).
+Values are encoded via `encode_value` and attached to the `Call` event. Tests
+validate correct presence and values. Varargs/kwargs remain covered by
+ISSUE-002.
 
 
 # Issues Breaking Declared Relations
@@ -87,9 +86,11 @@ arguments (PEP 570). As a result, names before the `/` in a signature like
 ### Status
 Done
 
-Implemented by selecting positional names from `co_varnames` with
-`co_posonlyargcount + co_argcount`. Tests in `test_all_argument_kinds_recorded_on_py_start`
-assert presence of the positional-only parameter `p` and pass.
+Implemented by selecting positional names from `co_varnames` using
+`co_argcount` directly (which already includes positional-only per CPython 3.8+).
+This prevents double-counting and keeps indexing stable. Tests in
+`test_all_argument_kinds_recorded_on_py_start` assert presence of the
+positional-only parameter `p` and pass.
 
 ## ISSUE-003
 ### Description
