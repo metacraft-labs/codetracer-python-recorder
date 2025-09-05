@@ -295,3 +295,34 @@ defensive fallbacks, and ISSUE-008 focused specifically on `**kwargs`.
 
 ### Status
 Low priority. We won't work on this until a user reports that it causes issues.
+
+## ISSUE-011
+### Description
+Create a concise set of small Python example scripts to exercise key code paths of the Rust‑backed recorder during development. Place all examples under `/examples` and make them easy to run with the module CLI.
+
+### Definition of Done
+- Create `/examples` at repo root.
+- Add minimal, deterministic scripts covering common scenarios:
+  - `basic_args.py`: positional‑only, pos‑or‑kw, kw‑only, `*args`, `**kwargs`.
+  - `exceptions.py`: raise, catch, and `print(e)` inside `except`.
+  - `classes_methods.py`: instance, `@classmethod`, `@staticmethod`, property access.
+  - `recursion.py`: direct and mutual recursion.
+  - `generators_async.py`: generator, `async`/`await`, async generator.
+  - `context_and_closures.py`: `with` (context manager) and nested closures.
+  - `threading.py`: two threads invoking traced functions and joining.
+  - `imports_side_effects.py`: module‑level code vs `if __name__ == "__main__"`.
+  - `kwargs_nested.py`: nested kwargs structure to validate structured encoding.
+- Each script:
+  - Has a brief module docstring stating its focus.
+  - Defines `main()` and uses the `__name__ == "__main__"` guard.
+  - Produces stable, minimal output without external dependencies.
+- Add `/examples/README.md` listing scripts, purpose, and how to run via:
+  - `python -m codetracer_python_recorder --codetracer-format=json examples/<script>.py`
+
+### Proposed solution
+- Keep scripts focused and short to spotlight specific behaviors.
+- Prefer deterministic flows; join threads and avoid non‑deterministic timing.
+- Use the provided module CLI so recorder activation is consistent across runs.
+
+### Status
+Todo
