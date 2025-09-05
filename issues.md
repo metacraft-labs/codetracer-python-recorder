@@ -325,4 +325,11 @@ Create a concise set of small Python example scripts to exercise key code paths 
 - Use the provided module CLI so recorder activation is consistent across runs.
 
 ### Status
-Todo
+Done
+
+Added the examples directory and scripts:
+`basic_args.py`, `exceptions.py`, `classes_methods.py`, `recursion.py`,
+`generators_async.py`, `context_and_closures.py`, `threading.py`,
+`imports_side_effects.py`, `kwargs_nested.py`, plus `examples/README.md`
+with usage instructions for running via
+`python -m codetracer_python_recorder --codetracer-format=json examples/<script>.py`.
