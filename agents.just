@@ -21,6 +21,8 @@ next-issue:
 
 	Note! If you try to add a commit message like 'jj new -m "blah"' or 'jj describe -m "blah"' the resulting message will not be formatted properly.
 
+	`cat rules/writing.md`
+
 	EOF
 
 	rm next-issue.md
@@ -34,7 +36,8 @@ review-change:
 	   - Write your review inline in the code itself by using code comments starting with '//REVIEW(author)' (or '# REVIEW(author)') to record your review.
 	   - While reviewing make sure that the rules in '/rules' folder are satisfied by the change under review.
 	   - DO NOT make any other changes in the code except adding the above-mentioned review comments.
-	   - DO NOT review code which is unrelated to the change under review
+	   - DO NOT review code which is unrelated to the change under review. You can review code not in the diff, if its functionality was indirectly changed by the diff under review.
+	   - DO NOT write positive review comments. You can write positive statements in the review summary. Use review comments ONLY to point out potential problems or improvements.
    	   
 	4. Examine the changes and update the list of issues in 'issues.md'
 	   - If the change affects a specific issue update its status
@@ -42,22 +45,29 @@ review-change:
 	   - If the change affects any non-related issue or creates new issues write that down as well
 	   - If you find any problems in the code unrelated to the change under review DO NOT write/update issues about them. We only care about how the change under review affects the overall state of the code and issues.
 
-	   Issues file must follow the rules in '/rules/issues.md'
 	5. Update the change description with a summary of the review using 'jj describe --stdin <<REVIEW
 	review(codex): ...
 
 	...
 	REVIEW'
+
+	`cat rules/writing.md`
+
+	`cat rules/issues.md`
 	EOF
 
 tidy-issues:
 	#!/usr/bin/env sh
 	codex exec --full-auto --config model_reasoning_effort=high <<EOF
 	1. Read the file '/issues.md'.
-	2. Check if it follows the rules in '/rules/issues.md'
+	2. Check if it follows the rules listed below
 	3. run 'jj new -m "issues(codex): ..."'. For example 'jj new -m "issues(codex): Removing duplicate dog-barking issue"'
 	4. Refactor the issues database to follow the specified rules. Do the MINIMAL changes necessary to make sure that the database follows the rules, while not removing any existing information in it.
 	5. Finally update the file '/issues-overview.md' to match the changes in 'issues.md'. It is a table of issues and statuses.
+
+	`cat rules/writing.md`
+
+	`cat rules/issues.md`
 	EOF
 
 archive-issues:
@@ -99,3 +109,17 @@ work:
 	  jj squash issues.md
 	  jj edit -r @-
 	done
+
+# This should be started if you stop at editor phase and want to continue from where you left off
+# Current commit should be the last review commit
+continue-work:
+	#!/usr/bin/env sh
+	while true; do
+	  EDITOR=emacsclient just agents::edit
+	  jj squash issues.md
+	  just agents::pick-next-issue
+	  [ -f next-issue.md ] || break
+	  just agents::next-issue
+	  just agents::review-change
+	done
+	

@@ -1,4 +1,5 @@
 # Rules for the issues.md file
+Issues must written in the issues.md file **MUST** follow the following rules:
 
 * Every issue has the following attributes:
   - issue id (e.g 'ISSUE-001')
