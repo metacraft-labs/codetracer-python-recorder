@@ -1,25 +1,5 @@
 # General Issues
 
-# Issues Breaking Declared Relations
-
-This document lists concrete mismatches that cause the relations in `relations.md` to fail.
-
-It should be structured like so:
-```md
-## REL-001
-### ISSUE-001-001
-#### Description
-Blah blah blah
-#### Proposed solution
-Blah blah bleh
-
-### ISSUE-001-002
-...
-
-## REL-002
-...
-```
-
 ## ISSUE-009
 ### Description
 Unify list/sequence `lang_type` naming across recorders. The Rust tracer now
@@ -61,3 +41,56 @@ defensive fallbacks, and ISSUE-008 focused specifically on `**kwargs`.
 ### Status
 Low priority. We won't work on this until a user reports that it causes issues.
 
+## ISSUE-012
+### Description
+Record values of local and global variables with the recorder.
+
+We need to store the state and be able to track how it changes over time.
+
+We need a comprehensive test suite for our solution.
+
+### Proposed solutions
+
+- Check ../codetracer-ruby-recorder which also tries to record the values but for Ruby. Maybe we can use some ideas from there.
+- Check ../runtime_tracing to understand what capabilities the tracing library supports.
+- Maybe we can listen on the INSTRUCTION event and track opcodes which change the local/global state (basically all STORE_* and DELETE_* opcodes). Here's a pure Python sketch that a friend gave me (I don't trust him though.) We might use ideas from it to implement our Rust recorder:
+```py
+import dis, sys
+
+MUTATING = {
+    "STORE_FAST", "DELETE_FAST",
+    "STORE_NAME", "DELETE_NAME",
+    "STORE_GLOBAL", "DELETE_GLOBAL",
+    "STORE_DEREF", "DELETE_DEREF",
+}
+
+index = {}  # code -> {offset: (opname, name)}
+
+def index_code(code):
+    d = {}
+    for ins in dis.get_instructions(code):
+        if ins.opname in MUTATING:
+            d[ins.offset] = (ins.opname, ins.argval)  # name bound/deleted
+    index[code] = d
+
+TOOL = sys.monitoring.DEBUGGER_ID
+sys.monitoring.use_tool_id(TOOL, "varspy")
+
+def on_instr(code, offset):
+    d = index.get(code)
+    info = d and d.get(offset)
+    if not info:
+        return sys.monitoring.DISABLE  # silence this location forever
+    # ... here: grab frame (e.g. via PyEval_GetFrame in PyO3) and read f_locals/f_globals ...
+    # opname, name = info
+    # value = ...
+    # emit change event
+
+sys.monitoring.register_callback(TOOL, sys.monitoring.events.INSTRUCTION, on_instr)
+sys.monitoring.set_events(TOOL, sys.monitoring.events.INSTRUCTION)
+```
+
+Right now it's not clear in detail how to implement the feature. When more becomes clear we have to add all details to the issue description.
+
+### Status
+High priority - not started.
