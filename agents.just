@@ -96,18 +96,22 @@ edit:
 	#!/usr/bin/env sh
 	jj show -r @ --git | sed -n 's/^diff --git a\/\([^ ]*\) b\/.*/\1/p' | sort -u | xargs -r ${EDITOR:-vi}
 
+human-work-step:
+	#!/usr/bin/env sh
+	just agents::edit
+	jj split issues.md -m "issues: Update after review"
+	jj edit -r @-
+
+ai-work-step: next-issue review-change
+
+# Use this step when starting to work on a new issue
 work:
 	#!/usr/bin/env sh
-	echo "Hi"
 	while true; do
-	  echo "Bye"
 	  just agents::pick-next-issue
 	  [ -f next-issue.md ] || break
-	  just agents::next-issue
-	  just agents::review-change
-	  EDITOR=emacsclient just agents::edit
-	  jj squash issues.md
-	  jj edit -r @-
+	  just agents::ai-work-step
+	  just agents::human-work-step
 	done
 
 # This should be started if you stop at editor phase and want to continue from where you left off
@@ -115,11 +119,9 @@ work:
 continue-work:
 	#!/usr/bin/env sh
 	while true; do
-	  EDITOR=emacsclient just agents::edit
-	  jj squash issues.md
+	  just agents::human-work-step
 	  just agents::pick-next-issue
 	  [ -f next-issue.md ] || break
-	  just agents::next-issue
-	  just agents::review-change
+	  just agents::ai-work-step
 	done
 	
