@@ -1,3 +1,30 @@
+consolidate start_change_id end_change_id:
+	#!/usr/bin/env sh
+ 
+	read -r -d '' INSTRUCTIONS <<-EOF
+	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
+
+	You need to produce a full detailed specification in the folder 'specs/'. Imagine that the changes that the diff shows disappeared and we had to implement the functionality from scratch. The specification must contain all necessary details in order to be ample to implement equivalent functionality.
+
+	Abide by the following rules:
+
+	`cat rules/spec.md`
+
+	Here is a log of the changes in question:
+
+	`jj log -r "({{start_change_id}}::{{end_change_id}}) ~ {{start_change_id}}" -T builtin_log_detailed`
+
+
+	Here is the diff in question:
+
+	`jj diff --from {{start_change_id}} --to {{end_change_id}}`
+
+	EOF
+	
+	jj new -r {{start_change_id}} -m "Consolidation in progress"	
+	
+	echo "$INSTRUCTIONS" | codex exec --full-auto --config model_reasoning_effort=high
+
 next-issue:
 	#!/usr/bin/env sh
 	[ -f next-issue.md ] || exit 1
