@@ -14,7 +14,7 @@ This document describes the user-facing Python API for the `codetracer` module b
 - Start a global trace; returns a `TraceSession`.
   ```py
   def start(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT,
-            capture_values: bool = True, source_roots: Iterable[str | os.PathLike] | None = None) -> TraceSession
+            start_on_enter: str | os.PathLike | None = None) -> TraceSession
   ```
 - Stop the active trace if any.
   ```py
@@ -27,8 +27,7 @@ This document describes the user-facing Python API for the `codetracer` module b
 - Context manager helper for scoped tracing.
   ```py
   @contextlib.contextmanager
-  def trace(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT,
-            capture_values: bool = True, source_roots: Iterable[str | os.PathLike] | None = None):
+  def trace(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT):
       ...
   ```
 - Flush buffered data to disk without ending the session.
@@ -50,15 +49,25 @@ class TraceSession:
     def __exit__(self, exc_type, exc, tb) -> None: ...
 ```
 
+### Start Behavior
+- `start_on_enter`: Optional path; when provided, tracing starts only after execution first enters this file (useful to avoid interpreter/import noise when launching via CLI).
+
+### Output Location
+- `path` is a directory. The tracer writes three files inside it:
+  - `trace.json` when `format == "json"` or `trace.bin` when `format == "binary"`
+  - `trace_metadata.json`
+  - `trace_paths.json`
+
 ## Environment Integration
-- Auto-start tracing when `CODETRACER_TRACE` is set; the value is interpreted as the output path.
+- Auto-start tracing when `CODETRACER_TRACE` is set; the value is interpreted as the output directory.
 - When `CODETRACER_FORMAT` is provided, it overrides the default output format.
-- `CODETRACER_CAPTURE_VALUES` toggles value recording.
 
 ## Usage Example
 ```py
 import codetracer
+from pathlib import Path
 
-with codetracer.trace("trace.bin"):
+out_dir = Path("./traces/run-001")
+with codetracer.trace(out_dir, format=codetracer.TRACE_JSON):
     run_application()
 ```

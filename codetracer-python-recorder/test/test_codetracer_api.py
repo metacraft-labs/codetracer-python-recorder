@@ -14,11 +14,11 @@ class TracingApiTests(unittest.TestCase):
 
     def test_start_stop_and_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            trace_path = Path(tmpdir) / "trace.bin"
-            session = codetracer.start(trace_path)
+            trace_dir = Path(tmpdir)
+            session = codetracer.start(trace_dir)
             self.assertTrue(codetracer.is_tracing())
             self.assertIsInstance(session, codetracer.TraceSession)
-            self.assertEqual(session.path, trace_path)
+            self.assertEqual(session.path, trace_dir)
             self.assertEqual(session.format, codetracer.DEFAULT_FORMAT)
             codetracer.flush()  # should not raise
             session.flush()  # same
@@ -27,8 +27,8 @@ class TracingApiTests(unittest.TestCase):
 
     def test_context_manager(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            trace_path = Path(tmpdir) / "trace.bin"
-            with codetracer.trace(trace_path) as session:
+            trace_dir = Path(tmpdir)
+            with codetracer.trace(trace_dir) as session:
                 self.assertTrue(codetracer.is_tracing())
                 self.assertIsInstance(session, codetracer.TraceSession)
             self.assertFalse(codetracer.is_tracing())
@@ -37,7 +37,7 @@ class TracingApiTests(unittest.TestCase):
         script = "import codetracer_python_recorder as codetracer, sys; sys.stdout.write(str(codetracer.is_tracing()))"
         with tempfile.TemporaryDirectory() as tmpdir:
             env = os.environ.copy()
-            env["CODETRACER_TRACE"] = str(Path(tmpdir) / "trace.bin")
+            env["CODETRACER_TRACE"] = str(Path(tmpdir))
             out = subprocess.check_output([sys.executable, "-c", script], env=env)
             self.assertEqual(out.decode(), "True")
 
