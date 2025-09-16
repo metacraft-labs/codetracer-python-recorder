@@ -1,3 +1,5 @@
+mod agents 
+
 default:
     @just --list
     
@@ -62,3 +64,4 @@ test-all:
         file="${file[0]}"; \
         uv run -p "python3.$v" --with "${file}" --with pytest -- pytest -q; \
     done
+
