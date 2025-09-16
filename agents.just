@@ -1,6 +1,5 @@
 consolidate start_change_id end_change_id:
 	#!/usr/bin/env sh
- 
 	read -r -d '' INSTRUCTIONS <<-EOF
 	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
 
@@ -24,6 +23,53 @@ consolidate start_change_id end_change_id:
 	jj new -r {{start_change_id}} -m "Consolidation in progress"	
 	
 	echo "$INSTRUCTIONS" | codex exec --full-auto --config model_reasoning_effort=high
+
+questions-for-pm rev='@':
+	#!/usr/bin/env sh
+	read -r -d '' INSTRUCTIONS_1 <<-EOF
+	    1. Read the current state of open issues in issues.md
+		2. Read relevant state of the code base
+		3. Read 'pm-faq.md' which contains previous questions asked to the product manager and her answers.
+		4. Create questions to the product manager to clarify unclear design choices, priorities and so on. If everything is clear and no questions are needed do nothing.
+		5. Append the new questions to the end of 'pm-faq.md' file
+	EOF
+
+
+	jj new -r {{rev}} -m "Questions for the PM"
+	PM_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+
+	echo "# Questions from `date -I`" >> pm-faq.md
+	echo "$INSTRUCTIONS_1" | codex exec --full-auto --config model_reasoning_effort=high
+	jj edit -r $CURRENT_CHANGE
+	just agents::edit $PM_CHANGE
+
+	just agents::pm-flow-update $PM_CHANGE
+	UPDATE_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+	jj edit -r $CURRENT_CHANGE
+
+    
+pm-flow-update rev='@':
+	#!/usr/bin/env sh
+	read -r -d '' INSTRUCTIONS_2 <<-EOF
+	    1. Read the current state of open issues in 'issues.md'
+		2. Read the conversation with the product manager so far in 'pm-faq.md'
+		3. If necessary read relevant parts of the code
+		4. Update the issues database in 'issues.md' to match the instructions provided by the product manager. Refactor the text if issues don't follow the rules.
+
+		Follow these rules:
+
+		`cat rules/writing.md`
+
+		`cat rules/issues.md`
+	EOF
+
+	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+
+	jj new -r {{rev}} -m "Updating Issue database"
+	UPDATE_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+
+	echo "$INSTRUCTIONS_2" | codex exec --full-auto --config model_reasoning_effort=high
+
 
 next-issue:
 	#!/usr/bin/env sh
@@ -119,10 +165,16 @@ pick-next-issue:
 	    3.3. STOP.
 	EOF
 
-edit:
+edit rev='@':
 	#!/usr/bin/env sh
+
+	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+	jj edit -r {{rev}}
+	
 	jj show -r @ --git | sed -n 's/^diff --git a\/\([^ ]*\) b\/.*/\1/p' | sort -u | xargs -r ${EDITOR:-vi}
 
+	jj edit -r $CURRENT_CHANGE
+	
 human-work-step:
 	#!/usr/bin/env sh
 	just agents::edit
