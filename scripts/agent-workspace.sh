@@ -49,7 +49,12 @@ workspace_path_for() {
 
 metadata_path_for() {
   local workspace_id="$1"
-  echo "$(workspace_path_for "$workspace_id")/.agent-workflow.json"
+  echo "$(workspace_path_for "$workspace_id")/.agent-tools/.agent-workflow.json"
+}
+
+workspace_registered() {
+  local workspace_id="$1"
+  jj workspace list -T 'name ++ "\n"' | grep -Fx "$workspace_id" >/dev/null 2>&1
 }
 
 compute_tools_hash() {
@@ -96,7 +101,8 @@ PY
 }
 
 copy_tools_payload() {
-  local dest="$1"
+    local dest="$1"
+    echo "*" > "$dest/.gitignore"
   python - "$tools_source_root" "$dest" "${tools_relative_paths[@]}" <<'PY'
 import shutil
 import sys
@@ -161,10 +167,23 @@ ensure_workspace() {
 
   mkdir -p "$workspace_repo_root"
 
-  if jj workspace root --workspace "$workspace_id" >/dev/null 2>&1; then
-    existing_path=$(jj workspace root --workspace "$workspace_id" | tr -d '\n')
-    if [[ "$existing_path" != "$workspace_path" ]]; then
-      fail "workspace '$workspace_id' already exists at '$existing_path'"
+  if workspace_registered "$workspace_id"; then
+    local metadata_path
+    metadata_path=$(metadata_path_for "$workspace_id")
+    if [[ -f "$metadata_path" ]]; then
+      local recorded_path
+      recorded_path=$(python - "$metadata_path" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+print(data.get('workspace_path', ''))
+PY
+      )
+      if [[ -n "$recorded_path" && "$recorded_path" != "$workspace_path" ]]; then
+        fail "workspace '$workspace_id' already exists at '$recorded_path'"
+      fi
     fi
     printf -v "$created_var" '%s' "false"
   else
@@ -307,7 +326,7 @@ run_subcommand() {
 
   local workspace_path="$workspace_repo_root/$workspace_id"
   WORKSPACE_PATH="$workspace_path"
-  local metadata_path="$workspace_path/.agent-workflow.json"
+  local metadata_path="$workspace_path/.agent-tools/.agent-workflow.json"
   METADATA_PATH="$metadata_path"
 
   local created_flag
@@ -419,7 +438,7 @@ rows = []
 for child in sorted(root.iterdir()):
     if not child.is_dir():
         continue
-    meta_path = child / '.agent-workflow.json'
+    meta_path = child / '.agent-tools' / '.agent-workflow.json'
     if not meta_path.exists():
         continue
     try:
@@ -456,7 +475,7 @@ shell_subcommand() {
   workspace_path=$(workspace_path_for "$workspace_id")
   [[ -d "$workspace_path" ]] || fail "workspace '$workspace_id' does not exist"
 
-  if ! jj workspace root --workspace "$workspace_id" >/dev/null 2>&1; then
+  if ! workspace_registered "$workspace_id"; then
     fail "workspace '$workspace_id' is not registered with jj"
   fi
 
@@ -483,7 +502,7 @@ clean_subcommand() {
   local workspace_path
   workspace_path=$(workspace_path_for "$workspace_id")
 
-  if jj workspace root --workspace "$workspace_id" >/dev/null 2>&1; then
+  if workspace_registered "$workspace_id"; then
     jj workspace forget "$workspace_id"
   fi
 
@@ -508,7 +527,7 @@ sync_tools_subcommand() {
 
   [[ -d "$workspace_path" ]] || fail "workspace '$workspace_id' does not exist"
 
-  if ! jj workspace root --workspace "$workspace_id" >/dev/null 2>&1; then
+  if ! workspace_registered "$workspace_id"; then
     fail "workspace '$workspace_id' is not registered with jj"
   fi
 

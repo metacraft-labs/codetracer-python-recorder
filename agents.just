@@ -1,5 +1,7 @@
+workspace_id:=""
+
 consolidate workspace_id start_change_id end_change_id:
-	scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile .agent-tools/agents.just --set workspace_id={{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
 
 consolidate-inner start_change_id end_change_id:
 	#!/usr/bin/env sh
@@ -10,7 +12,7 @@ consolidate-inner start_change_id end_change_id:
 
 	Abide by the following rules:
 
-	`cat rules/spec.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/spec.md"`
 
 	Here is a log of the changes in question:
 
@@ -25,7 +27,7 @@ consolidate-inner start_change_id end_change_id:
 	
 	jj new -r {{start_change_id}} -m "Consolidation in progress"	
 	
-	echo "$INSTRUCTIONS" | codex exec --full-auto --config model_reasoning_effort=high
+	echo "$INSTRUCTIONS" | codex exec --skip-git-repo-check --full-auto --config model_reasoning_effort=high
 
 workspace-status workspace_id='':
 	@if [ -z "{{workspace_id}}" ]; then \
@@ -117,7 +119,7 @@ next-issue:
 	3. Decide is it relevant to write a failing test for the issue. If so, write  the test, make sure that it fails.
 	   Note! Not all issues require writing failing tests. Use discretion. Remember - code is debt.
 	4. Change the code to fix the issue. Use "just dev test" to check if changes compile and tests pass.
-	   Code must follow the rules in '/rules/source-code.md'
+	   Code must follow the rules in '${AGENT_TOOL_COPY_ROOT:-.}/rules/source-code.md'
 	5. When the issue is fixed and tests pass run "jj describe --stdin <<ENDDESC
 	commit message
 	ENDDESC".
@@ -131,7 +133,7 @@ next-issue:
 
 	Note! If you try to add a commit message like 'jj new -m "blah"' or 'jj describe -m "blah"' the resulting message will not be formatted properly.
 
-	`cat rules/writing.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/writing.md"`
 
 	EOF
 
@@ -161,9 +163,9 @@ review-change:
 	...
 	REVIEW'
 
-	`cat rules/writing.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/writing.md"`
 
-	`cat rules/issues.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/issues.md"`
 	EOF
 
 tidy-issues:
@@ -175,9 +177,9 @@ tidy-issues:
 	4. Refactor the issues database to follow the specified rules. Do the MINIMAL changes necessary to make sure that the database follows the rules, while not removing any existing information in it.
 	5. Finally update the file '/issues-overview.md' to match the changes in 'issues.md'. It is a table of issues and statuses.
 
-	`cat rules/writing.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/writing.md"`
 
-	`cat rules/issues.md`
+	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/issues.md"`
 	EOF
 
 archive-issues:

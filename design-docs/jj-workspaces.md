@@ -14,8 +14,8 @@ is trusted by `direnv` so the nix environment loads automatically.
 - Repository namespace: `${basename(repo)}-${sha256(repo-root)[0..10]}` to avoid
   collisions between repos with the same name.
 - Workspace path: `<root>/<repo-namespace>/<workspace-id>`.
-- Metadata file: `.agent-workflow.json` within every workspace, recording the workflow
-  name, status, timestamps, and the command that is running.
+- Metadata file: `.agent-tools/.agent-workflow.json` within every workspace, recording the workflow
+  name, status, timestamps, the command that is running, and the copied tooling hash.
 
 Workspaces are never created under the repository itself. This keeps the main tree
 clean and prevents the permission issues we ran into when nesting workspaces inside
@@ -33,11 +33,25 @@ tracking directories.
 - `status`: Summarise all known workspaces or dump a single metadata file for inspection.
 - `shell`: Attach an interactive shell to an existing workspace (after running
   `direnv allow`). This is handy for manual interventions mid-workflow.
+- `sync-tools`: Refresh the copied tooling bundle inside a workspace.
 - `clean`: Remove the workspace after telling Jujutsu to forget it.
+
+### Tool Copy Bundle
+
+Each workspace receives a `.agent-tools/` directory containing the automation files
+needed for the workflows (currently `agents.just`, `scripts/`, and `rules/`). The helper
+copies these from the repository root (or from `AGENT_TOOLS_SOURCE`) before every run:
+
+- The copy lives inside the workspace so the workflow sees consistent tooling even when
+  the target change predates recent automation changes.
+- The directory is ignored via `.gitignore` so `jj status` stays clean.
+- `AGENT_TOOL_COPY_ROOT` points to the copy (defaults to `<workspace>/.agent-tools`).
+- `AGENT_TOOLS_VERSION` exposes the hash of the copied bundle. Metadata stores this
+  together with `tools_source` and `tools_copy` for traceability.
 
 Every command run inside a workspace receives environment variables describing where it
 is running: `AGENT_WORKSPACE_ID`, `AGENT_WORKSPACE_PATH`, `AGENT_WORKSPACE_METADATA`,
-`AGENT_WORKSPACE_REPO_ROOT`.
+`AGENT_WORKSPACE_REPO_ROOT`, `AGENT_TOOL_COPY_ROOT`, and `AGENT_TOOLS_VERSION`.
 
 ## Using the Workflows
 
@@ -51,6 +65,8 @@ is running: `AGENT_WORKSPACE_ID`, `AGENT_WORKSPACE_PATH`, `AGENT_WORKSPACE_METAD
   rooted at the workspace.
 - `just agents::workspace-clean <workspace-id>` forgets the workspace in Jujutsu and
   removes the cached directory.
+- `just agents::workspace-sync-tools <workspace-id>` refreshes the copied tooling for a
+  workspace without relaunching a workflow.
 
 The helper does not auto-clean finished workspaces so that results can be inspected or
 rebased manually. Once the work is integrated, run the cleanup recipe to delete the
