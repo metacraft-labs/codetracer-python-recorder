@@ -26,6 +26,8 @@ consolidate start_change_id end_change_id:
 
 questions-for-pm rev='@':
 	#!/usr/bin/env sh
+	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+
 	read -r -d '' INSTRUCTIONS_1 <<-EOF
 	    1. Read the current state of open issues in issues.md
 		2. Read relevant state of the code base
@@ -34,20 +36,39 @@ questions-for-pm rev='@':
 		5. Append the new questions to the end of 'pm-faq.md' file
 	EOF
 
-
 	jj new -r {{rev}} -m "Questions for the PM"
 	PM_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
+	# Add a dated header once
 	echo "# Questions from `date -I`" >> pm-faq.md
-	echo "$INSTRUCTIONS_1" | codex exec --full-auto --config model_reasoning_effort=high
-	jj edit -r $CURRENT_CHANGE
-	just agents::edit $PM_CHANGE
 
-	just agents::pm-flow-update $PM_CHANGE
-	UPDATE_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
-	jj edit -r $CURRENT_CHANGE
+	# Initialize iteration counter for commit messages
+	ITERATION=1
 
-    
+	# Keep asking until no further changes are made to pm-faq.md
+	while true; do
+		PREV_HASH=`[ -f pm-faq.md ] && sha256sum pm-faq.md | cut -d' ' -f1 || echo ""`
+
+		echo "$INSTRUCTIONS_1" | codex exec --full-auto --config model_reasoning_effort=high
+
+		CURR_HASH=`[ -f pm-faq.md ] && sha256sum pm-faq.md | cut -d' ' -f1 || echo ""`
+		[ "$CURR_HASH" = "$PREV_HASH" ] && break
+
+		# Optional manual edits
+		jj edit $CURRENT_CHANGE && just agents::edit $PM_CHANGE
+		# Update issues based on PM responses
+		just agents::pm-flow-update $PM_CHANGE
+
+		# Start a new iteration change, include a counter in the message
+		jj new -r @ -m "Questions for the PM (iteration ${ITERATION})"
+		PM_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+		ITERATION=$((ITERATION + 1))
+	done
+
+	# Return to original change
+	jj edit $CURRENT_CHANGE
+
+
 pm-flow-update rev='@':
 	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS_2 <<-EOF
@@ -169,17 +190,17 @@ edit rev='@':
 	#!/usr/bin/env sh
 
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
-	jj edit -r {{rev}}
+	jj edit {{rev}}
 	
 	jj show -r @ --git | sed -n 's/^diff --git a\/\([^ ]*\) b\/.*/\1/p' | sort -u | xargs -r ${EDITOR:-vi}
 
-	jj edit -r $CURRENT_CHANGE
+	jj edit $CURRENT_CHANGE
 	
 human-work-step:
 	#!/usr/bin/env sh
 	just agents::edit
 	jj split issues.md -m "issues: Update after review"
-	jj edit -r @-
+	jj edit @-
 
 ai-work-step: next-issue review-change
 
