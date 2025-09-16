@@ -55,8 +55,16 @@ is running: `AGENT_WORKSPACE_ID`, `AGENT_WORKSPACE_PATH`, `AGENT_WORKSPACE_METAD
 
 ## Using the Workflows
 
-- `just agents::consolidate <workspace-id> <start-change> <end-change>` creates or
-  reuses a workspace and delegates the existing automation to `consolidate-inner`.
+- Most automation recipes now take `<workspace-id>` as their first parameter and are
+  backed by a matching `*-inner` recipe. Examples include
+  `questions-for-pm`, `pm-flow-update`, `next-issue`, `review-change`, `tidy-issues`,
+  `archive-issues`, `pick-next-issue`, `edit`, `human-work-step`, `ai-work-step`,
+  `work`, and `continue-work`.
+- `just agents::<workflow> <workspace-id> ...` shells out to
+  `scripts/agent-workspace.sh run` before delegating to `<workflow>-inner`, keeping all
+  nested steps inside the same workspace copy of the tooling.
+- `just agents::consolidate <workspace-id> <start-change> <end-change>` follows the
+  same pattern and delegates to `consolidate-inner`.
 - Nested workflows should pass the same `workspace_id` down via `--set` so that every
   automated step stays inside the same working copy.
 - `just agents::workspace-status` lists all workspaces for the repo. Add an ID to view
