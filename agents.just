@@ -8,7 +8,7 @@ consolidate-inner start_change_id end_change_id:
 	read -r -d '' INSTRUCTIONS <<-EOF
 	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
 
-	You need to produce a full detailed specification in the folder 'specs/'. Imagine that the changes that the diff shows disappeared and we had to implement the functionality from scratch. The specification must contain all necessary details in order to be ample to implement equivalent functionality.
+	You need to produce a full detailed specification in the folder 'specs/'. Imagine that the changes that the diff shows disappeared and we had to implement the functionality from scratch. The specification must contain all necessary details in order to be possible to implement equivalent functionality.
 
 	Abide by the following rules:
 
@@ -45,7 +45,10 @@ workspace-clean workspace_id:
 workspace-sync-tools workspace_id:
 	scripts/agent-workspace.sh sync-tools {{workspace_id}}
 
-questions-for-pm rev='@':
+questions-for-pm workspace_id rev='@':
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow questions-for-pm -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} questions-for-pm-inner {{rev}}
+
+questions-for-pm-inner rev='@':
 	#!/usr/bin/env sh
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
@@ -76,9 +79,9 @@ questions-for-pm rev='@':
 		[ "$CURR_HASH" = "$PREV_HASH" ] && break
 
 		# Optional manual edits
-		jj edit $CURRENT_CHANGE && just agents::edit $PM_CHANGE
+		jj edit $CURRENT_CHANGE && just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner $PM_CHANGE
 		# Update issues based on PM responses
-		just agents::pm-flow-update $PM_CHANGE
+		just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pm-flow-update-inner $PM_CHANGE
 
 		# Start a new iteration change, include a counter in the message
 		jj new -r @ -m "Questions for the PM (iteration ${ITERATION})"
@@ -93,7 +96,10 @@ questions-for-pm rev='@':
 	jj edit $CURRENT_CHANGE
 
 
-pm-flow-update rev='@':
+pm-flow-update workspace_id rev='@':
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow pm-flow-update -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pm-flow-update-inner {{rev}}
+
+pm-flow-update-inner rev='@':
 	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS_2 <<-EOF
 	    1. Read the current state of open issues in 'issues.md'
@@ -110,7 +116,11 @@ pm-flow-update rev='@':
 	echo "$INSTRUCTIONS_2" | codex exec --full-auto --config model_reasoning_effort=high
 
 
-next-issue:
+next-issue workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow next-issue -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} next-issue-inner
+
+
+next-issue-inner:
 	#!/usr/bin/env sh
 	[ -f next-issue.md ] || exit 1
 
@@ -139,7 +149,12 @@ next-issue:
 
 	rm next-issue.md
 
-review-change:
+
+review-change workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow review-change -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} review-change-inner
+
+
+review-change-inner:
 	#!/usr/bin/env sh
 	codex exec --full-auto --config model_reasoning_effort=high <<EOF
 	1. Fetch the current changes by writing 'jj show'
@@ -168,7 +183,12 @@ review-change:
 	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/issues.md"`
 	EOF
 
-tidy-issues:
+
+tidy-issues workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow tidy-issues -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} tidy-issues-inner
+
+
+tidy-issues-inner:
 	#!/usr/bin/env sh
 	codex exec --full-auto --config model_reasoning_effort=high <<EOF
 	1. Read the file '/issues.md'.
@@ -182,7 +202,11 @@ tidy-issues:
 	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/issues.md"`
 	EOF
 
-archive-issues:
+archive-issues workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow archive-issues -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} archive-issues-inner
+
+
+archive-issues-inner:
 	#!/usr/bin/env sh
 	codex exec --full-auto --config model_reasoning_effort=high <<EOF
 	This is a task to archive done issues.
@@ -193,7 +217,11 @@ archive-issues:
 	5. Then move achived issues to '.archive/issues-yyyy-mm-dd.md' file. Use current date.
 	6. Finally update the file '/issues-overview.md'. It is a table of issues and statuses
 
-pick-next-issue:
+pick-next-issue workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow pick-next-issue -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
+
+
+pick-next-issue-inner:
 	#!/usr/bin/env sh
 	codex exec --full-auto --config model_reasoning_effort=high <<EOF
 	1. Examine issues.md and choose a single issue to work on.
@@ -204,7 +232,12 @@ pick-next-issue:
 	    3.3. STOP.
 	EOF
 
-edit rev='@':
+
+edit workspace_id rev='@':
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow edit -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner {{rev}}
+
+
+edit-inner rev='@':
 	#!/usr/bin/env sh
 
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
@@ -214,32 +247,51 @@ edit rev='@':
 
 	jj edit $CURRENT_CHANGE
 	
-human-work-step:
+human-work-step workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow human-work-step -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
+
+
+human-work-step-inner:
 	#!/usr/bin/env sh
-	just agents::edit
+	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner
 	jj split issues.md -m "issues: Update after review"
 	jj edit @-
 
-ai-work-step: next-issue review-change
+ai-work-step workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow ai-work-step -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
+
+
+ai-work-step-inner:
+	#!/usr/bin/env sh
+	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} next-issue-inner
+	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} review-change-inner
 
 # Use this step when starting to work on a new issue
-work:
+work workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow work -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} work-inner
+
+
+work-inner:
 	#!/usr/bin/env sh
 	while true; do
-	  just agents::pick-next-issue
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
 	  [ -f next-issue.md ] || break
-	  just agents::ai-work-step
-	  just agents::human-work-step
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
 	done
 
 # This should be started if you stop at editor phase and want to continue from where you left off
 # Current commit should be the last review commit
-continue-work:
+continue-work workspace_id:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow continue-work -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} continue-work-inner
+
+
+continue-work-inner:
 	#!/usr/bin/env sh
 	while true; do
-	  just agents::human-work-step
-	  just agents::pick-next-issue
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
 	  [ -f next-issue.md ] || break
-	  just agents::ai-work-step
+	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
 	done
 	
