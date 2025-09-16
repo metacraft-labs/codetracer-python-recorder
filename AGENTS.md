@@ -31,10 +31,15 @@ repository tree. Use the helper recipes to inspect and control them:
   workspace (the environment is prepared with `direnv allow`).
 - `just agents::workspace-clean <workspace-id>` – forget the workspace and delete
   its cached directory once the work is integrated.
+- `just agents::workspace-sync-tools <workspace-id>` – refresh the copied automation
+  bundle inside a workspace without re-running the workflow.
 
 Workspaces are stored under `${AI_WORKSPACES_ROOT:-$XDG_CACHE_HOME/ai-workspaces}`
-using a repository-specific namespace. See `design-docs/jj-workspaces.md` for the
-full rationale and lifecycle details.
+using a repository-specific namespace. Each workspace contains a `.agent-tools/`
+directory with the current automation (`agents.just`, `scripts/`, `rules/`). The helper
+copies these files before every run so workflows see the latest tooling even when the
+target change is older. See `design-docs/jj-workspaces.md` for full rationale and
+lifecycle details.
 
 # Code quality guidelines
 
