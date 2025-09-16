@@ -107,11 +107,12 @@ impl Tracer for CountingTracer {
         }
     }
 
-    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
+    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) -> PyResult<()> {
         PY_START_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_START at {}", line);
         }
+        Ok(())
     }
 
     fn on_py_resume(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {

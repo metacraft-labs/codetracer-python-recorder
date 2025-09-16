@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyList, PyTuple, PyDict};
 
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 use runtime_tracing::NonStreamingTraceWriter;
@@ -77,6 +77,17 @@ impl RuntimeTracer {
         }
     }
 
+    /// Encode a Python value into a `ValueRecord` used by the trace writer.
+    ///
+    /// Canonical rules:
+    /// - `None` -> `NONE_VALUE`
+    /// - `bool` -> `Bool`
+    /// - `int`  -> `Int`
+    /// - `str`  -> `String` (canonical for text; do not fall back to Raw)
+    /// - common containers:
+    ///   - Python `tuple` -> `Tuple` with encoded elements
+    ///   - Python `list`  -> `Sequence` with encoded elements (not a slice)
+    /// - any other type -> textual `Raw` via `__str__` best-effort
     fn encode_value<'py>(&mut self, _py: Python<'py>, v: &Bound<'py, PyAny>) -> ValueRecord {
         // None
         if v.is_none() {
@@ -91,9 +102,61 @@ impl RuntimeTracer {
             let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Int, "Int");
             return ValueRecord::Int { i, type_id: ty };
         }
+        // Strings are encoded canonically as `String` to ensure stable tests
+        // and downstream processing. Falling back to `Raw` for `str` is
+        // not allowed.
         if let Ok(s) = v.extract::<String>() {
             let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
             return ValueRecord::String { text: s, type_id: ty };
+        }
+
+        // Python tuple -> ValueRecord::Tuple with recursively-encoded elements
+        if let Ok(t) = v.downcast::<PyTuple>() {
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(t.len());
+            for item in t.iter() {
+                // item: Bound<PyAny>
+                elements.push(self.encode_value(_py, &item));
+            }
+            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
+            return ValueRecord::Tuple { elements, type_id: ty };
+        }
+
+        // Python list -> ValueRecord::Sequence with recursively-encoded elements
+        if let Ok(l) = v.downcast::<PyList>() {
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(l.len());
+            for item in l.iter() {
+                elements.push(self.encode_value(_py, &item));
+            }
+            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "List");
+            return ValueRecord::Sequence { elements, is_slice: false, type_id: ty };
+        }
+
+        // Python dict -> represent as a Sequence of (key, value) Tuples.
+        // Keys are expected to be strings for kwargs; for non-str keys we
+        // fall back to best-effort encoding of the key.
+        if let Ok(d) = v.downcast::<PyDict>() {
+            let seq_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "Dict");
+            let tuple_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
+            let str_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
+            let mut elements: Vec<ValueRecord> = Vec::with_capacity(d.len());
+            let items = d.items();
+            for pair in items.iter() {
+                if let Ok(t) = pair.downcast::<PyTuple>() {
+                    if t.len() == 2 {
+                        let key_obj = t.get_item(0).unwrap();
+                        let val_obj = t.get_item(1).unwrap();
+                        let key_rec = if let Ok(s) = key_obj.extract::<String>() {
+                            ValueRecord::String { text: s, type_id: str_ty }
+                        } else {
+                            self.encode_value(_py, &key_obj)
+                        };
+                        let val_rec = self.encode_value(_py, &val_obj);
+                        let pair_rec = ValueRecord::Tuple { elements: vec![key_rec, val_rec], type_id: tuple_ty };
+                        elements.push(pair_rec);
+                    }
+                }
+            }
+            return ValueRecord::Sequence { elements, is_slice: false, type_id: seq_ty };
         }
 
         // Fallback to Raw string representation
@@ -124,10 +187,10 @@ impl Tracer for RuntimeTracer {
         events_union(&[events.PY_START, events.LINE, events.PY_RETURN])
     }
 
-    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, _offset: i32) {
+    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, _offset: i32) -> PyResult<()> {
         // Activate lazily if configured; ignore until then
         self.ensure_started(py, code);
-        if !self.started { return; }
+        if !self.started { return Ok(()); }
         // Trace event entry
         match (code.filename(py), code.qualname(py)) {
             (Ok(fname), Ok(qname)) => {
@@ -136,8 +199,99 @@ impl Tracer for RuntimeTracer {
             _ => log::debug!("[RuntimeTracer] on_py_start"),
         }
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            TraceWriter::register_call(&mut self.writer, fid, Vec::new());
+            // Attempt to capture function arguments from the current frame.
+            // Fail fast on any error per source-code rules.
+            let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
+            let frame_and_args = (|| -> PyResult<()> {
+                // Current Python frame where the function just started executing
+                let sys = py.import("sys")?;
+                let frame = sys.getattr("_getframe")?.call1((0,))?;
+                let locals = frame.getattr("f_locals")?;
+
+                // Argument names come from co_varnames in the order defined by CPython:
+                // [positional (pos-only + pos-or-kw)] [+ varargs] [+ kw-only] [+ kwargs]
+                // In CPython 3.8+ semantics, `co_argcount` is the TOTAL number of positional
+                // parameters (including positional-only and pos-or-keyword). Use it directly
+                // for the positional slice; `co_posonlyargcount` is only needed if we want to
+                // distinguish the two groups, which we do not here.
+                let argcount = code.arg_count(py)? as usize; // total positional (pos-only + pos-or-kw)
+                let posonly: usize = code
+                    .as_bound(py)
+                    .getattr("co_posonlyargcount")?
+                    .extract()?;
+                let kwonly: usize = code
+                    .as_bound(py)
+                    .getattr("co_kwonlyargcount")?
+                    .extract()?;
+
+                let flags = code.flags(py)?;
+                const CO_VARARGS: u32 = 0x04;
+                const CO_VARKEYWORDS: u32 = 0x08;
+
+                let varnames_obj = code.as_bound(py).getattr("co_varnames")?;
+                let varnames: Vec<String> = varnames_obj.extract()?;
+
+                // 1) Positional parameters (pos-only + pos-or-kw)
+                let mut idx = 0usize;
+                // `argcount` already includes positional-only parameters
+                let take_n = std::cmp::min(argcount, varnames.len());
+                for name in varnames.iter().take(take_n) {
+                    match locals.get_item(name) {
+                        Ok(val) => {
+                            let vrec = self.encode_value(py, &val);
+                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                        }
+                        Err(_) => {}
+                    }
+                    idx += 1;
+                }
+
+                // 2) Varargs (*args)
+                if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
+                    let name = &varnames[idx];
+                    if let Ok(val) = locals.get_item(name) {
+                        let vrec = self.encode_value(py, &val);
+                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                    }
+                    idx += 1;
+                }
+
+                // 3) Keyword-only parameters
+                let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
+                for name in varnames.iter().skip(idx).take(kwonly_take) {
+                    match locals.get_item(name) {
+                        Ok(val) => {
+                            let vrec = self.encode_value(py, &val);
+                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                        }
+                        Err(_) => {}
+                    }
+                }
+                idx = idx.saturating_add(kwonly_take);
+
+                // 4) Kwargs (**kwargs)
+                if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
+                    let name = &varnames[idx];
+                    if let Ok(val) = locals.get_item(name) {
+                        let vrec = self.encode_value(py, &val);
+                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = frame_and_args {
+                // Raise a clear error; do not silently continue with empty args.
+                let rete =Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "on_py_start: failed to capture args: {}",
+                    e
+                )));
+                log::debug!("error {:?}", rete);
+                return rete;
+            }
+
+            TraceWriter::register_call(&mut self.writer, fid, args);
         }
+        Ok(())
     }
 
     fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) {

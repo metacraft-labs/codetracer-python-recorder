@@ -190,7 +190,11 @@ pub trait Tracer: Send + Any {
     }
 
     /// Called at start of a Python function (frame on stack).
-    fn on_py_start(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _offset: i32) {}
+    ///
+    /// Implementations should fail fast on irrecoverable conditions
+    /// (e.g., inability to access the current frame/locals) by
+    /// returning an error.
+    fn on_py_start(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _offset: i32) -> PyResult<()> { Ok(()) }
 
     /// Called on resumption of a generator/coroutine (not via throw()).
     fn on_py_resume(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _offset: i32) {}
@@ -557,9 +561,19 @@ fn callback_branch(
 fn callback_py_start(py: Python<'_>, code: Bound<'_, PyCode>, instruction_offset: i32) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global.tracer.on_py_start(py, &wrapper, instruction_offset);
+        match global.tracer.on_py_start(py, &wrapper, instruction_offset) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // Disable further monitoring immediately on first callback error.
+                // Soft-stop within this lock to avoid deadlocking on GLOBAL.
+                let _ = set_events(py, &global.tool, NO_EVENTS);
+                log::error!("Event monitoring turned off due to exception. No new events will be recorded! {}", err);
+                Err(err)
+            }
+        }
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 #[pyfunction]
