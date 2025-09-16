@@ -104,6 +104,7 @@ fn start_tracing(
 
         // Start location: prefer activation path, otherwise best-effort argv[0]
         let start_path: &Path = activation_path.unwrap_or(Path::new(&program));
+        log::debug!("{}", start_path.display());
         tracer.begin(&meta_path, &paths_path, &events_path, start_path, 1)?;
 
         // Install callbacks
