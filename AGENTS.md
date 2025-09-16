@@ -17,6 +17,25 @@ Then to run the tests do
 just test
 ```
 
+## Agent Workspaces
+
+Automation now runs inside dedicated Jujutsu workspaces that live outside of the
+repository tree. Use the helper recipes to inspect and control them:
+
+- `just agents::consolidate <workspace-id> <start-change> <end-change>` – run the
+  consolidate workflow inside a workspace. The workspace is trusted with `direnv`
+  so the nix environment loads automatically.
+- `just agents::workspace-status [<workspace-id>]` – list all workspaces for this
+  repository or show metadata for a single workspace.
+- `just agents::workspace-shell <workspace-id>` – attach an interactive shell to a
+  workspace (the environment is prepared with `direnv allow`).
+- `just agents::workspace-clean <workspace-id>` – forget the workspace and delete
+  its cached directory once the work is integrated.
+
+Workspaces are stored under `${AI_WORKSPACES_ROOT:-$XDG_CACHE_HOME/ai-workspaces}`
+using a repository-specific namespace. See `design-docs/jj-workspaces.md` for the
+full rationale and lifecycle details.
+
 # Code quality guidelines
 
 - Strive to achieve high code quality.
