@@ -1,9 +1,13 @@
 # Runs the given task in a workspace
+
+workspace_just := "just -d . --justfile .agent-tools/agents.just"
+
 [private]
 run workspace_id workflow inner_workflow *ARGS:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow {{workflow}} -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} {{inner_workflow}} {{ARGS}}
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow {{workflow}} -- {{workspace_just}} {{inner_workflow}} {{ARGS}}
 
-workspace_just := "just --justfile .agent-tools/agents.just"
+
+codex := "codex exec --skip-git-repo-check --full-auto --config model_reasoning_effort=high"
 
 consolidate workspace_id start_change_id end_change_id: (run workspace_id "consolidate" "consolidate-inner" start_change_id end_change_id)
 
@@ -31,7 +35,7 @@ consolidate-inner start_change_id end_change_id:
 	
 	jj new -r {{start_change_id}} -m "Consolidation in progress"	
 	
-	echo "$INSTRUCTIONS" | codex exec --skip-git-repo-check --full-auto --config model_reasoning_effort=high
+	echo "$INSTRUCTIONS" | {{codex}}
 
 workspace-status workspace_id='':
 	@if [ -z "{{workspace_id}}" ]; then \
@@ -49,11 +53,12 @@ workspace-clean workspace_id:
 workspace-sync-tools workspace_id:
 	scripts/agent-workspace.sh sync-tools {{workspace_id}}
 
-questions-for-pm workspace_id rev='@': (run {{workspace_id}} "questions-for-pm" "questions-for-pm-inner" rev)
+questions-for-pm workspace_id rev='@': (run workspace_id "questions-for-pm" "questions-for-pm-inner" rev)
 
 questions-for-pm-inner rev='@':
 	#!/usr/bin/env sh
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+	echo BBBB: `pwd`
 
 	read -r -d '' INSTRUCTIONS_1 <<-EOF
 	    1. Read the current state of open issues in issues.md
@@ -76,13 +81,13 @@ questions-for-pm-inner rev='@':
 	while true; do
 		PREV_HASH=`[ -f pm-faq.md ] && sha256sum pm-faq.md | cut -d' ' -f1 || echo ""`
 
-		echo "$INSTRUCTIONS_1" | codex exec --full-auto --config model_reasoning_effort=high
+		echo "$INSTRUCTIONS_1" | {{codex}}
 
 		CURR_HASH=`[ -f pm-faq.md ] && sha256sum pm-faq.md | cut -d' ' -f1 || echo ""`
 		[ "$CURR_HASH" = "$PREV_HASH" ] && break
 
 		# Optional manual edits
-		jj edit $CURRENT_CHANGE && just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner $PM_CHANGE
+		jj edit $CURRENT_CHANGE && {{workspace_just}} edit-inner $PM_CHANGE
 		# Update issues based on PM responses
 		{{workspace_just}} pm-flow-update-inner $PM_CHANGE
 
@@ -115,7 +120,7 @@ pm-flow-update-inner rev='@':
 	jj new -r {{rev}} -m "Updating Issue database"
 	UPDATE_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
-	echo "$INSTRUCTIONS_2" | codex exec --full-auto --config model_reasoning_effort=high
+	echo "$INSTRUCTIONS_2" | {{codex}}
 
 
 next-issue workspace_id: (run workspace_id "next-issue" "next-issue-inner")
@@ -124,7 +129,7 @@ next-issue-inner:
 	#!/usr/bin/env sh
 	[ -f next-issue.md ] || exit 1
 
-	codex exec --full-auto --config model_reasoning_effort=high <<EOF
+	{{codex}} <<EOF
 	1. You will next work on issue `cat next-issue.md`. Read the actual issue from 'issues.md'
 	3. Decide is it relevant to write a failing test for the issue. If so, write  the test, make sure that it fails.
 	   Note! Not all issues require writing failing tests. Use discretion. Remember - code is debt.
@@ -154,7 +159,7 @@ review-change workspace_id: (run workspace_id "review-change" "review-change-inn
 
 review-change-inner:
 	#!/usr/bin/env sh
-	codex exec --full-auto --config model_reasoning_effort=high <<EOF
+	{{codex}} <<EOF
 	1. Fetch the current changes by writing 'jj show'
 	2. Create a new change by calling 'jj new -m "review(codex): ..."'. For example 'jj new -m "review(codex): Issue 004 - introducing dog barking functionality"'
 	3. Do a deep review of the change.
@@ -186,7 +191,7 @@ tidy-issues workspace_id: (run workspace_id "tidy-issues" "tidy-issues-inner")
 
 tidy-issues-inner:
 	#!/usr/bin/env sh
-	codex exec --full-auto --config model_reasoning_effort=high <<EOF
+	{{codex}} <<EOF
 	1. Read the file '/issues.md'.
 	2. Check if it follows the rules listed below
 	3. run 'jj new -m "issues(codex): ..."'. For example 'jj new -m "issues(codex): Removing duplicate dog-barking issue"'
@@ -202,7 +207,7 @@ archive-issues workspace_id: (run workspace_id "archive-issues" "archive-issues-
 
 archive-issues-inner:
 	#!/usr/bin/env sh
-	codex exec --full-auto --config model_reasoning_effort=high <<EOF
+	{{codex}} <<EOF
 	This is a task to archive done issues.
 	1. Read file '/issues.md'.
 	2. Check if there are any issues which are DONE. If not, exit.
@@ -215,7 +220,7 @@ pick-next-issue workspace_id: (run workspace_id "pick-next-issue" "pick-next-iss
 
 pick-next-issue-inner:
 	#!/usr/bin/env sh
-	codex exec --full-auto --config model_reasoning_effort=high <<EOF
+	{{codex}} <<EOF
 	1. Examine issues.md and choose a single issue to work on.
 	2. If no issue is chosen, then STOP and don''t do anything else.
 	3. Otherwise:
@@ -257,15 +262,21 @@ ai-work-step-inner:
 	{{workspace_just}} review-change-inner
 
 # Use this step when starting to work on a new issue
-work workspace_id: (run workspace_id "work" "work-inner")
+work workspace_id rev="@": (run workspace_id "work" "work-inner" rev)
 
-work-inner:
+work-inner rev:
 	#!/usr/bin/env sh
+	echo AAAA: `pwd`
+	
+	jj edit {{rev}}
 	while true; do
+	  {{workspace_just}} questions-for-pm-inner
 	  {{workspace_just}} pick-next-issue-inner
 	  [ -f next-issue.md ] || break
 	  {{workspace_just}} ai-work-step-inner
-	  {{workspace_just}} human-work-step-inner
+	  jj split issues.md -m "issues: Update after review"
+	  jj edit @-
+	  #{{workspace_just}} human-work-step-inner
 	done
 
 # This should be started if you stop at editor phase and want to continue from where you left off
@@ -281,3 +292,5 @@ continue-work-inner:
 	  {{workspace_just}} ai-work-step-inner
 	done
 	
+test:
+	echo `pwd`
