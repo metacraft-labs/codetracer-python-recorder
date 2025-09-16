@@ -40,3 +40,6 @@ Implement the CodeObjectWrapper as designed. Update the Tracer trait as well as 
 There is an issue in the current implementation. We don't use caching effectively, since we create a new CodeObjectWrapper at each callback_xxx call. We need a global cache, probably keyed by the code object id. Propose design changes and update the design documents. Don't implement the changes themselves before I approve them.
 --- FOLLOW UP TASK ---
 Implement the global code object registry.
+
+--- FOLLOW UP TASK ---
+Take a look at agents.just and scripts/. Also at the design docs for jj-workspaces. This is a proof-of-concept solution for defining and running agent workflows defined by the user. I want to create a real product based on this s proof of concept.\n\nUsers should be able to define their own workflows. They should also be able to publish workflows and fetch them from a central repository. It should be possible to parallelize work - be able to work on several workflows at once.\n\nCreate a technical specification for the components that need to be developed for this product. We will use Rust as our main programming language
