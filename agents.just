@@ -1,5 +1,5 @@
 consolidate workspace_id start_change_id end_change_id:
-	bash -x scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile agents.just --set workspace_id={{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
+	scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile .agent-tools/agents.just --set workspace_id={{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
 
 consolidate-inner start_change_id end_change_id:
 	#!/usr/bin/env sh
@@ -39,6 +39,9 @@ workspace-shell workspace_id:
 
 workspace-clean workspace_id:
 	scripts/agent-workspace.sh clean {{workspace_id}}
+
+workspace-sync-tools workspace_id:
+	scripts/agent-workspace.sh sync-tools {{workspace_id}}
 
 questions-for-pm rev='@':
 	#!/usr/bin/env sh

@@ -8,6 +8,7 @@ Usage:
   agent-workspace.sh status [<workspace-id>]
   agent-workspace.sh shell <workspace-id>
   agent-workspace.sh clean <workspace-id>
+  agent-workspace.sh sync-tools <workspace-id>
 USAGE
 }
 
@@ -32,6 +33,9 @@ cache_root_default=${XDG_CACHE_HOME:-"$HOME/.cache"}
 workspace_root=${AI_WORKSPACES_ROOT:-"$cache_root_default/ai-workspaces"}
 workspace_repo_root="$workspace_root/$repo_slug"
 
+tools_source_root="${AGENT_TOOLS_SOURCE:-$repo_root}"
+tools_relative_paths=("agents.just" "rules" "scripts")
+
 sanitise_workspace_id() {
   local id="$1"
   [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || fail "workspace id '$id' contains invalid characters"
@@ -46,6 +50,108 @@ workspace_path_for() {
 metadata_path_for() {
   local workspace_id="$1"
   echo "$(workspace_path_for "$workspace_id")/.agent-workflow.json"
+}
+
+compute_tools_hash() {
+  python - "$tools_source_root" "${tools_relative_paths[@]}" <<'PY'
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+paths = sys.argv[2:]
+
+hasher = hashlib.sha256()
+
+def add_file(path: Path):
+    rel = path.relative_to(root)
+    hasher.update(str(rel).encode('utf-8'))
+    hasher.update(b'\0')
+    with path.open('rb') as fh:
+        while True:
+            chunk = fh.read(65536)
+            if not chunk:
+                break
+            hasher.update(chunk)
+
+if not paths:
+    print('')
+    raise SystemExit(0)
+
+for rel in paths:
+    src = root / rel
+    if not src.exists():
+        print(f"missing:{rel}", file=sys.stderr)
+        raise SystemExit(1)
+    if src.is_file():
+        add_file(src)
+    else:
+        for file_path in sorted(src.rglob('*')):
+            if file_path.is_file():
+                add_file(file_path)
+
+print(hasher.hexdigest())
+PY
+}
+
+copy_tools_payload() {
+  local dest="$1"
+  python - "$tools_source_root" "$dest" "${tools_relative_paths[@]}" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+dest = Path(sys.argv[2]).resolve()
+paths = sys.argv[3:]
+
+for rel in paths:
+    src = root / rel
+    if not src.exists():
+        raise SystemExit(f"tool path missing: {rel}")
+    target = dest / rel
+    if src.is_dir():
+        shutil.copytree(src, target, dirs_exist_ok=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+PY
+}
+
+prepare_tools_copy() {
+  local workspace_path="$1"
+  local force_copy="${2:-false}"
+
+  local tools_dest="$workspace_path/.agent-tools"
+  TOOLS_COPY_PATH="$tools_dest"
+
+  local desired_hash
+  desired_hash=$(compute_tools_hash) || fail "failed to hash tool sources"
+  TOOLS_VERSION="$desired_hash"
+
+  local version_file="$tools_dest/.version"
+  local current_hash=""
+  if [[ -f "$version_file" ]]; then
+    current_hash=$(cat "$version_file")
+  fi
+
+  if [[ "$force_copy" == "true" ]]; then
+    current_hash=""
+  fi
+
+  if [[ "$current_hash" != "$desired_hash" ]]; then
+    case "$tools_dest" in
+      "$workspace_path"/*) ;;
+      *) fail "tool copy path outside workspace: $tools_dest" ;;
+    esac
+    rm -rf "$tools_dest"
+    mkdir -p "$tools_dest"
+    copy_tools_payload "$tools_dest"
+    printf '%s\n' "$desired_hash" > "$version_file"
+  else
+    mkdir -p "$tools_dest"
+  fi
 }
 
 ensure_workspace() {
@@ -75,7 +181,8 @@ update_metadata() {
 
   STATUS="$status" TIMESTAMP="$timestamp" WORKSPACE_ID="$WORKSPACE_ID" REPO_ROOT="$repo_root" \
   WORKSPACE_PATH="$WORKSPACE_PATH" WORKFLOW_NAME="${WORKFLOW_NAME:-}" COMMAND_JSON="$COMMAND_JSON" \
-  DIRENV_ALLOWED="$DIRENV_ALLOWED" BASE_CHANGE="${BASE_CHANGE:-}" \
+  DIRENV_ALLOWED="$DIRENV_ALLOWED" BASE_CHANGE="${BASE_CHANGE:-}" TOOLS_SOURCE="${TOOLS_SOURCE:-}" \
+  TOOLS_COPY="${TOOLS_COPY:-}" TOOLS_VERSION="${TOOLS_VERSION:-}" \
   python - "$metadata_path" <<'PY'
 import json
 import os
@@ -91,6 +198,9 @@ workflow_name = os.environ.get("WORKFLOW_NAME") or None
 direnv_allowed = os.environ.get("DIRENV_ALLOWED", "false").lower() == "true"
 command = json.loads(os.environ.get("COMMAND_JSON", "[]"))
 base_change = os.environ.get("BASE_CHANGE") or None
+tools_source = os.environ.get("TOOLS_SOURCE") or None
+tools_copy = os.environ.get("TOOLS_COPY") or None
+tools_version = os.environ.get("TOOLS_VERSION") or None
 
 try:
     with open(path, "r", encoding="utf-8") as fh:
@@ -120,6 +230,21 @@ if base_change is None:
     data.pop("base_change", None)
 else:
     data["base_change"] = base_change
+
+if tools_source is None:
+    data.pop("tools_source", None)
+else:
+    data["tools_source"] = tools_source
+
+if tools_copy is None:
+    data.pop("tools_copy", None)
+else:
+    data["tools_copy"] = tools_copy
+
+if tools_version is None:
+    data.pop("tools_version", None)
+else:
+    data["tools_version"] = tools_version
 
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
@@ -192,6 +317,8 @@ run_subcommand() {
     (cd "$workspace_path" && jj edit "$base_change")
   fi
 
+  prepare_tools_copy "$workspace_path"
+
   local direnv_status="false"
   if [[ "$use_direnv" == "true" ]]; then
     command -v direnv >/dev/null 2>&1 || fail "direnv is required but not installed"
@@ -202,6 +329,7 @@ run_subcommand() {
     direnv_status="true"
   fi
   DIRENV_ALLOWED="$direnv_status"
+  TOOLS_SOURCE="$tools_source_root"
 
   COMMAND_JSON=$(python - <<'PY' "${cmd[@]}"
 import json
@@ -210,6 +338,7 @@ print(json.dumps(sys.argv[1:]))
 PY
 )
 
+  TOOLS_COPY="$TOOLS_COPY_PATH"
   update_metadata "$metadata_path" "running"
 
   local exit_code
@@ -220,12 +349,18 @@ PY
       AGENT_WORKSPACE_PATH="$workspace_path" \
       AGENT_WORKSPACE_METADATA="$metadata_path" \
       AGENT_WORKSPACE_REPO_ROOT="$repo_root" \
+      AGENT_TOOL_COPY_ROOT="$TOOLS_COPY_PATH" \
+      AGENT_TOOLS_VERSION="$TOOLS_VERSION" \
+      AGENT_TOOLS_SOURCE="$tools_source_root" \
       direnv exec . "${cmd[@]}"
     else
       AGENT_WORKSPACE_ID="$workspace_id" \
       AGENT_WORKSPACE_PATH="$workspace_path" \
       AGENT_WORKSPACE_METADATA="$metadata_path" \
       AGENT_WORKSPACE_REPO_ROOT="$repo_root" \
+      AGENT_TOOL_COPY_ROOT="$TOOLS_COPY_PATH" \
+      AGENT_TOOLS_VERSION="$TOOLS_VERSION" \
+      AGENT_TOOLS_SOURCE="$tools_source_root" \
       "${cmd[@]}"
     fi
   )
@@ -361,6 +496,72 @@ clean_subcommand() {
   fi
 }
 
+sync_tools_subcommand() {
+  if [[ $# -ne 1 ]]; then
+    fail "sync-tools requires a workspace id"
+  fi
+
+  local workspace_id
+  workspace_id=$(sanitise_workspace_id "$1")
+  local workspace_path
+  workspace_path=$(workspace_path_for "$workspace_id")
+
+  [[ -d "$workspace_path" ]] || fail "workspace '$workspace_id' does not exist"
+
+  if ! jj workspace root --workspace "$workspace_id" >/dev/null 2>&1; then
+    fail "workspace '$workspace_id' is not registered with jj"
+  fi
+
+  prepare_tools_copy "$workspace_path" "true"
+
+  local metadata_path
+  metadata_path=$(metadata_path_for "$workspace_id")
+
+  local prev_status="idle"
+  local prev_workflow=""
+  local prev_command="[]"
+  local prev_direnv="false"
+  local prev_base=""
+
+  if [[ -f "$metadata_path" ]]; then
+    local -a meta_info=()
+    mapfile -t meta_info < <(python - "$metadata_path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+
+print(data.get('status', 'idle'))
+print(data.get('workflow') or '')
+print(json.dumps(data.get('command', [])))
+print('true' if data.get('direnv_allowed') else 'false')
+print(data.get('base_change') or '')
+PY
+    )
+    if [[ ${#meta_info[@]} -ge 5 ]]; then
+      prev_status="${meta_info[0]}"
+      prev_workflow="${meta_info[1]}"
+      prev_command="${meta_info[2]}"
+      prev_direnv="${meta_info[3]}"
+      prev_base="${meta_info[4]}"
+    fi
+  fi
+
+  WORKSPACE_ID="$workspace_id"
+  WORKSPACE_PATH="$workspace_path"
+  METADATA_PATH="$metadata_path"
+  WORKFLOW_NAME="$prev_workflow"
+  BASE_CHANGE="$prev_base"
+  COMMAND_JSON="$prev_command"
+  DIRENV_ALLOWED="$prev_direnv"
+  TOOLS_SOURCE="$tools_source_root"
+  TOOLS_COPY="$TOOLS_COPY_PATH"
+  TOOLS_VERSION="$TOOLS_VERSION"
+  update_metadata "$metadata_path" "$prev_status"
+}
+
 main() {
   if [[ $# -lt 1 ]]; then
     usage
@@ -383,6 +584,9 @@ main() {
       ;;
     clean)
       clean_subcommand "$@"
+      ;;
+    sync-tools)
+      sync_tools_subcommand "$@"
       ;;
     *)
       usage
