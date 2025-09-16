@@ -1,7 +1,11 @@
-workspace_id:=""
+# Runs the given task in a workspace
+[private]
+run workspace_id workflow inner_workflow *ARGS:
+	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow {{workflow}} -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} {{inner_workflow}} {{ARGS}}
 
-consolidate workspace_id start_change_id end_change_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
+workspace_just := "just --justfile .agent-tools/agents.just"
+
+consolidate workspace_id start_change_id end_change_id: (run workspace_id "consolidate" "consolidate-inner" start_change_id end_change_id)
 
 consolidate-inner start_change_id end_change_id:
 	#!/usr/bin/env sh
@@ -45,8 +49,7 @@ workspace-clean workspace_id:
 workspace-sync-tools workspace_id:
 	scripts/agent-workspace.sh sync-tools {{workspace_id}}
 
-questions-for-pm workspace_id rev='@':
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow questions-for-pm -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} questions-for-pm-inner {{rev}}
+questions-for-pm workspace_id rev='@': (run {{workspace_id}} "questions-for-pm" "questions-for-pm-inner" rev)
 
 questions-for-pm-inner rev='@':
 	#!/usr/bin/env sh
@@ -81,7 +84,7 @@ questions-for-pm-inner rev='@':
 		# Optional manual edits
 		jj edit $CURRENT_CHANGE && just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner $PM_CHANGE
 		# Update issues based on PM responses
-		just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pm-flow-update-inner $PM_CHANGE
+		{{workspace_just}} pm-flow-update-inner $PM_CHANGE
 
 		# Start a new iteration change, include a counter in the message
 		jj new -r @ -m "Questions for the PM (iteration ${ITERATION})"
@@ -96,8 +99,7 @@ questions-for-pm-inner rev='@':
 	jj edit $CURRENT_CHANGE
 
 
-pm-flow-update workspace_id rev='@':
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow pm-flow-update -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pm-flow-update-inner {{rev}}
+pm-flow-update workspace_id rev='@': (run workspace_id "pm-flow-update" "pm-flow-update-inner" rev)
 
 pm-flow-update-inner rev='@':
 	#!/usr/bin/env sh
@@ -122,9 +124,7 @@ pm-flow-update-inner rev='@':
 	echo "$INSTRUCTIONS_2" | codex exec --full-auto --config model_reasoning_effort=high
 
 
-next-issue workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow next-issue -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} next-issue-inner
-
+next-issue workspace_id: (run workspace_id "next-issue" "next-issue-inner")
 
 next-issue-inner:
 	#!/usr/bin/env sh
@@ -156,9 +156,7 @@ next-issue-inner:
 	rm next-issue.md
 
 
-review-change workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow review-change -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} review-change-inner
-
+review-change workspace_id: (run workspace_id "review-change" "review-change-inner")
 
 review-change-inner:
 	#!/usr/bin/env sh
@@ -190,9 +188,7 @@ review-change-inner:
 	EOF
 
 
-tidy-issues workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow tidy-issues -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} tidy-issues-inner
-
+tidy-issues workspace_id: (run workspace_id "tidy-issues" "tidy-issues-inner")
 
 tidy-issues-inner:
 	#!/usr/bin/env sh
@@ -208,9 +204,7 @@ tidy-issues-inner:
 	`cat "${AGENT_TOOL_COPY_ROOT:-.}/rules/issues.md"`
 	EOF
 
-archive-issues workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow archive-issues -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} archive-issues-inner
-
+archive-issues workspace_id: (run workspace_id "archive-issues" "archive-issues-inner")
 
 archive-issues-inner:
 	#!/usr/bin/env sh
@@ -223,9 +217,7 @@ archive-issues-inner:
 	5. Then move achived issues to '.archive/issues-yyyy-mm-dd.md' file. Use current date.
 	6. Finally update the file '/issues-overview.md'. It is a table of issues and statuses
 
-pick-next-issue workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow pick-next-issue -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
-
+pick-next-issue workspace_id: (run workspace_id "pick-next-issue" "pick-next-issue-inner")
 
 pick-next-issue-inner:
 	#!/usr/bin/env sh
@@ -239,9 +231,7 @@ pick-next-issue-inner:
 	EOF
 
 
-edit workspace_id rev='@':
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow edit -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner {{rev}}
-
+edit workspace_id rev='@': (run workspace_id "edit" "edit-inner" rev)
 
 edit-inner rev='@':
 	#!/usr/bin/env sh
@@ -259,7 +249,7 @@ human-work-step workspace_id:
 
 human-work-step-inner:
 	#!/usr/bin/env sh
-	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} edit-inner
+	{{workspace_just}} edit-inner
 	jj split issues.md -m "issues: Update after review"
 	jj edit @-
 
@@ -269,35 +259,31 @@ ai-work-step workspace_id:
 
 ai-work-step-inner:
 	#!/usr/bin/env sh
-	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} next-issue-inner
-	just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} review-change-inner
+	{{workspace_just}} next-issue-inner
+	{{workspace_just}} review-change-inner
 
 # Use this step when starting to work on a new issue
-work workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow work -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} work-inner
-
+work workspace_id: (run workspace_id "work" "work-inner")
 
 work-inner:
 	#!/usr/bin/env sh
 	while true; do
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
+	  {{workspace_just}} pick-next-issue-inner
 	  [ -f next-issue.md ] || break
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
+	  {{workspace_just}} ai-work-step-inner
+	  {{workspace_just}} human-work-step-inner
 	done
 
 # This should be started if you stop at editor phase and want to continue from where you left off
 # Current commit should be the last review commit
-continue-work workspace_id:
-	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow continue-work -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} continue-work-inner
-
+continue-work workspace_id: (run workspace_id "continue-work" "continue-work-inner")
 
 continue-work-inner:
 	#!/usr/bin/env sh
 	while true; do
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} pick-next-issue-inner
+	  {{workspace_just}} human-work-step-inner
+	  {{workspace_just}} pick-next-issue-inner
 	  [ -f next-issue.md ] || break
-	  just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
+	  {{workspace_just}} ai-work-step-inner
 	done
 	
