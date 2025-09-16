@@ -1,4 +1,7 @@
-consolidate start_change_id end_change_id:
+consolidate workspace_id start_change_id end_change_id:
+	bash -x scripts/agent-workspace.sh run {{workspace_id}} --workflow consolidate -- just --justfile agents.just --set workspace_id={{workspace_id}} consolidate-inner {{start_change_id}} {{end_change_id}}
+
+consolidate-inner start_change_id end_change_id:
 	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS <<-EOF
 	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
@@ -23,6 +26,19 @@ consolidate start_change_id end_change_id:
 	jj new -r {{start_change_id}} -m "Consolidation in progress"	
 	
 	echo "$INSTRUCTIONS" | codex exec --full-auto --config model_reasoning_effort=high
+
+workspace-status workspace_id='':
+	@if [ -z "{{workspace_id}}" ]; then \
+		scripts/agent-workspace.sh status; \
+	else \
+		scripts/agent-workspace.sh status {{workspace_id}}; \
+	fi
+
+workspace-shell workspace_id:
+	scripts/agent-workspace.sh shell {{workspace_id}}
+
+workspace-clean workspace_id:
+	scripts/agent-workspace.sh clean {{workspace_id}}
 
 questions-for-pm rev='@':
 	#!/usr/bin/env sh
@@ -65,6 +81,9 @@ questions-for-pm rev='@':
 		ITERATION=$((ITERATION + 1))
 	done
 
+	# Abandon the last PM_CHANGE since it must have been empty
+	jj abandon $PM_CHANGE
+	
 	# Return to original change
 	jj edit $CURRENT_CHANGE
 
