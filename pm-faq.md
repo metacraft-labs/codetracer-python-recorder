@@ -33,7 +33,7 @@
   unless we have missing functionality which causes our recorder to
   crash. We'll work on this later.
 
-# Questions from 2025-09-17 (later)
+# Questions from 2025-09-17 - iteration 2
 
 - Q: For ISSUE-012, when a frame resolves a global name to a builtin
   or imported module (e.g., calling `len` or referencing `math`), do
@@ -55,3 +55,33 @@
   line, or restrict ISSUE-012 to function/module frames?
   
   A: Let's capture their locals as well.
+# Questions from 2025-09-17 - iteration 3
+
+- Q: For ISSUE-010, do we want both recorders to apply the structured
+  dict encoding only at kwargs capture sites, or should ordinary dict
+  values across all contexts keep using the (key, value) sequence
+  encoding? We need a decision so we can align specs, fixtures, and
+  schema docs.
+  
+  A: All dicts will use the (key, value) sequence encoding. 
+
+- Q: ISSUE-012 requires us to start recording globals only after a
+  scope touches them, but we don't yet have the follow-up
+  instrumentation spec for detecting those touches. Should we invest
+  now in subscribing to instruction-level events (e.g., tracking
+  LOAD_GLOBAL/STORE_GLOBAL) to meet this requirement, or is it
+  acceptable to ship an initial version that records only locals while
+  we wait for the dedicated instrumentation plan?
+  
+  A: Ship an initial version which only records locals. Create a
+  separate issue for the instrumentation part.
+
+- Q: ISSUE-012 touches both the pure-Python and Rust-backed
+  recorders. Can we stage the delivery (ship the pure-Python recorder
+  capturing locals/globals first, then port the same behavior to the
+  Rust tracer), or do you need both recorders to gain parity in the
+  same release?
+  
+  A: ISSUE-012 concerns only the Rust-based recorder. The pure-Python
+  recorder is deprecated and will not be developed in the future. We
+  should document this clearly in the repo docs.
