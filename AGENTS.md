@@ -41,6 +41,15 @@ copies these files before every run so workflows see the latest tooling even whe
 target change is older. See `design-docs/jj-workspaces.md` for full rationale and
 lifecycle details.
 
+# TOOLING
+
+Instead of writing shell commands directly you should use `just`
+commands in the `ai` module. That is run commands like `just
+ai::COMMAND`.  The commands that you should use are described in
+`ai.just`. If a useful command is missing you should add it to the
+just file.
+
+
 # Code quality guidelines
 
 - Strive to achieve high code quality.

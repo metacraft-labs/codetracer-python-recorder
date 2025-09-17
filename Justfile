@@ -1,5 +1,8 @@
 mod agents 
 
+# Commands used by the AI, not by humans
+mod ai
+
 default:
     @just --list
     
