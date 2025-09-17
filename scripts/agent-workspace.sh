@@ -34,7 +34,7 @@ workspace_root=${AI_WORKSPACES_ROOT:-"$cache_root_default/ai-workspaces"}
 workspace_repo_root="$workspace_root/$repo_slug"
 
 tools_source_root="${AGENT_TOOLS_SOURCE:-$repo_root}"
-tools_relative_paths=("agents.just" "rules" "scripts")
+tools_relative_paths=("agents.just" "rules" "scripts" "AGENTS.md")
 
 sanitise_workspace_id() {
   local id="$1"

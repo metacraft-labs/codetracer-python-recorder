@@ -8,6 +8,7 @@ run workspace_id workflow inner_workflow *ARGS:
 
 
 codex := "codex exec --skip-git-repo-check --full-auto --config model_reasoning_effort=high"
+codex-ui := "codex --config model_reasoning_effort=high --full-auto"
 
 consolidate workspace_id start_change_id end_change_id: (run workspace_id "consolidate" "consolidate-inner" start_change_id end_change_id)
 
@@ -66,6 +67,9 @@ questions-for-pm-inner rev='@':
 		3. Read 'pm-faq.md' which contains previous questions asked to the product manager and her answers.
 		4. Create questions to the product manager to clarify unclear design choices, priorities and so on. If everything is clear and no questions are needed do nothing.
 		5. Append the new questions to the end of 'pm-faq.md' file
+
+		# Rules for the pm-faq.md file
+		- Only ask questions related to issues in issues.md. In each question clearly mark which issues motivated this question
 	EOF
 
 	jj new -r {{rev}} -m "Questions for the PM"
@@ -110,7 +114,7 @@ pm-flow-update-inner rev='@':
 	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS_2 <<-EOF
 	    1. Read the current state of open issues in 'issues.md'
-		2. Read the conversation with the product manager so far in 'pm-faq.md'
+		2. Read the conversation with the product manager so far in 'pm-faq.md'. Read ONLY THE LATEST SECTION. IGNORE PREVIOUS SECTIONS as they were already handled
 		3. If necessary read relevant parts of the code
 		4. Update the issues database in 'issues.md' to match the instructions provided by the product manager.
 	EOF
@@ -294,3 +298,19 @@ continue-work-inner:
 	
 test:
 	echo `pwd`
+
+review-old workspace_id start_rev end_rev: (run workspace_id "review-old" "review-old-inner" start_rev end_rev)
+
+review-old-inner start_rev end_rev:
+	#!/usr/bin/env sh
+	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
+	echo BBBB: `pwd`
+
+	read -r -d '' INSTRUCTIONS <<-EOF
+	    I was working on something long ago but I forgot what I was doing. Go over the changes and bring me up-to-speed. The changes in question are all changes between "{{start_rev}}" and "{{end_rev}}".
+		Recall that we are using Jujutsu VCS. Check the documentation on the web if you don''t know something about it.
+	EOF
+
+	{{codex-ui}} "$INSTRUCTIONS"
+
+	
