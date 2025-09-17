@@ -145,3 +145,24 @@
   A: It depends on how easy it is. If we can easily filter imported
   modules and __builtins__ then let's do it. If we require more
   instrumentation (e.g. hooking to INSTRUCTION events) then let's not.
+
+# Questions from 2025-09-18 - iteration 7
+
+- Q: When using `codetracer.start(..., start_on_enter=...)`, should
+  tracing remain active for the rest of the process once execution
+  enters that file, or intentionally stop recording after the
+  activation frame returns? The current backend deactivates once the
+  activation code returns, so any work that happens afterwards (e.g.,
+  background threads kicked off by the script) would be ignored.
+  
+  A: Keep current behaviour. Threading support is not implemented in
+  Codetracer. Currently we only supported recording single-threaded
+  scripts.
+
+- Q: ISSUE-014: When validating the `format` argument, do we only
+  accept the canonical names `binary` and `json` (case-insensitive),
+  or should we keep supporting the existing aliases like
+  `binary_v0`/`b0`? We need to know what to document and test going
+  forward.
+
+  A: For now only support `binary` and `json`
