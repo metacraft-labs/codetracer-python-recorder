@@ -65,6 +65,8 @@ We need a comprehensive test suite for the new behavior.
   functions, class bodies, comprehensions, and generator expressions.
 - Locals are re-emitted on every step; we do not attempt to diff or elide
   unchanged values.
+- Module-level `LINE` events also emit locals snapshots even though they mirror
+  globals, so scripts that execute at import-time are fully captured.
 - Example scripts are added under `/examples` to illustrate unfiltered locals
   capture and generator/coroutine suspension points (even though we only record
   on `LINE` events).
@@ -84,6 +86,9 @@ We need a comprehensive test suite for the new behavior.
   so product can review raw output.
 * Skip builtins and imported modules even when referenced; document this choice
   for future global tracking.
+* Capture module-level frames despite the duplication between `f_locals` and
+  `f_globals`; global instrumentation will be addressed separately in
+  ISSUE-013.
 * Generator/coroutine yields do not require special events for now; examples
   should demonstrate the resulting traces.
 * Global tracking and LOAD_GLOBAL/STORE_GLOBAL instrumentation is deferred to
@@ -117,6 +122,15 @@ skip builtins and imported modules.
 - Provide tests/fixtures describing expected traces for new global tracking
   behavior.
 
+### Design choices
+
+* Detect first touches via instruction-level events so we avoid scanning
+  `frame.f_globals` indiscriminately.
+* Once a global is tracked within a scope, re-emit its value on every
+  subsequent `LINE` event until the scope exits.
+* Exclude builtins and imported modules from the tracked set even when they are
+  accessed, and document the rationale for future revisit.
+
 ### Proposed solution
 - Investigate instruction-level tracing (e.g., subscribing to LOAD/STORE
   events) and prototype a minimal detector that can toggle global capture per
@@ -125,3 +139,28 @@ skip builtins and imported modules.
 
 ### Status
 Not started.
+
+## ISSUE-014
+### Description
+Harden the public API for the Rust-backed recorder so that
+`codetracer.start(format=...)` raises an explicit error when the requested
+format is unsupported. The current fallback silently downgrades to binary
+output, which hides configuration mistakes and diverges from the product
+expectation.
+
+### Definition of Done
+- The Rust recorder validates the `format` argument and raises a descriptive
+  error for unsupported values instead of silently changing the output format.
+- Tests cover at least one supported format and a representative unsupported
+  value to ensure the behavior stays stable.
+- Public-facing docs mention the stricter error handling and list the accepted
+  format values.
+
+### Proposed solution
+- Surface the validation as early as possible in `codetracer.start` so callers
+  fail fast before tracing begins.
+- Reuse or introduce a dedicated exception type shared with existing argument
+  validation paths.
+
+### Status
+Backlog.
