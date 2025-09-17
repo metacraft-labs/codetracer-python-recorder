@@ -49,48 +49,23 @@ We need to store the state and be able to track how it changes over time.
 
 We need a comprehensive test suite for our solution.
 
-### Proposed solutions
+### Design choices
 
+* Current runtime_tracing implementation requires that we store all
+  variables at each step. The variables which we record after a given
+  step will be what is shown in the UI when we are at this step.
+  
+* This means that at each step we need to find out ALL variables which
+  are accessible at the step. Then we need to encode each one using
+  our value encoder. The value encoder is currently very basic, we
+  will improve it as a part of a separate issue. However we don't
+  intend to encode full values, we will be forced to sample the
+  values.
+
+### Further research
+We can improve our idea how to implement the issue by looking at the following:
 - Check ../codetracer-ruby-recorder which also tries to record the values but for Ruby. Maybe we can use some ideas from there.
 - Check ../runtime_tracing to understand what capabilities the tracing library supports.
-- Maybe we can listen on the INSTRUCTION event and track opcodes which change the local/global state (basically all STORE_* and DELETE_* opcodes). Here's a pure Python sketch that a friend gave me (I don't trust him though.) We might use ideas from it to implement our Rust recorder:
-```py
-import dis, sys
-
-MUTATING = {
-    "STORE_FAST", "DELETE_FAST",
-    "STORE_NAME", "DELETE_NAME",
-    "STORE_GLOBAL", "DELETE_GLOBAL",
-    "STORE_DEREF", "DELETE_DEREF",
-}
-
-index = {}  # code -> {offset: (opname, name)}
-
-def index_code(code):
-    d = {}
-    for ins in dis.get_instructions(code):
-        if ins.opname in MUTATING:
-            d[ins.offset] = (ins.opname, ins.argval)  # name bound/deleted
-    index[code] = d
-
-TOOL = sys.monitoring.DEBUGGER_ID
-sys.monitoring.use_tool_id(TOOL, "varspy")
-
-def on_instr(code, offset):
-    d = index.get(code)
-    info = d and d.get(offset)
-    if not info:
-        return sys.monitoring.DISABLE  # silence this location forever
-    # ... here: grab frame (e.g. via PyEval_GetFrame in PyO3) and read f_locals/f_globals ...
-    # opname, name = info
-    # value = ...
-    # emit change event
-
-sys.monitoring.register_callback(TOOL, sys.monitoring.events.INSTRUCTION, on_instr)
-sys.monitoring.set_events(TOOL, sys.monitoring.events.INSTRUCTION)
-```
-
-Right now it's not clear in detail how to implement the feature. When more becomes clear we have to add all details to the issue description.
 
 ### Status
 High priority - not started.
