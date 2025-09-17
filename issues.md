@@ -71,10 +71,10 @@ We need a comprehensive test suite for the new behavior.
   capture and generator/coroutine suspension points (even though we only record
   on `LINE` events).
 - Documentation outlines the new locals-capture behavior, clearly marks the
-  pure-Python recorder as deprecated, explains whether imported
-  modules/`__builtins__` are filtered (skip them when practical, otherwise
-  document the limitation), and calls out that globals remain locals-only until
-  ISSUE-013 lands.
+  pure-Python recorder as deprecated, states that module objects and
+  `__builtins__` are filtered when possible (and documents any temporary
+  limitations), and calls out that globals remain locals-only until ISSUE-013
+  lands.
 - Unit/integration tests cover representative scopes and ensure the existing
   `encode_value` usage is stable.
 - Shipping scope is locals-only; document that global tracking is planned for
@@ -90,8 +90,11 @@ We need a comprehensive test suite for the new behavior.
   ISSUE-013 while documenting the gap.
 * Do not filter by variable name—include dunder variables and function objects
   so product can review raw output.
-* Filter builtins and imported modules when it can be done without additional
-  instrumentation; if not, include them and document why.
+* Exclude imported modules (`types.ModuleType`) and `__builtins__` from emitted
+  locals snapshots whenever that filtering can be achieved without new
+  instrumentation; when the filter is active, drop every module object rather
+  than scoping by project root, and if we cannot enable the filter, document
+  the limitation and track the follow-up.
 * Capture module-level frames despite the duplication between `f_locals` and
   `f_globals`; global instrumentation will be addressed separately in
   ISSUE-013.
