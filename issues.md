@@ -70,9 +70,10 @@ We need a comprehensive test suite for the new behavior.
 - Example scripts are added under `/examples` to illustrate unfiltered locals
   capture and generator/coroutine suspension points (even though we only record
   on `LINE` events).
-- Documentation outlines the new locals-capture behavior, states that
-  builtins/imported modules are not recorded, and calls out that the
-  pure-Python recorder is deprecated.
+- Documentation outlines the new locals-capture behavior, clearly marks the
+  pure-Python recorder as deprecated, and explains whether imported
+  modules/`__builtins__` are filtered (skip them when practical, otherwise
+  document the limitation).
 - Unit/integration tests cover representative scopes and ensure the existing
   `encode_value` usage is stable.
 
@@ -84,8 +85,8 @@ We need a comprehensive test suite for the new behavior.
 * Continue to use `encode_value` as-is and only extend it to prevent crashes.
 * Do not filter by variable name—include dunder variables and function objects
   so product can review raw output.
-* Skip builtins and imported modules even when referenced; document this choice
-  for future global tracking.
+* Filter builtins and imported modules when it can be done without additional
+  instrumentation; if not, include them and document why.
 * Capture module-level frames despite the duplication between `f_locals` and
   `f_globals`; global instrumentation will be addressed separately in
   ISSUE-013.
