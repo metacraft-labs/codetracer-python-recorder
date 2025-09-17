@@ -133,3 +133,15 @@
   value is unsupported?
   
   A: We should raise an error
+
+# Questions from 2025-09-18 - iteration 6
+
+- Q: ISSUE-012: Module-level LINE events will capture locals dict
+  entries for imported modules (e.g., math) and __builtins__. Should
+  we include those objects in the emitted locals snapshots, or skip
+  them to honor the earlier guidance to avoid recording
+  modules/builtins when they surface via globals?
+
+  A: It depends on how easy it is. If we can easily filter imported
+  modules and __builtins__ then let's do it. If we require more
+  instrumentation (e.g. hooking to INSTRUCTION events) then let's not.
