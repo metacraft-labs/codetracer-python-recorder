@@ -58,9 +58,6 @@ questions-for-pm workspace_id rev='@': (run workspace_id "questions-for-pm" "que
 
 questions-for-pm-inner rev='@':
 	#!/usr/bin/env sh
-	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
-	echo BBBB: `pwd`
-
 	read -r -d '' INSTRUCTIONS_1 <<-EOF
 	    1. Read the current state of open issues in issues.md
 		2. Read relevant state of the code base
@@ -80,9 +77,24 @@ questions-for-pm-inner rev='@':
 
 	# Initialize iteration counter for commit messages
 	ITERATION=1
+	ITERATION_CAP_RAW="${ITERATION_CAP:-0}"
+	ITERATION_CAP_VALUE=0
+	case "$ITERATION_CAP_RAW" in
+		''|*[!0-9]*)
+			echo "ITERATION_CAP must be a non-negative integer; got '$ITERATION_CAP_RAW'" >&2
+			exit 1
+			;;
+		*)
+			ITERATION_CAP_VALUE="$ITERATION_CAP_RAW"
+			;;
+	esac
 
 	# Keep asking until no further changes are made to pm-faq.md
 	while true; do
+		if [ "$ITERATION_CAP_VALUE" -ne 0 ] && [ "$ITERATION" -gt "$ITERATION_CAP_VALUE" ]; then
+			echo "Reached iteration cap (${ITERATION_CAP_VALUE}); stopping questions-for-pm loop." >&2
+			break
+		fi
 		PREV_HASH=`[ -f pm-faq.md ] && sha256sum pm-faq.md | cut -d' ' -f1 || echo ""`
 
 		echo "$INSTRUCTIONS_1" | {{codex}}
@@ -91,7 +103,7 @@ questions-for-pm-inner rev='@':
 		[ "$CURR_HASH" = "$PREV_HASH" ] && break
 
 		# Optional manual edits
-		jj edit $CURRENT_CHANGE && {{workspace_just}} edit-inner $PM_CHANGE
+		{{workspace_just}} edit-inner $PM_CHANGE
 		# Update issues based on PM responses
 		{{workspace_just}} pm-flow-update-inner $PM_CHANGE
 
@@ -104,9 +116,6 @@ questions-for-pm-inner rev='@':
 	# Abandon the last PM_CHANGE since it must have been empty
 	jj abandon $PM_CHANGE
 	
-	# Return to original change
-	jj edit $CURRENT_CHANGE
-
 
 pm-flow-update workspace_id rev='@': (run workspace_id "pm-flow-update" "pm-flow-update-inner" rev)
 
