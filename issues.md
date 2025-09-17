@@ -65,13 +65,22 @@ We need a comprehensive test suite for our solution.
 * Track locals eagerly and only capture globals that the scope touches.
   Whenever a global is first accessed or mutated within a scope we keep
   recording it until the scope ends, and we ignore untouched globals so
-  that module-wide dumps do not occur. The concrete mechanics of
+  that module-wide dumps do not occur. Skip builtins and imported modules
+  even when they are referenced, and make sure this choice is clearly
+  documented. The concrete mechanics of
   detecting these accesses will be documented in a follow-up issue.
+
+* Once a global becomes tracked, emit its value on every subsequent step,
+  just like we do for locals.
 
 * Do not apply name-based filtering for now. Even dunder variables and
   function objects should appear in the trace so we can evaluate the
   output. Prepare clear `/examples` programs that demonstrate the
   unfiltered captures for product review.
+
+* Capture locals for non-function scopes such as class bodies,
+  comprehensions, and generator expressions so their state appears in
+  the trace.
 
 * Keep using the existing `encode_value` implementation. Only extend it
   when the recorder would otherwise crash; sampling improvements arrive
