@@ -62,10 +62,27 @@ We need a comprehensive test suite for our solution.
   intend to encode full values, we will be forced to sample the
   values.
 
+* Track locals eagerly and only capture globals that the scope touches.
+  Whenever a global is first accessed or mutated within a scope we keep
+  recording it until the scope ends, and we ignore untouched globals so
+  that module-wide dumps do not occur. The concrete mechanics of
+  detecting these accesses will be documented in a follow-up issue.
+
+* Do not apply name-based filtering for now. Even dunder variables and
+  function objects should appear in the trace so we can evaluate the
+  output. Prepare clear `/examples` programs that demonstrate the
+  unfiltered captures for product review.
+
+* Keep using the existing `encode_value` implementation. Only extend it
+  when the recorder would otherwise crash; sampling improvements arrive
+  with the dedicated encoder work.
+
 ### Further research
 We can improve our idea how to implement the issue by looking at the following:
 - Check ../codetracer-ruby-recorder which also tries to record the values but for Ruby. Maybe we can use some ideas from there.
 - Check ../runtime_tracing to understand what capabilities the tracing library supports.
+- Draft a separate issue describing the instrumentation we need for
+  tracking first-time global accesses within a scope.
 
 ### Status
 High priority - not started.
