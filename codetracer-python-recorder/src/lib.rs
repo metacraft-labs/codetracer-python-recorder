@@ -1,11 +1,10 @@
 use std::fs;
-use std::path::{PathBuf, Path};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::fmt;
 
 pub mod code_object;
 pub mod tracer;

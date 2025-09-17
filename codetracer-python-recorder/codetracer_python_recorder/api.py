@@ -1,9 +1,11 @@
 """High-level tracing API built on a Rust backend.
 
-This module exposes a minimal interface for starting and stopping
-runtime traces. The heavy lifting is delegated to the
-`codetracer_python_recorder` Rust extension which hooks
-into `runtime_tracing` and `sys.monitoring`.
+This module exposes a minimal interface for starting and stopping runtime
+traces. The heavy lifting is delegated to the Rust extension which hooks
+into ``sys.monitoring`` and emits the ``runtime_tracing`` format. Every
+recorded line now captures the full locals snapshot for the active frame.
+Imported modules and ``__builtins__`` are filtered when present. Global
+variable tracking will follow in ISSUE-013.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PyTuple, PyDict};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyTuple};
 
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 use runtime_tracing::NonStreamingTraceWriter;
@@ -175,6 +175,44 @@ impl RuntimeTracer {
         let first_line = code.first_line(py)?;
         Ok(TraceWriter::ensure_function_id(&mut self.writer, name, Path::new(filename), Line(first_line as i64)))
     }
+
+    fn collect_locals<'py>(&mut self, py: Python<'py>) -> Vec<(String, ValueRecord)> {
+        let sys = py.import("sys").expect("sys module available for locals snapshot");
+        let frame = sys
+            .getattr("_getframe")
+            .expect("sys._getframe available")
+            .call1((0,))
+            .expect("_getframe(0) returns current frame");
+        let locals_obj = frame
+            .getattr("f_locals")
+            .expect("frame.f_locals attribute present");
+        let items = locals_obj
+            .call_method0("items")
+            .expect("f_locals.items() available");
+        let locals = PyDict::from_sequence(&items).expect("locals items sequence convertible to dict");
+
+        let mut entries: Vec<(String, Py<PyAny>)> = Vec::with_capacity(locals.len());
+        for (key, value_obj) in locals.iter() {
+            let name: String = key.extract().expect("locals keys are str");
+            if name == "__builtins__" {
+                continue;
+            }
+            if value_obj.downcast::<PyModule>().is_ok() {
+                continue;
+            }
+            entries.push((name, value_obj.unbind()));
+        }
+
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut snapshot: Vec<(String, ValueRecord)> = Vec::with_capacity(entries.len());
+        for (name, value_obj) in entries {
+            let bound = value_obj.into_bound(py);
+            let encoded = self.encode_value(py, &bound);
+            snapshot.push((name, encoded));
+        }
+        snapshot
+    }
 }
 
 fn to_py_err(e: Box<dyn std::error::Error>) -> pyo3::PyErr {
@@ -215,7 +253,7 @@ impl Tracer for RuntimeTracer {
                 // for the positional slice; `co_posonlyargcount` is only needed if we want to
                 // distinguish the two groups, which we do not here.
                 let argcount = code.arg_count(py)? as usize; // total positional (pos-only + pos-or-kw)
-                let posonly: usize = code
+                let _posonly: usize = code
                     .as_bound(py)
                     .getattr("co_posonlyargcount")?
                     .extract()?;
@@ -306,6 +344,9 @@ impl Tracer for RuntimeTracer {
         }
         if let Ok(filename) = code.filename(py) {
             TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
+            for (name, value) in self.collect_locals(py) {
+                TraceWriter::register_variable_with_full_value(&mut self.writer, &name, value);
+            }
         }
     }
 

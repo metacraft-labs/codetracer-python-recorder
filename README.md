@@ -2,13 +2,13 @@
 
 This repository now hosts two related projects:
 
-- codetracer-pure-python-recorder — the existing pure-Python prototype that records [CodeTracer](https://github.com/metacraft-labs/CodeTracer) traces using sys.settrace.
-- codetracer-python-recorder — a new, Rust-backed Python extension module (PyO3) intended to provide a faster and more featureful recorder.
+- codetracer-pure-python-recorder — the original pure-Python prototype built on `sys.settrace`. **This recorder is now deprecated** and kept only for archival purposes.
+- codetracer-python-recorder — the Rust-backed Python extension module (PyO3) that supersedes the pure-Python tracer. It is the source of truth for new tracing behaviour.
 
 > [!WARNING]
 > Both projects are early-stage prototypes. Contributions and discussion are welcome!
 
-### codetracer-pure-python-recorder
+### codetracer-pure-python-recorder *(deprecated)*
 
 Install from PyPI:
 
@@ -34,16 +34,22 @@ python src/trace.py <path to python file>
 
 ### codetracer-python-recorder (Rust-backed)
 
-A separate Python module implemented in Rust with PyO3 and built via maturin lives under:
-crates/codetracer-python-recorder/
+The actively developed recorder is implemented in Rust with PyO3 and lives under `codetracer-python-recorder/`.
+
+Locals capture behaviour (introduced in ISSUE-012):
+
+- Every `LINE` event recorded through `sys.monitoring` now emits the full set of locals visible to that frame. This applies to functions, class bodies, comprehensions, generators/coroutines, and module-level frames.
+- Snapshots are emitted on **every** step; values are never diffed or elided. The recorded state reflects the locals **at the start of the reported line**.
+- Imported modules (`types.ModuleType`) and `__builtins__` are filtered from snapshots when present, keeping the trace focused on user data.
+- Global variables are not tracked yet; that work will land with ISSUE-013. Until then, module-level locals mirror the global namespace.
 
 Basic workflow:
 
 - Build/dev install the Rust module:
-  - maturin develop -m crates/codetracer-python-recorder/Cargo.toml
+  - `maturin develop -m codetracer-python-recorder/Cargo.toml`
 - Use in Python:
-  - from codetracer_python_recorder import hello
-  - hello()
+  - `from codetracer_python_recorder import trace`
+  - `python -m codetracer_python_recorder --codetracer-format=json examples/locals_snapshot.py`
 
 ### Future directions
 
