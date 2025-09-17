@@ -32,3 +32,26 @@
   A: Just use the `encode_value` function as is and don't change it
   unless we have missing functionality which causes our recorder to
   crash. We'll work on this later.
+
+# Questions from 2025-09-17 (later)
+
+- Q: For ISSUE-012, when a frame resolves a global name to a builtin
+  or imported module (e.g., calling `len` or referencing `math`), do
+  we record that object once it is touched? Capturing builtins/modules
+  might add noise, but skipping them could hide state the UI needs.
+
+  A: Don't capture them. Clearly document this design choice
+
+- Q: Once a global name becomes tracked within a scope, should we
+  re-emit its value on every subsequent step like we do for locals, or
+  only when the value changes? The spec says "keep recording it until
+  the scope ends" but does not define the cadence.
+  
+  A: We should treat is in the same way as locals - emit the value at each step.
+
+- Q: How should we treat non-function scopes such as class bodies,
+  comprehensions, and generator expressions? Do we capture their
+  locals (e.g., class attributes or comprehension temporaries) at each
+  line, or restrict ISSUE-012 to function/module frames?
+  
+  A: Let's capture their locals as well.
