@@ -134,7 +134,7 @@
   
   A: We should raise an error
 
-# Questions from 2025-09-18 - iteration 6
+# Questions from 2025-09-17 - iteration 6
 
 - Q: ISSUE-012: Module-level LINE events will capture locals dict
   entries for imported modules (e.g., math) and __builtins__. Should
@@ -146,7 +146,7 @@
   modules and __builtins__ then let's do it. If we require more
   instrumentation (e.g. hooking to INSTRUCTION events) then let's not.
 
-# Questions from 2025-09-18 - iteration 7
+# Questions from 2025-09-17 - iteration 7
 
 - Q: When using `codetracer.start(..., start_on_enter=...)`, should
   tracing remain active for the rest of the process once execution
@@ -166,8 +166,36 @@
   forward.
 
   A: For now only support `binary` and `json`
-# Questions from 2025-09-18 - iteration 8
+# Questions from 2025-09-17 - iteration 8
 
-- Q: ISSUE-012: When module-level locals snapshots include module objects, should we filter out every value whose type is `types.ModuleType`, or only drop modules whose source lives outside the traced project root? I want to avoid hiding project modules that carry useful state while still keeping third-party modules from flooding the UI.
+- Q: ISSUE-012: When module-level locals snapshots include module
+  objects, should we filter out every value whose type is
+  `types.ModuleType`, or only drop modules whose source lives outside
+  the traced project root? I want to avoid hiding project modules that
+  carry useful state while still keeping third-party modules from
+  flooding the UI.
   
   A: Filter out everything
+
+# Questions from 2025-09-17 - iteration 9
+
+- Q: [ISSUE-015] When we pause monitoring around locals encoding to
+  prevent the recursive crashes from user-defined __str__/__repr__
+  methods, we stop recording the lines those methods execute. Is that
+  acceptable for the initial fix, or should we avoid invoking user
+  code at all (for example by emitting a placeholder) so that no
+  execution goes untraced?
+  
+  A: Actually I don't think that ISSUE-015 is correct. Since all of
+  the code is triggered by a monitoring event, it will probably run
+  without any instrumentation. But I don't know. We should make an
+  experiment to verify sys.monitoring behaviour before we decide what
+  to do next.
+
+- Q: [ISSUE-010] Dicts will be serialized as a sequence of (key,
+  value) tuples per the product decision. Should the lang_type
+  metadata we emit stay as "Dict" to preserve existing fixtures, or
+  switch to "Sequence" so downstream consumers see terminology that
+  matches the representation?
+
+  A: Stay as "Dict"
