@@ -35,9 +35,9 @@ but this decision applies across the board.
 
 ### Definition of Done
 - Update both recorders (or confirm existing behavior) so that all dicts are
-  encoded as sequences of `(key, value)` tuples.
-- Keys are encoded through `encode_value` without special-casing strings, and
-  fixtures cover nested dicts and non-string keys.
+  encoded as sequences of `(key, value)` tuples, regardless of capture site.
+- Keys are encoded through `encode_value` without special-casing strings or
+  falling back to `repr`, and fixtures cover nested dicts and non-string keys.
 - Docs/specs describe this behavior explicitly, including examples.
 - Remove defensive fallbacks that conflict with the product decision.
 
@@ -71,11 +71,14 @@ We need a comprehensive test suite for the new behavior.
   capture and generator/coroutine suspension points (even though we only record
   on `LINE` events).
 - Documentation outlines the new locals-capture behavior, clearly marks the
-  pure-Python recorder as deprecated, and explains whether imported
+  pure-Python recorder as deprecated, explains whether imported
   modules/`__builtins__` are filtered (skip them when practical, otherwise
-  document the limitation).
+  document the limitation), and calls out that globals remain locals-only until
+  ISSUE-013 lands.
 - Unit/integration tests cover representative scopes and ensure the existing
   `encode_value` usage is stable.
+- Shipping scope is locals-only; document that global tracking is planned for
+  ISSUE-013 and ensure tests/examples reinforce the current limitation.
 
 ### Design choices
 
@@ -83,6 +86,8 @@ We need a comprehensive test suite for the new behavior.
 * Rely on existing `runtime_tracing` hooks and capture locals for every traced
   scope, including non-function scopes.
 * Continue to use `encode_value` as-is and only extend it to prevent crashes.
+* Deliver a locals-only implementation first; defer global instrumentation to
+  ISSUE-013 while documenting the gap.
 * Do not filter by variable name—include dunder variables and function objects
   so product can review raw output.
 * Filter builtins and imported modules when it can be done without additional
@@ -118,6 +123,8 @@ skip builtins and imported modules.
   generator/coroutine scenarios.
 - Outline the data we need from `runtime_tracing` or additional hooks, and add
   tasks/issues if the library requires changes.
+- Define the cadence for emitting tracked globals, confirming they are
+  re-emitted on every `LINE` event once observed.
 - Document how we will avoid capturing builtins/imported modules while still
   emitting ordinary globals on every subsequent step.
 - Provide tests/fixtures describing expected traces for new global tracking
@@ -152,6 +159,8 @@ expectation.
 ### Definition of Done
 - The Rust recorder validates the `format` argument and raises a descriptive
   error for unsupported values instead of silently changing the output format.
+- Only `binary` and `json` (case-insensitive) are accepted; other values raise
+  an error.
 - Tests cover at least one supported format and a representative unsupported
   value to ensure the behavior stays stable.
 - Public-facing docs mention the stricter error handling and list the accepted
