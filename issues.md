@@ -40,6 +40,9 @@ but this decision applies across the board.
   falling back to `repr`, and fixtures cover nested dicts and non-string keys.
 - Docs/specs describe this behavior explicitly, including examples.
 - Remove defensive fallbacks that conflict with the product decision.
+- Preserve the emitted `lang_type="Dict"` metadata so downstream consumers see
+  the existing dictionary terminology even though the payload is a sequence of
+  tuples.
 
 ### Proposed solution
 - Standardize on the `(key, value)` tuple representation, relying entirely on
@@ -184,17 +187,24 @@ Locals snapshots now call `encode_value` for every binding. When the fallback
 path hits an object with a Python-defined `__str__`/`__repr__`, we execute user
 code while monitoring is active. The first line event inside that `__str__`
 re-enters `collect_locals`, which then tries to encode the same object again and
-recurses until the process crashes. ISSUE-012 cannot ship until this is fixed.
+recurses until the process crashes. ISSUE-012 cannot ship until we confirm
+whether this feedback loop truly reproduces under `sys.monitoring`; product has
+asked for an experiment to verify the runtime behavior before we pursue guards
+or other mitigations.
 
 ### Definition of Done
-- Pause monitoring (or otherwise guard re-entry) while encoding locals so nested
-  `collect_locals` invocations cannot occur.
-- Add regression coverage with a local whose `__str__` executes Python code.
-- Document the reentrancy guard in the runtime tracer module.
+- Design and run an experiment that checks whether `sys.monitoring` continues
+  tracing while user-defined `__str__`/`__repr__` implementations execute during
+  locals encoding.
+- Document the findings and update ISSUE-012/ISSUE-015 with the confirmed
+  behavior, including whether recursive crashes are reproducible.
+- Capture the minimal repro script (or explain why one cannot be produced) so
+  future work on locals encoding starts from verified data.
 
 ### Proposed solution
-- Use a per-thread reentrancy flag or temporarily disable monitoring around the
-  locals snapshot encoding loop.
+- Start with a lightweight experiment to observe monitoring callbacks during
+  `encode_value` and defer any reentrancy guard design until the behavior is
+  understood.
 
 ### Status
-New.
+In progress - experiment pending.
