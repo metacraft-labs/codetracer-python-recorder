@@ -2,96 +2,126 @@
 
 ## ISSUE-009
 ### Description
-Unify list/sequence `lang_type` naming across recorders. The Rust tracer now
-emits `TypeKind::Seq` with name "List" for Python `list`, while the
-pure-Python recorder uses "Array". This divergence can fragment the trace
-schema and complicate downstream consumers.
+Earlier we planned to unify the list/sequence `lang_type` naming across both
+recorders. The Rust tracer already emits `TypeKind::Seq` with the name
+"List", and the pure-Python recorder continues to report "Array". With the
+pure-Python implementation now deprecated, we only need to ensure the Rust
+recorder stays aligned with the spec and that downstream consumers understand
+the intentional divergence.
 
 ### Definition of Done
-- Both recorders emit the same `lang_type` for Python list values.
-- Fixtures and docs/spec are updated to reflect the chosen term.
-- Cross-recorder tests pass with consistent types.
+- Confirm the Rust recorder still emits `lang_type="List"` for Python lists.
+- Document in the schema/README that the pure-Python recorder remains on
+  "Array" because it is deprecated.
+- Notify dependent fixtures/specs so they reference the Rust recorder as the
+  source of truth.
 
 ### Proposed solution
-- We will use "List" in order to match existing Python nomenclature
+- Add documentation clarifying the deprecation and accepted divergence; no
+  changes to the pure-Python recorder are planned.
 
 ### Status
-Low priority. We won't work on this unless it blocks another issue.
+Backlog. Documentation-only follow-up; no recorder changes planned.
 
 
 ## ISSUE-010
 ### Description
-Clarify scope of dict structural encoding and key typing. The current change
-encodes any Python `dict` as a `Sequence` of `(key, value)` tuples and falls
-back to generic encoding for non-string keys. Repo rules favor fail-fast over
-defensive fallbacks, and ISSUE-008 focused specifically on `**kwargs`.
+Clarify scope of dict structural encoding and key typing. Product has decided
+that every Python `dict` we record should be represented as a `Sequence` of
+`(key, value)` tuples, regardless of where it appears. Keys that are not
+strings must still be encoded using `encode_value` so that non-string keys do
+not cause the recorder to fail. ISSUE-008 focused specifically on `**kwargs`,
+but this decision applies across the board.
 
 ### Definition of Done
-- Decide whether structural dict encoding should apply only to kwargs or to all
-  dict values; document the choice.
-- If limited to kwargs, restrict structured encoding to kwargs capture sites.
-- If applied generally, define behavior for non-string keys (e.g., fail fast)
-  and add tests for nested and non-string-key dicts.
+- Update both recorders (or confirm existing behavior) so that all dicts are
+  encoded as sequences of `(key, value)` tuples.
+- Keys are encoded through `encode_value` without special-casing strings, and
+  fixtures cover nested dicts and non-string keys.
+- Docs/specs describe this behavior explicitly, including examples.
+- Remove defensive fallbacks that conflict with the product decision.
 
 ### Proposed solution
-- Prefer failing fast on non-string keys in contexts representing kwargs; if
-  general dict encoding is retained, update the spec and tests and remove the
-  defensive fallback for key encoding.
+- Standardize on the `(key, value)` tuple representation, relying entirely on
+  `encode_value` for each component. Clean up the fallback logic so the encoder
+  behaves consistently.
 
 ### Status
-Low priority. We won't work on this until a user reports that it causes issues.
+Low priority. We will not work on this until it blocks another issue or causes
+user-reported problems.
 
 ## ISSUE-012
 ### Description
-Record values of local and global variables with the recorder.
+Extend the Rust-based recorder so it captures the values of local variables on
+every traced step, allowing the UI to show how state evolves over time. Global
+variable tracking will land in a follow-up (ISSUE-013). The pure-Python
+recorder is deprecated and remains untouched, but we must document that clearly
+in the repository.
 
-We need to store the state and be able to track how it changes over time.
+We need a comprehensive test suite for the new behavior.
 
-We need a comprehensive test suite for our solution.
+### Definition of Done
+- The Rust recorder emits a full locals snapshot on each `LINE` event for
+  functions, class bodies, comprehensions, and generator expressions.
+- Locals are re-emitted on every step; we do not attempt to diff or elide
+  unchanged values.
+- Example scripts are added under `/examples` to illustrate unfiltered locals
+  capture and generator/coroutine suspension points (even though we only record
+  on `LINE` events).
+- Documentation outlines the new locals-capture behavior, states that
+  builtins/imported modules are not recorded, and calls out that the
+  pure-Python recorder is deprecated.
+- Unit/integration tests cover representative scopes and ensure the existing
+  `encode_value` usage is stable.
 
 ### Design choices
 
-* Current runtime_tracing implementation requires that we store all
-  variables at each step. The variables which we record after a given
-  step will be what is shown in the UI when we are at this step.
-  
-* This means that at each step we need to find out ALL variables which
-  are accessible at the step. Then we need to encode each one using
-  our value encoder. The value encoder is currently very basic, we
-  will improve it as a part of a separate issue. However we don't
-  intend to encode full values, we will be forced to sample the
-  values.
-
-* Track locals eagerly and only capture globals that the scope touches.
-  Whenever a global is first accessed or mutated within a scope we keep
-  recording it until the scope ends, and we ignore untouched globals so
-  that module-wide dumps do not occur. Skip builtins and imported modules
-  even when they are referenced, and make sure this choice is clearly
-  documented. The concrete mechanics of
-  detecting these accesses will be documented in a follow-up issue.
-
-* Once a global becomes tracked, emit its value on every subsequent step,
-  just like we do for locals.
-
-* Do not apply name-based filtering for now. Even dunder variables and
-  function objects should appear in the trace so we can evaluate the
-  output. Prepare clear `/examples` programs that demonstrate the
-  unfiltered captures for product review.
-
-* Capture locals for non-function scopes such as class bodies,
-  comprehensions, and generator expressions so their state appears in
-  the trace.
-
-* Keep using the existing `encode_value` implementation. Only extend it
-  when the recorder would otherwise crash; sampling improvements arrive
-  with the dedicated encoder work.
+* Target the Rust recorder only; the pure-Python implementation is deprecated.
+* Rely on existing `runtime_tracing` hooks and capture locals for every traced
+  scope, including non-function scopes.
+* Continue to use `encode_value` as-is and only extend it to prevent crashes.
+* Do not filter by variable name—include dunder variables and function objects
+  so product can review raw output.
+* Skip builtins and imported modules even when referenced; document this choice
+  for future global tracking.
+* Generator/coroutine yields do not require special events for now; examples
+  should demonstrate the resulting traces.
+* Global tracking and LOAD_GLOBAL/STORE_GLOBAL instrumentation is deferred to
+  ISSUE-013.
 
 ### Further research
 We can improve our idea how to implement the issue by looking at the following:
 - Check ../codetracer-ruby-recorder which also tries to record the values but for Ruby. Maybe we can use some ideas from there.
 - Check ../runtime_tracing to understand what capabilities the tracing library supports.
-- Draft a separate issue describing the instrumentation we need for
-  tracking first-time global accesses within a scope.
+- Follow ISSUE-013 for the instrumentation required to track first-time global
+  accesses within a scope.
 
 ### Status
 High priority - not started.
+
+## ISSUE-013
+### Description
+Design the instrumentation the Rust recorder needs to start capturing global
+variables only after a scope first touches them. We must detect
+`LOAD_GLOBAL`/`STORE_GLOBAL` (and equivalents) so we can begin recording the
+value without scanning every entry in `frame.f_globals`, while continuing to
+skip builtins and imported modules.
+
+### Definition of Done
+- Specify how the recorder observes global accesses and mutations, including
+  generator/coroutine scenarios.
+- Outline the data we need from `runtime_tracing` or additional hooks, and add
+  tasks/issues if the library requires changes.
+- Document how we will avoid capturing builtins/imported modules while still
+  emitting ordinary globals on every subsequent step.
+- Provide tests/fixtures describing expected traces for new global tracking
+  behavior.
+
+### Proposed solution
+- Investigate instruction-level tracing (e.g., subscribing to LOAD/STORE
+  events) and prototype a minimal detector that can toggle global capture per
+  scope.
+- Feed findings back into ISSUE-012 once ready for implementation.
+
+### Status
+Not started.
