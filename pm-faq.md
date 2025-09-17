@@ -87,14 +87,49 @@
   should document this clearly in the repo docs.
 # Questions from 2025-09-17 - iteration 4
 
-- Q: ISSUE-012: When generators or coroutines yield control back to the caller, do we need to emit a full locals snapshot on the `PY_YIELD` event (and again on the next `PY_RESUME`) so the UI can show state at suspension points, or is capturing locals on `LINE` events alone sufficient?
+- Q: ISSUE-012: When generators or coroutines yield control back to
+  the caller, do we need to emit a full locals snapshot on the
+  `PY_YIELD` event (and again on the next `PY_RESUME`) so the UI can
+  show state at suspension points, or is capturing locals on `LINE`
+  events alone sufficient?
   
-  A: We don't need this for now. But add scripts relevant to this quesition in `/examples` in order to be able to see how the UI behaves
+  A: We don't need this for now. But add scripts relevant to this
+  quesition in `/examples` in order to be able to see how the UI
+  behaves
 
-- Q: ISSUE-010: Since all dicts will use the (key, value) sequence encoding, what should the recorder do when it encounters a non-string key? Should we raise and terminate tracing to stay fail-fast, or keep the current best-effort fallback that encodes the key via `repr`?
+- Q: ISSUE-010: Since all dicts will use the (key, value) sequence
+  encoding, what should the recorder do when it encounters a
+  non-string key? Should we raise and terminate tracing to stay
+  fail-fast, or keep the current best-effort fallback that encodes the
+  key via `repr`?
   
-  A: Just encode the key using `encode_value`. We don't care if it is a string or not.
+  A: Just encode the key using `encode_value`. We don't care if it is
+  a string or not.
 
-- Q: ISSUE-009: Now that the pure-Python recorder is deprecated, do we still need to rename its list `lang_type` to `List` for parity, or can we leave it untouched and focus on bringing the Rust recorder in line with the spec?
+- Q: ISSUE-009: Now that the pure-Python recorder is deprecated, do we
+  still need to rename its list `lang_type` to `List` for parity, or
+  can we leave it untouched and focus on bringing the Rust recorder in
+  line with the spec?
   
   A: We don't need to rename it.
+
+# Questions from 2025-09-17 - iteration 5
+
+- Q: ISSUE-012: `sys.monitoring` fires `LINE` events for module-level
+  execution where `frame.f_locals` mirrors
+  `frame.f_globals`. Capturing those frames today would dump the
+  entire module namespace on every step, while ISSUE-013 (global
+  tracking) is still pending. Should we skip module-level frames until
+  the global-access instrumentation lands, or do you prefer we emit
+  those snapshots even though they will include untouched globals?
+  
+  A: We should emit those snapshots, because some scripts run
+  important code at the global scope. 
+
+- Q: Public API (`codetracer.start`): right now the Rust backend
+  silently falls back to binary output when the `format` argument is
+  unrecognized. Do you want us to keep that permissive fallback, or
+  should we raise an error so callers immediately know the format
+  value is unsupported?
+  
+  A: We should raise an error
