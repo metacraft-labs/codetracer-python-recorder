@@ -166,3 +166,8 @@
   forward.
 
   A: For now only support `binary` and `json`
+# Questions from 2025-09-18 - iteration 8
+
+- Q: ISSUE-012: When module-level locals snapshots include module objects, should we filter out every value whose type is `types.ModuleType`, or only drop modules whose source lives outside the traced project root? I want to avoid hiding project modules that carry useful state while still keeping third-party modules from flooding the UI.
+  
+  A: Filter out everything
