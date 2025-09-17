@@ -111,7 +111,7 @@ We can improve our idea how to implement the issue by looking at the following:
   accesses within a scope.
 
 ### Status
-High priority - not started.
+In progress - blocked by ISSUE-015.
 
 ## ISSUE-013
 ### Description
@@ -177,3 +177,24 @@ expectation.
 
 ### Status
 Backlog.
+
+## ISSUE-015
+### Description
+Locals snapshots now call `encode_value` for every binding. When the fallback
+path hits an object with a Python-defined `__str__`/`__repr__`, we execute user
+code while monitoring is active. The first line event inside that `__str__`
+re-enters `collect_locals`, which then tries to encode the same object again and
+recurses until the process crashes. ISSUE-012 cannot ship until this is fixed.
+
+### Definition of Done
+- Pause monitoring (or otherwise guard re-entry) while encoding locals so nested
+  `collect_locals` invocations cannot occur.
+- Add regression coverage with a local whose `__str__` executes Python code.
+- Document the reentrancy guard in the runtime tracer module.
+
+### Proposed solution
+- Use a per-thread reentrancy flag or temporarily disable monitoring around the
+  locals snapshot encoding loop.
+
+### Status
+New.
