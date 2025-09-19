@@ -298,16 +298,34 @@ ai-work-step-inner:
 	{{workspace_just}} review-change-inner
 
 # Use this step when starting to work on a new issue
-work workspace_id rev="@": (run workspace_id "work" "work-inner" rev)
+work workspace_id rev="@" start-from='': (run workspace_id "work" "work-inner" rev start-from)
 
 [script]
-work-inner rev:
+work-inner rev start-from='':
 	jj edit {{rev}}
+	start_from="{{start-from}}"
+	echo "AAA"
 	while true; do
-	  {{workspace_just}} questions-for-pm-inner
-	  {{workspace_just}} pick-next-issue-inner
-	  [ -f next-issue.md ] || break
-	  {{workspace_just}} ai-work-step-inner
+	  if [ "$start_from" = '' ] || [ "$start_from" = "questions" ]; then
+		{{workspace_just}} questions-for-pm-inner
+		start_from=''
+	  fi
+	  echo "BBB"
+	  if [ "$start_from" = '' ] || [ "$start_from" = "pick" ]; then
+		{{workspace_just}} pick-next-issue-inner
+	  	[ -f next-issue.md ] || break
+		start_from=''
+	  fi
+	  echo "CCC"
+	  if [ "$start_from" = '' ] || [ "$start_from" = "code" ]; then
+		{{workspace_just}} next-issue-inner
+		start_from=''
+	  fi
+	  echo "DDD"
+	  if [ "$start_from" = '' ] || [ "$start_from" = "review" ]; then
+		{{workspace_just}} review-change-inner
+		start_from=''
+	  fi
 	  jj split issues.md -m "issues: Update after review"
 	  jj edit @-
 	  #{{workspace_just}} human-work-step-inner
