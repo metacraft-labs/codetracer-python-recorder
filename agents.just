@@ -2,11 +2,10 @@ set unstable
 # We are using an unstable feature here: [script] recipies. To
 # configure the script interpreter you can do
 #
-# set script-interpreter := ...
+# set script-interpreter := ["sh","-eu"]
 #
 # The default script interpreter crashes on error which is the
 # behavior that we desire.
-
 
 # Runs the given task in a workspace
 workspace_just := "just -d . --justfile .agent-tools/agents.just"
@@ -23,7 +22,8 @@ consolidate workspace_id start_change_id end_change_id: (run workspace_id "conso
 
 [script]
 consolidate-inner start_change_id end_change_id:
-	read -r -d '' INSTRUCTIONS <<-EOF
+	INSTRUCTIONS=$(
+		cat <<-'EOF'
 	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
 
 	You need to produce a full detailed specification in the folder 'specs/'. Imagine that the changes that the diff shows disappeared and we had to implement the functionality from scratch. The specification must contain all necessary details in order to be possible to implement equivalent functionality.
@@ -42,6 +42,7 @@ consolidate-inner start_change_id end_change_id:
 	`jj diff --from {{start_change_id}} --to {{end_change_id}}`
 
 	EOF
+	)
 	
 	jj new -r {{start_change_id}} -m "Consolidation in progress"	
 	
@@ -65,10 +66,14 @@ workspace-sync-tools workspace_id:
 
 questions-for-pm workspace_id rev='@': (run workspace_id "questions-for-pm" "questions-for-pm-inner" rev)
 
+
 [script]
 questions-for-pm-inner rev='@':
-	read -r -d '' INSTRUCTIONS_1 <<-EOF
-	    1. Read the current state of open issues in issues.md
+	echo "AAA"
+	echo "BBB"
+	INSTRUCTIONS_1=$(
+		cat <<-'EOF'
+		1. Read the current state of open issues in issues.md
 		2. Read relevant state of the code base
 		3. Read 'pm-faq.md' which contains previous questions asked to the product manager and her answers.
 		4. Create questions to the product manager to clarify unclear design choices, priorities and so on. If everything is clear and no questions are needed do nothing.
@@ -76,8 +81,11 @@ questions-for-pm-inner rev='@':
 
 		# Rules for the pm-faq.md file
 		- Only ask questions related to issues in issues.md. In each question clearly mark which issues motivated this question
-	EOF
 
+	EOF
+	)
+
+	echo "BBB"
 	jj new -r {{rev}} -m "Questions for the PM"
 	PM_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
@@ -130,7 +138,8 @@ pm-flow-update workspace_id rev='@': (run workspace_id "pm-flow-update" "pm-flow
 
 [script]
 pm-flow-update-inner rev='@':
-	read -r -d '' INSTRUCTIONS_2 <<-EOF
+	INSTRUCTIONS_2=$(
+		cat <<-'EOF'
 	    1. Read the current state of open issues in 'issues.md'
 		2. Read the conversation with the product manager so far in 'pm-faq.md'. Read ONLY THE LATEST SECTION. IGNORE PREVIOUS SECTIONS as they were already handled
 		3. If necessary read relevant parts of the code
@@ -142,6 +151,7 @@ pm-flow-update-inner rev='@':
 
 		`cat rules/issues.md`
 	EOF
+	)
 
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
@@ -325,10 +335,12 @@ review-old workspace_id start_rev end_rev: (run workspace_id "review-old" "revie
 review-old-inner start_rev end_rev:
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 
-	read -r -d '' INSTRUCTIONS <<-EOF
+	INSTRUCTIONS=$(
+		cat <<-'EOF'
 	    I was working on something long ago but I forgot what I was doing. Go over the changes and bring me up-to-speed. The changes in question are all changes between "{{start_rev}}" and "{{end_rev}}".
 		Recall that we are using Jujutsu VCS. Check the documentation on the web if you don''t know something about it.
 	EOF
+	)
 
 	{{codex-ui}} "$INSTRUCTIONS"
 
