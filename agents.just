@@ -1,5 +1,14 @@
-# Runs the given task in a workspace
+set unstable
+# We are using an unstable feature here: [script] recipies. To
+# configure the script interpreter you can do
+#
+# set script-interpreter := ...
+#
+# The default script interpreter crashes on error which is the
+# behavior that we desire.
 
+
+# Runs the given task in a workspace
 workspace_just := "just -d . --justfile .agent-tools/agents.just"
 
 [private]
@@ -12,8 +21,8 @@ codex-ui := "codex --config model_reasoning_effort=high --full-auto"
 
 consolidate workspace_id start_change_id end_change_id: (run workspace_id "consolidate" "consolidate-inner" start_change_id end_change_id)
 
+[script]
 consolidate-inner start_change_id end_change_id:
-	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS <<-EOF
 	You will be given a diff with 'jj diff --from {{start_change_id}} --to {{end_change_id}}'. The task is to write a specification which describes the introduced changes.
 
@@ -56,8 +65,8 @@ workspace-sync-tools workspace_id:
 
 questions-for-pm workspace_id rev='@': (run workspace_id "questions-for-pm" "questions-for-pm-inner" rev)
 
+[script]
 questions-for-pm-inner rev='@':
-	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS_1 <<-EOF
 	    1. Read the current state of open issues in issues.md
 		2. Read relevant state of the code base
@@ -119,8 +128,8 @@ questions-for-pm-inner rev='@':
 
 pm-flow-update workspace_id rev='@': (run workspace_id "pm-flow-update" "pm-flow-update-inner" rev)
 
+[script]
 pm-flow-update-inner rev='@':
-	#!/usr/bin/env sh
 	read -r -d '' INSTRUCTIONS_2 <<-EOF
 	    1. Read the current state of open issues in 'issues.md'
 		2. Read the conversation with the product manager so far in 'pm-faq.md'. Read ONLY THE LATEST SECTION. IGNORE PREVIOUS SECTIONS as they were already handled
@@ -144,8 +153,8 @@ pm-flow-update-inner rev='@':
 
 next-issue workspace_id: (run workspace_id "next-issue" "next-issue-inner")
 
+[script]
 next-issue-inner:
-	#!/usr/bin/env sh
 	[ -f next-issue.md ] || exit 1
 
 	{{codex}} <<EOF
@@ -176,8 +185,8 @@ next-issue-inner:
 
 review-change workspace_id: (run workspace_id "review-change" "review-change-inner")
 
+[script]
 review-change-inner:
-	#!/usr/bin/env sh
 	{{codex}} <<EOF
 	1. Fetch the current changes by writing 'jj show'
 	2. Create a new change by calling 'jj new -m "review(codex): ..."'. For example 'jj new -m "review(codex): Issue 004 - introducing dog barking functionality"'
@@ -208,8 +217,8 @@ review-change-inner:
 
 tidy-issues workspace_id: (run workspace_id "tidy-issues" "tidy-issues-inner")
 
+[script]
 tidy-issues-inner:
-	#!/usr/bin/env sh
 	{{codex}} <<EOF
 	1. Read the file '/issues.md'.
 	2. Check if it follows the rules listed below
@@ -224,8 +233,8 @@ tidy-issues-inner:
 
 archive-issues workspace_id: (run workspace_id "archive-issues" "archive-issues-inner")
 
+[script]
 archive-issues-inner:
-	#!/usr/bin/env sh
 	{{codex}} <<EOF
 	This is a task to archive done issues.
 	1. Read file '/issues.md'.
@@ -234,11 +243,12 @@ archive-issues-inner:
 	4. Change the status of all "Done" issues to "Archived"
 	5. Then move achived issues to '.archive/issues-yyyy-mm-dd.md' file. Use current date.
 	6. Finally update the file '/issues-overview.md'. It is a table of issues and statuses
+	EOF
 
 pick-next-issue workspace_id: (run workspace_id "pick-next-issue" "pick-next-issue-inner")
 
+[script]
 pick-next-issue-inner:
-	#!/usr/bin/env sh
 	{{codex}} <<EOF
 	1. Examine issues.md and choose a single issue to work on.
 	2. If no issue is chosen, then STOP and don''t do anything else.
@@ -251,9 +261,8 @@ pick-next-issue-inner:
 
 edit workspace_id rev='@': (run workspace_id "edit" "edit-inner" rev)
 
+[script]
 edit-inner rev='@':
-	#!/usr/bin/env sh
-
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
 	jj edit {{rev}}
 	
@@ -264,9 +273,8 @@ edit-inner rev='@':
 human-work-step workspace_id:
 	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow human-work-step -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} human-work-step-inner
 
-
+[script]
 human-work-step-inner:
-	#!/usr/bin/env sh
 	{{workspace_just}} edit-inner
 	jj split issues.md -m "issues: Update after review"
 	jj edit @-
@@ -274,19 +282,16 @@ human-work-step-inner:
 ai-work-step workspace_id:
 	bash scripts/agent-workspace.sh run {{workspace_id}} --workflow ai-work-step -- just --justfile .agent-tools/agents.just --set workspace_id {{workspace_id}} ai-work-step-inner
 
-
+[script]
 ai-work-step-inner:
-	#!/usr/bin/env sh
 	{{workspace_just}} next-issue-inner
 	{{workspace_just}} review-change-inner
 
 # Use this step when starting to work on a new issue
 work workspace_id rev="@": (run workspace_id "work" "work-inner" rev)
 
+[script]
 work-inner rev:
-	#!/usr/bin/env sh
-	echo AAAA: `pwd`
-	
 	jj edit {{rev}}
 	while true; do
 	  {{workspace_just}} questions-for-pm-inner
@@ -302,8 +307,8 @@ work-inner rev:
 # Current commit should be the last review commit
 continue-work workspace_id: (run workspace_id "continue-work" "continue-work-inner")
 
+[script]
 continue-work-inner:
-	#!/usr/bin/env sh
 	while true; do
 	  {{workspace_just}} human-work-step-inner
 	  {{workspace_just}} pick-next-issue-inner
@@ -316,10 +321,9 @@ test:
 
 review-old workspace_id start_rev end_rev: (run workspace_id "review-old" "review-old-inner" start_rev end_rev)
 
+[script]
 review-old-inner start_rev end_rev:
-	#!/usr/bin/env sh
 	CURRENT_CHANGE=`jj log -r @ --template 'change_id' --no-graph`
-	echo BBBB: `pwd`
 
 	read -r -d '' INSTRUCTIONS <<-EOF
 	    I was working on something long ago but I forgot what I was doing. Go over the changes and bring me up-to-speed. The changes in question are all changes between "{{start_rev}}" and "{{end_rev}}".
