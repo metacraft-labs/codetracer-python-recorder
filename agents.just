@@ -200,7 +200,8 @@ review-change-inner:
 	{{codex}} <<EOF
 	1. Fetch the current changes by writing 'jj show'
 	2. Create a new change by calling 'jj new -m "review(codex): ..."'. For example 'jj new -m "review(codex): Issue 004 - introducing dog barking functionality"'
-	3. Do a deep review of the change.
+	3. Run the tests and confirm that they pass ("just venv 3.13 dev test" and "just venv 3.12 dev test")
+	4. Do a deep review of the change.
 	   - Write your review inline in the code itself by using code comments starting with '//REVIEW(author)' (or '# REVIEW(author)') to record your review.
 	   - While reviewing make sure that the rules in '/rules' folder are satisfied by the change under review.
 	   - DO NOT make any other changes in the code except adding the above-mentioned review comments.

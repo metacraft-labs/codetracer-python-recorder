@@ -13,3 +13,4 @@ Follow these instructions for **ALL** human-readable text that you produce:
 * Write in plain language. Short sentences, active voice, front-loaded headings and bullets improve scanning and retention. 
 
 * Design for scanning. Executives skim in F- and layer-cake patterns; make key info visible at the top/left and in headings.
+
