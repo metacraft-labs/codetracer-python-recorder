@@ -1,0 +1,3 @@
+[profile.default]
+# Hard cap on wall-clock time for each individual test.
+test-timeout = "60s"

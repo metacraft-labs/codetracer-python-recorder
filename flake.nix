@@ -31,6 +31,8 @@
               rustc
               rustfmt
               clippy
+	      rust-analyzer
+	      cargo-nextest
 
               # Build tooling for Python extensions
               maturin
