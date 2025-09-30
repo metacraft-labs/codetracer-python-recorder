@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 use std::fmt;
 
 pub mod code_object;
-pub mod tracer;
 mod runtime_tracer;
+pub mod tracer;
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 pub use crate::tracer::{install_tracer, uninstall_tracer, EventSet, Tracer};
 
@@ -25,20 +25,14 @@ fn init_rust_logging_with_default(default_filter: &str) {
         let env = env_logger::Env::default().default_filter_or(default_filter);
         // Use a compact format with timestamps and targets to aid debugging.
         let mut builder = env_logger::Builder::from_env(env);
-        builder
-            .format_timestamp_micros()
-            .format_target(true);
+        builder.format_timestamp_micros().format_target(true);
         let _ = builder.try_init();
     });
 }
 
 /// Start tracing using sys.monitoring and runtime_tracing writer.
 #[pyfunction]
-fn start_tracing(
-    path: &str,
-    format: &str,
-    activation_path: Option<&str>,
-) -> PyResult<()> {
+fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) -> PyResult<()> {
     // Ensure logging is ready before any tracer logs might be emitted.
     // Default only our crate to debug to avoid excessive verbosity from deps.
     init_rust_logging_with_default("codetracer_python_recorder=debug");
@@ -49,26 +43,31 @@ fn start_tracing(
     // Interpret `path` as a directory where trace files will be written.
     let out_dir = Path::new(path);
     if out_dir.exists() && !out_dir.is_dir() {
-        return Err(PyRuntimeError::new_err("trace path exists and is not a directory"));
+        return Err(PyRuntimeError::new_err(
+            "trace path exists and is not a directory",
+        ));
     }
     if !out_dir.exists() {
         // Best-effort create the directory tree
-        fs::create_dir_all(&out_dir)
-            .map_err(|e| PyRuntimeError::new_err(format!("failed to create trace directory: {}", e)))?;
+        fs::create_dir_all(&out_dir).map_err(|e| {
+            PyRuntimeError::new_err(format!("failed to create trace directory: {}", e))
+        })?;
     }
 
     // Map format string to enum
     let fmt = match format.to_lowercase().as_str() {
         "json" => runtime_tracing::TraceEventsFileFormat::Json,
         // Use BinaryV0 for "binary" to avoid streaming writer here.
-        "binary" | "binaryv0" | "binary_v0" | "b0" => runtime_tracing::TraceEventsFileFormat::BinaryV0,
+        "binary" | "binaryv0" | "binary_v0" | "b0" => {
+            runtime_tracing::TraceEventsFileFormat::BinaryV0
+        }
         //TODO AI! We need to assert! that the format is among the known values.
         other => {
             eprintln!("Unknown format '{}', defaulting to binary (v0)", other);
             runtime_tracing::TraceEventsFileFormat::BinaryV0
         }
     };
-    
+
     // Build output file paths inside the directory.
     let (events_path, meta_path, paths_path) = match fmt {
         runtime_tracing::TraceEventsFileFormat::Json => (
@@ -90,17 +89,10 @@ fn start_tracing(
         // Program and args: keep minimal; Python-side API stores full session info if needed
         let sys = py.import("sys")?;
         let argv = sys.getattr("argv")?;
-        let program: String = argv
-            .get_item(0)?
-            .extract::<String>()?;
+        let program: String = argv.get_item(0)?.extract::<String>()?;
         //TODO: Error-handling. What to do if argv is empty? Does this ever happen?
 
-        let mut tracer = runtime_tracer::RuntimeTracer::new(
-            &program,
-            &[],
-            fmt,
-            activation_path,
-        );
+        let mut tracer = runtime_tracer::RuntimeTracer::new(&program, &[], fmt, activation_path);
 
         // Start location: prefer activation path, otherwise best-effort argv[0]
         let start_path: &Path = activation_path.unwrap_or(Path::new(&program));
