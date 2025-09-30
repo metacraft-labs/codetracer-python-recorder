@@ -47,6 +47,19 @@ pub struct EventSet(pub i32);
 
 pub const NO_EVENTS: EventSet = EventSet(0);
 
+/// Outcome returned by tracer callbacks to control CPython monitoring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallbackOutcome {
+    /// Continue receiving events for the current location.
+    Continue,
+    /// Disable future events for the current location by returning
+    /// `sys.monitoring.DISABLE`.
+    DisableLocation,
+}
+
+/// Result type shared by tracer callbacks.
+pub type CallbackResult = PyResult<CallbackOutcome>;
+
 impl EventSet {
     pub const fn empty() -> Self {
         NO_EVENTS
@@ -141,6 +154,10 @@ pub fn free_tool_id(py: Python<'_>, tool: &ToolId) -> PyResult<()> {
 /// Each method corresponds to an event from `sys.monitoring`. Default
 /// implementations allow implementers to only handle the events they care
 /// about.
+///
+/// Every callback returns a `CallbackResult` so implementations can propagate
+/// Python exceptions or request that CPython disables future events for a
+/// location by yielding the `CallbackOutcome::DisableLocation` sentinel.
 pub trait Tracer: Send + Any {
     /// Downcast support for implementations that need to be accessed
     /// behind a `Box<dyn Tracer>` (e.g., for flushing/finishing).
@@ -165,14 +182,29 @@ pub trait Tracer: Send + Any {
         _offset: i32,
         _callable: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called on line execution.
-    fn on_line(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _lineno: u32) {}
+    fn on_line(
+        &mut self,
+        _py: Python<'_>,
+        _code: &CodeObjectWrapper,
+        _lineno: u32,
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
+    }
 
     /// Called when an instruction is about to be executed (by offset).
-    fn on_instruction(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _offset: i32) {}
+    fn on_instruction(
+        &mut self,
+        _py: Python<'_>,
+        _code: &CodeObjectWrapper,
+        _offset: i32,
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
+    }
 
     /// Called when a jump in the control flow graph is made.
     fn on_jump(
@@ -181,7 +213,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _destination_offset: i32,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when a conditional branch is considered.
@@ -191,7 +224,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _destination_offset: i32,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called at start of a Python function (frame on stack).
@@ -204,12 +238,19 @@ pub trait Tracer: Send + Any {
         _py: Python<'_>,
         _code: &CodeObjectWrapper,
         _offset: i32,
-    ) -> PyResult<()> {
-        Ok(())
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called on resumption of a generator/coroutine (not via throw()).
-    fn on_py_resume(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, _offset: i32) {}
+    fn on_py_resume(
+        &mut self,
+        _py: Python<'_>,
+        _code: &CodeObjectWrapper,
+        _offset: i32,
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
+    }
 
     /// Called immediately before a Python function returns.
     fn on_py_return(
@@ -218,7 +259,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _retval: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called immediately before a Python function yields.
@@ -228,7 +270,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _retval: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when a Python function is resumed by throw().
@@ -238,7 +281,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _exception: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when exiting a Python function during exception unwinding.
@@ -248,7 +292,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _exception: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when an exception is raised (excluding STOP_ITERATION).
@@ -258,7 +303,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _exception: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when an exception is re-raised.
@@ -268,7 +314,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _exception: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when an exception is handled.
@@ -278,7 +325,8 @@ pub trait Tracer: Send + Any {
         _code: &CodeObjectWrapper,
         _offset: i32,
         _exception: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when an artificial StopIteration is raised.
@@ -303,7 +351,8 @@ pub trait Tracer: Send + Any {
         _offset: i32,
         _callable: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Called when an exception is raised from any non-Python callable.
@@ -314,7 +363,8 @@ pub trait Tracer: Send + Any {
         _offset: i32,
         _callable: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
+        Ok(CallbackOutcome::Continue)
     }
 
     /// Flush any buffered state to storage. Default is a no-op.
@@ -333,9 +383,19 @@ struct Global {
     tracer: Box<dyn Tracer>,
     mask: EventSet,
     tool: ToolId,
+    disable_sentinel: Py<PyAny>,
 }
 
 static GLOBAL: Mutex<Option<Global>> = Mutex::new(None);
+
+impl Global {
+    fn handle_callback(&self, py: Python<'_>, result: CallbackResult) -> PyResult<Py<PyAny>> {
+        match result? {
+            CallbackOutcome::Continue => Ok(py.None()),
+            CallbackOutcome::DisableLocation => Ok(self.disable_sentinel.clone_ref(py)),
+        }
+    }
+}
 
 /// Install a tracer and hook it into Python's `sys.monitoring`.
 pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
@@ -346,6 +406,8 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
 
     let tool = acquire_tool_id(py)?;
     let events = monitoring_events(py)?;
+    let monitoring = py.import("sys")?.getattr("monitoring")?;
+    let disable_sentinel = monitoring.getattr("DISABLE")?.unbind();
 
     let module = PyModule::new(py, "_codetracer_callbacks")?;
 
@@ -428,6 +490,7 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
         tracer,
         mask,
         tool,
+        disable_sentinel,
     });
     Ok(())
 }
@@ -515,23 +578,25 @@ fn callback_call(
     offset: i32,
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_call(py, &wrapper, offset, &callable, arg0.as_ref());
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
-fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
+fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global.tracer.on_line(py, &wrapper, lineno);
+        let result = global.tracer.on_line(py, &wrapper, lineno);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -539,14 +604,15 @@ fn callback_instruction(
     py: Python<'_>,
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_instruction(py, &wrapper, instruction_offset);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -555,14 +621,15 @@ fn callback_jump(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     destination_offset: i32,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_jump(py, &wrapper, instruction_offset, destination_offset);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -571,14 +638,15 @@ fn callback_branch(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     destination_offset: i32,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_branch(py, &wrapper, instruction_offset, destination_offset);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -586,22 +654,20 @@ fn callback_py_start(
     py: Python<'_>,
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        match global.tracer.on_py_start(py, &wrapper, instruction_offset) {
-            Ok(()) => Ok(()),
+        let result = global.tracer.on_py_start(py, &wrapper, instruction_offset);
+        return match result {
+            Ok(outcome) => global.handle_callback(py, Ok(outcome)),
             Err(err) => {
-                // Disable further monitoring immediately on first callback error.
-                // Soft-stop within this lock to avoid deadlocking on GLOBAL.
                 let _ = set_events(py, &global.tool, NO_EVENTS);
                 log::error!("Event monitoring turned off due to exception. No new events will be recorded! {}", err);
                 Err(err)
             }
-        }
-    } else {
-        Ok(())
+        };
     }
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -609,12 +675,13 @@ fn callback_py_resume(
     py: Python<'_>,
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global.tracer.on_py_resume(py, &wrapper, instruction_offset);
+        let result = global.tracer.on_py_resume(py, &wrapper, instruction_offset);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -623,14 +690,15 @@ fn callback_py_return(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     retval: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_py_return(py, &wrapper, instruction_offset, &retval);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -639,14 +707,15 @@ fn callback_py_yield(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     retval: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_py_yield(py, &wrapper, instruction_offset, &retval);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -655,14 +724,15 @@ fn callback_py_throw(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_py_throw(py, &wrapper, instruction_offset, &exception);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -671,14 +741,15 @@ fn callback_py_unwind(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_py_unwind(py, &wrapper, instruction_offset, &exception);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -687,14 +758,15 @@ fn callback_raise(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_raise(py, &wrapper, instruction_offset, &exception);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -703,14 +775,15 @@ fn callback_reraise(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_reraise(py, &wrapper, instruction_offset, &exception);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -719,14 +792,16 @@ fn callback_exception_handled(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
-            .tracer
-            .on_exception_handled(py, &wrapper, instruction_offset, &exception);
+        let result =
+            global
+                .tracer
+                .on_exception_handled(py, &wrapper, instruction_offset, &exception);
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 // See comment in Tracer trait
@@ -752,14 +827,15 @@ fn callback_c_return(
     offset: i32,
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref());
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }
 
 #[pyfunction]
@@ -769,12 +845,13 @@ fn callback_c_raise(
     offset: i32,
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
-) -> PyResult<()> {
+) -> PyResult<Py<PyAny>> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
-        global
+        let result = global
             .tracer
             .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref());
+        return global.handle_callback(py, result);
     }
-    Ok(())
+    Ok(py.None())
 }

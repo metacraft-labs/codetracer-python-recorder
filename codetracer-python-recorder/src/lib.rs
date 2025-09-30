@@ -1,17 +1,23 @@
+//! Runtime tracing module backed by PyO3.
+//!
+//! Tracer implementations must return `CallbackResult` from every callback so they can
+//! signal when CPython should disable further monitoring for a location by propagating
+//! the `sys.monitoring.DISABLE` sentinel.
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::fmt;
-
 pub mod code_object;
 mod runtime_tracer;
 pub mod tracer;
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
-pub use crate::tracer::{install_tracer, uninstall_tracer, EventSet, Tracer};
+pub use crate::tracer::{
+    install_tracer, uninstall_tracer, CallbackOutcome, CallbackResult, EventSet, Tracer,
+};
 
 /// Global flag tracking whether tracing is active.
 static ACTIVE: AtomicBool = AtomicBool::new(false);

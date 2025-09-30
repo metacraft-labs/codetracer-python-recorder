@@ -25,3 +25,4 @@ env_logger = "0.11"
 
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }
+tempfile = "3.10"

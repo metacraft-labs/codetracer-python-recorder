@@ -11,7 +11,9 @@ use runtime_tracing::{
 };
 
 use crate::code_object::CodeObjectWrapper;
-use crate::tracer::{events_union, EventSet, MonitoringEvents, Tracer};
+use crate::tracer::{
+    events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
+};
 
 extern "C" {
     fn PyFrame_GetLocals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
@@ -34,6 +36,18 @@ pub struct RuntimeTracer {
     // Whether we've already completed a one-shot activation window
     activation_done: bool,
     started: bool,
+    ignored_code_ids: HashSet<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShouldTrace {
+    Trace,
+    SkipAndDisable,
+}
+
+fn is_real_filename(filename: &str) -> bool {
+    let trimmed = filename.trim();
+    !(trimmed.starts_with('<') && trimmed.ends_with('>'))
 }
 
 impl RuntimeTracer {
@@ -55,6 +69,7 @@ impl RuntimeTracer {
             activation_code_id: None,
             activation_done: false,
             started,
+            ignored_code_ids: HashSet::new(),
         }
     }
 
@@ -233,6 +248,22 @@ impl RuntimeTracer {
             Line(first_line as i64),
         ))
     }
+
+    fn should_trace_code(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> ShouldTrace {
+        let code_id = code.id();
+        if self.ignored_code_ids.contains(&code_id) {
+            return ShouldTrace::SkipAndDisable;
+        }
+        let filename = code
+            .filename(py)
+            .expect("RuntimeTracer::should_trace_code failed to resolve filename");
+        if is_real_filename(filename) {
+            ShouldTrace::Trace
+        } else {
+            self.ignored_code_ids.insert(code_id);
+            ShouldTrace::SkipAndDisable
+        }
+    }
 }
 
 fn to_py_err(e: Box<dyn std::error::Error>) -> pyo3::PyErr {
@@ -250,28 +281,29 @@ impl Tracer for RuntimeTracer {
         py: Python<'_>,
         code: &CodeObjectWrapper,
         _offset: i32,
-    ) -> PyResult<()> {
-        // Activate lazily if configured; ignore until then
+    ) -> CallbackResult {
         self.ensure_started(py, code);
-        if !self.started {
-            return Ok(());
+        if matches!(
+            self.should_trace_code(py, code),
+            ShouldTrace::SkipAndDisable
+        ) {
+            return Ok(CallbackOutcome::DisableLocation);
         }
-        // Trace event entry
+        if !self.started {
+            return Ok(CallbackOutcome::Continue);
+        }
+
         match (code.filename(py), code.qualname(py)) {
             (Ok(fname), Ok(qname)) => {
                 log::debug!("[RuntimeTracer] on_py_start: {} ({})", qname, fname)
             }
             _ => log::debug!("[RuntimeTracer] on_py_start"),
         }
+
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            // Attempt to capture function arguments from the current frame.
-            // Fail fast on any error per source-code rules.
             let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
             let frame_and_args = (|| -> PyResult<()> {
-                // Current Python frame where the function just started executing
-
-                // Acquire current frame without importing sys
-                let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
+                let frame_ptr = unsafe { ffi::PyEval_GetFrame() };
                 if frame_ptr.is_null() {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "on_py_start: null frame",
@@ -281,7 +313,6 @@ impl Tracer for RuntimeTracer {
                     ffi::Py_XINCREF(frame_ptr.cast());
                 }
 
-                // Synchronize fast locals into f_locals
                 unsafe {
                     if ffi::PyFrame_FastToLocalsWithError(frame_ptr) < 0 {
                         ffi::Py_DECREF(frame_ptr.cast());
@@ -290,7 +321,6 @@ impl Tracer for RuntimeTracer {
                     }
                 }
 
-                // Obtain concrete locals dict for lookup
                 let locals_raw = unsafe { PyFrame_GetLocals(frame_ptr) };
                 if locals_raw.is_null() {
                     unsafe {
@@ -302,16 +332,8 @@ impl Tracer for RuntimeTracer {
                 }
                 let locals = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw) };
 
-                // Argument names come from co_varnames in the order defined by CPython:
-                // [positional (pos-only + pos-or-kw)] [+ varargs] [+ kw-only] [+ kwargs]
-                // In CPython 3.8+ semantics, `co_argcount` is the TOTAL number of positional
-                // parameters (including positional-only and pos-or-keyword). Use it directly
-                // for the positional slice; `co_posonlyargcount` is only needed if we want to
-                // distinguish the two groups, which we do not here.
-                let argcount = code.arg_count(py)? as usize; // total positional (pos-only + pos-or-kw)
-
+                let argcount = code.arg_count(py)? as usize;
                 let _posonly: usize = code.as_bound(py).getattr("co_posonlyargcount")?.extract()?;
-
                 let kwonly: usize = code.as_bound(py).getattr("co_kwonlyargcount")?.extract()?;
                 let flags = code.flags(py)?;
                 const CO_VARARGS: u32 = 0x04;
@@ -320,9 +342,7 @@ impl Tracer for RuntimeTracer {
                 let varnames_obj = code.as_bound(py).getattr("co_varnames")?;
                 let varnames: Vec<String> = varnames_obj.extract()?;
 
-                // 1) Positional parameters (pos-only + pos-or-kw)
                 let mut idx = 0usize;
-                // `argcount` already includes positional-only parameters
                 let take_n = std::cmp::min(argcount, varnames.len());
                 for name in varnames.iter().take(take_n) {
                     match locals.get_item(name) {
@@ -330,12 +350,13 @@ impl Tracer for RuntimeTracer {
                             let vrec = self.encode_value(py, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
-                        Err(e) => {panic!("Error {:?}",e)}
+                        Err(e) => {
+                            panic!("Error {:?}", e)
+                        }
                     }
                     idx += 1;
                 }
 
-                // 2) Varargs (*args)
                 if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
                     let name = &varnames[idx];
                     if let Ok(val) = locals.get_item(name) {
@@ -345,7 +366,6 @@ impl Tracer for RuntimeTracer {
                     idx += 1;
                 }
 
-                // 3) Keyword-only parameters
                 let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
                 for name in varnames.iter().skip(idx).take(kwonly_take) {
                     match locals.get_item(name) {
@@ -353,12 +373,13 @@ impl Tracer for RuntimeTracer {
                             let vrec = self.encode_value(py, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
-                        Err(e) => {panic!("Error {:?}", e)}
+                        Err(e) => {
+                            panic!("Error {:?}", e)
+                        }
                     }
                 }
                 idx = idx.saturating_add(kwonly_take);
 
-                // 4) Kwargs (**kwargs)
                 if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
                     let name = &varnames[idx];
                     if let Ok(val) = locals.get_item(name) {
@@ -366,39 +387,42 @@ impl Tracer for RuntimeTracer {
                         args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                     }
                 }
-                unsafe { ffi::Py_DECREF(frame_ptr.cast()); }
+                unsafe {
+                    ffi::Py_DECREF(frame_ptr.cast());
+                }
                 Ok(())
             })();
+
             if let Err(e) = frame_and_args {
-                // Raise a clear error; do not silently continue with empty args.
-                let rete = Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "on_py_start: failed to capture args: {}",
-                    e
-                )));
-                //panic!("error {:?}", rete);
-                log::error!("AAA error {:?}", rete);
-                return rete;
+                let message = format!("on_py_start: failed to capture args: {}", e);
+                log::error!("{message}");
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(message));
             }
 
             TraceWriter::register_call(&mut self.writer, fid, args);
         }
-        Ok(())
+
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) {
-        // Activate lazily if configured; ignore until then
+    fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) -> CallbackResult {
         self.ensure_started(py, code);
-        if !self.started {
-            return;
+        if matches!(
+            self.should_trace_code(py, code),
+            ShouldTrace::SkipAndDisable
+        ) {
+            return Ok(CallbackOutcome::DisableLocation);
         }
-        // Trace event entry
+        if !self.started {
+            return Ok(CallbackOutcome::Continue);
+        }
+
         if let Ok(fname) = code.filename(py) {
             log::debug!("[RuntimeTracer] on_line: {}:{}", fname, lineno);
         } else {
             log::debug!("[RuntimeTracer] on_line: <unknown>:{}", lineno);
         }
 
-        // Locate the frame corresponding to the reported code object.
         let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
         if frame_ptr.is_null() {
             panic!("PyEval_GetFrame returned null frame");
@@ -503,6 +527,8 @@ impl Tracer for RuntimeTracer {
         unsafe {
             ffi::Py_DECREF(frame_ptr.cast());
         }
+
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_return(
@@ -511,20 +537,25 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
         retval: &Bound<'_, PyAny>,
-    ) {
-        // Activate lazily if configured; ignore until then
+    ) -> CallbackResult {
         self.ensure_started(py, code);
-        if !self.started {
-            return;
+        if matches!(
+            self.should_trace_code(py, code),
+            ShouldTrace::SkipAndDisable
+        ) {
+            return Ok(CallbackOutcome::DisableLocation);
         }
-        // Trace event entry
+        if !self.started {
+            return Ok(CallbackOutcome::Continue);
+        }
+
         match (code.filename(py), code.qualname(py)) {
             (Ok(fname), Ok(qname)) => {
                 log::debug!("[RuntimeTracer] on_py_return: {} ({})", qname, fname)
             }
             _ => log::debug!("[RuntimeTracer] on_py_return"),
         }
-        // Determine whether this is the activation owner's return
+
         let is_activation_return = self
             .activation_code_id
             .map(|id| id == code.id())
@@ -537,6 +568,8 @@ impl Tracer for RuntimeTracer {
             self.activation_done = true;
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
+
+        Ok(CallbackOutcome::Continue)
     }
 
     fn flush(&mut self, _py: Python<'_>) -> PyResult<()> {
@@ -551,6 +584,7 @@ impl Tracer for RuntimeTracer {
                 // Streaming writer: no partial flush to avoid closing the stream.
             }
         }
+        self.ignored_code_ids.clear();
         Ok(())
     }
 
@@ -560,6 +594,7 @@ impl Tracer for RuntimeTracer {
         TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(to_py_err)?;
         TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(to_py_err)?;
         TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
+        self.ignored_code_ids.clear();
         Ok(())
     }
 }
@@ -567,7 +602,7 @@ impl Tracer for RuntimeTracer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::prelude::*;
+    use crate::tracer::CallbackOutcome;
     use pyo3::types::{PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, TraceLowLevelEvent, ValueRecord};
@@ -577,6 +612,7 @@ mod tests {
 
     thread_local! {
         static ACTIVE_TRACER: Cell<*mut RuntimeTracer> = Cell::new(std::ptr::null_mut());
+        static LAST_OUTCOME: Cell<Option<CallbackOutcome>> = Cell::new(None);
     }
 
     struct ScopedTracer;
@@ -595,9 +631,94 @@ mod tests {
         }
     }
 
+    fn last_outcome() -> Option<CallbackOutcome> {
+        LAST_OUTCOME.with(|cell| cell.get())
+    }
+
+    #[test]
+    fn detects_real_filenames() {
+        assert!(is_real_filename("example.py"));
+        assert!(is_real_filename(" /tmp/module.py "));
+        assert!(is_real_filename("src/<tricky>.py"));
+        assert!(!is_real_filename("<string>"));
+        assert!(!is_real_filename("  <stdin>  "));
+        assert!(!is_real_filename("<frozen importlib._bootstrap>"));
+    }
+
+    #[test]
+    fn skips_synthetic_filename_events() {
+        Python::with_gil(|py| {
+            let mut tracer = RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None);
+            ensure_test_module(py);
+            let script = format!("{PRELUDE}\nsnapshot()\n");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let script_c = CString::new(script).expect("script contains nul byte");
+                py.run(script_c.as_c_str(), None, None)
+                    .expect("execute synthetic script");
+            }
+            assert!(
+                tracer.writer.events.is_empty(),
+                "expected no events for synthetic filename"
+            );
+            assert_eq!(last_outcome(), Some(CallbackOutcome::DisableLocation));
+
+            let compile_fn = py
+                .import("builtins")
+                .expect("import builtins")
+                .getattr("compile")
+                .expect("fetch compile");
+            let binding = compile_fn
+                .call1(("pass", "<string>", "exec"))
+                .expect("compile code object");
+            let code_obj = binding.downcast::<PyCode>().expect("downcast code object");
+            let wrapper = CodeObjectWrapper::new(py, &code_obj);
+            assert_eq!(
+                tracer.should_trace_code(py, &wrapper),
+                ShouldTrace::SkipAndDisable
+            );
+        });
+    }
+
+    #[test]
+    fn traces_real_file_events() {
+        let snapshots = run_traced_script("snapshot()\n");
+        assert!(
+            !snapshots.is_empty(),
+            "expected snapshots for real file execution"
+        );
+        assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
+    }
+
+    #[test]
+    fn callbacks_do_not_import_sys_monitoring() {
+        let body = r#"
+import builtins
+_orig_import = builtins.__import__
+
+def guard(name, *args, **kwargs):
+    if name == "sys.monitoring":
+        raise RuntimeError("callback imported sys.monitoring")
+    return _orig_import(name, *args, **kwargs)
+
+builtins.__import__ = guard
+try:
+    snapshot()
+finally:
+    builtins.__import__ = _orig_import
+"#;
+        let snapshots = run_traced_script(body);
+        assert!(
+            !snapshots.is_empty(),
+            "expected snapshots when import guard active"
+        );
+        assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
+    }
+
     #[pyfunction]
     fn capture_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
-        ACTIVE_TRACER.with(|cell| {
+        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
             let ptr = cell.get();
             if ptr.is_null() {
                 panic!("No active RuntimeTracer for capture_line");
@@ -605,9 +726,15 @@ mod tests {
             unsafe {
                 let tracer = &mut *ptr;
                 let wrapper = CodeObjectWrapper::new(py, &code);
-                tracer.on_line(py, &wrapper, lineno);
+                match tracer.on_line(py, &wrapper, lineno) {
+                    Ok(outcome) => {
+                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
             }
-        });
+        })?;
         Ok(())
     }
 
@@ -715,11 +842,19 @@ def snap(value):
         Python::with_gil(|py| {
             let mut tracer = RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None);
             ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let script_path = tmp.path().join("script.py");
             let script = format!("{PRELUDE}\n{body}");
+            std::fs::write(&script_path, &script).expect("write script");
             {
                 let _guard = ScopedTracer::new(&mut tracer);
-                let script_c = CString::new(script).expect("script contains nul byte");
-                py.run(script_c.as_c_str(), None, None)
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
                     .expect("execute test script");
             }
             collect_snapshots(&tracer.writer.events)

@@ -1,4 +1,6 @@
-use codetracer_python_recorder::tracer::{events_union, MonitoringEvents};
+use codetracer_python_recorder::tracer::{
+    events_union, CallbackOutcome, CallbackResult, MonitoringEvents,
+};
 use codetracer_python_recorder::{
     install_tracer, uninstall_tracer, CodeObjectWrapper, EventSet, Tracer,
 };
@@ -22,8 +24,9 @@ impl Tracer for PrintTracer {
         _offset: i32,
         _callable: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
         CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(CallbackOutcome::Continue)
     }
 }
 
@@ -87,30 +90,56 @@ impl Tracer for CountingTracer {
         ])
     }
 
-    fn on_line(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, lineno: u32) {
+    fn on_line(
+        &mut self,
+        _py: Python<'_>,
+        _code: &CodeObjectWrapper,
+        lineno: u32,
+    ) -> CallbackResult {
         LINE_COUNT.fetch_add(1, Ordering::SeqCst);
         println!("LINE at {}", lineno);
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_instruction(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
+    fn on_instruction(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+    ) -> CallbackResult {
         INSTRUCTION_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("INSTRUCTION at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_jump(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
+    fn on_jump(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _dest: i32,
+    ) -> CallbackResult {
         JUMP_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("JUMP at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_branch(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
+    fn on_branch(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _dest: i32,
+    ) -> CallbackResult {
         BRANCH_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("BRANCH at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_start(
@@ -118,19 +147,25 @@ impl Tracer for CountingTracer {
         py: Python<'_>,
         code: &CodeObjectWrapper,
         offset: i32,
-    ) -> PyResult<()> {
+    ) -> CallbackResult {
         PY_START_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_START at {}", line);
         }
-        Ok(())
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_resume(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
+    fn on_py_resume(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+    ) -> CallbackResult {
         PY_RESUME_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RESUME at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_return(
@@ -139,11 +174,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _retval: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         PY_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RETURN at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_yield(
@@ -152,11 +188,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _retval: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         PY_YIELD_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_YIELD at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_throw(
@@ -165,11 +202,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _exc: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         PY_THROW_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_THROW at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_py_unwind(
@@ -178,11 +216,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _exc: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         PY_UNWIND_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_UNWIND at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_raise(
@@ -191,11 +230,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _exc: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_reraise(
@@ -204,11 +244,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _exc: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         RERAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RERAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_exception_handled(
@@ -217,11 +258,12 @@ impl Tracer for CountingTracer {
         code: &CodeObjectWrapper,
         offset: i32,
         _exc: &Bound<'_, PyAny>,
-    ) {
+    ) -> CallbackResult {
         EXCEPTION_HANDLED_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("EXCEPTION_HANDLED at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     // fn on_stop_iteration(
@@ -244,11 +286,12 @@ impl Tracer for CountingTracer {
         offset: i32,
         _call: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
         C_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RETURN at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     fn on_c_raise(
@@ -258,11 +301,12 @@ impl Tracer for CountingTracer {
         offset: i32,
         _call: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
         C_RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 }
 
