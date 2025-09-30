@@ -269,9 +269,38 @@ impl Tracer for RuntimeTracer {
             let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
             let frame_and_args = (|| -> PyResult<()> {
                 // Current Python frame where the function just started executing
-                let sys = py.import("sys")?;
-                let frame = sys.getattr("_getframe")?.call1((0,))?;
-                let locals = frame.getattr("f_locals")?;
+
+                // Acquire current frame without importing sys
+                let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
+                if frame_ptr.is_null() {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "on_py_start: null frame",
+                    ));
+                }
+                unsafe {
+                    ffi::Py_XINCREF(frame_ptr.cast());
+                }
+
+                // Synchronize fast locals into f_locals
+                unsafe {
+                    if ffi::PyFrame_FastToLocalsWithError(frame_ptr) < 0 {
+                        ffi::Py_DECREF(frame_ptr.cast());
+                        let err = PyErr::fetch(py);
+                        return Err(err);
+                    }
+                }
+
+                // Obtain concrete locals dict for lookup
+                let locals_raw = unsafe { PyFrame_GetLocals(frame_ptr) };
+                if locals_raw.is_null() {
+                    unsafe {
+                        ffi::Py_DECREF(frame_ptr.cast());
+                    }
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "on_py_start: PyFrame_GetLocals returned null",
+                    ));
+                }
+                let locals = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw) };
 
                 // Argument names come from co_varnames in the order defined by CPython:
                 // [positional (pos-only + pos-or-kw)] [+ varargs] [+ kw-only] [+ kwargs]
@@ -280,9 +309,10 @@ impl Tracer for RuntimeTracer {
                 // for the positional slice; `co_posonlyargcount` is only needed if we want to
                 // distinguish the two groups, which we do not here.
                 let argcount = code.arg_count(py)? as usize; // total positional (pos-only + pos-or-kw)
-                let _posonly: usize = code.as_bound(py).getattr("co_posonlyargcount")?.extract()?;
-                let kwonly: usize = code.as_bound(py).getattr("co_kwonlyargcount")?.extract()?;
 
+                let _posonly: usize = code.as_bound(py).getattr("co_posonlyargcount")?.extract()?;
+
+                let kwonly: usize = code.as_bound(py).getattr("co_kwonlyargcount")?.extract()?;
                 let flags = code.flags(py)?;
                 const CO_VARARGS: u32 = 0x04;
                 const CO_VARKEYWORDS: u32 = 0x08;
@@ -300,7 +330,7 @@ impl Tracer for RuntimeTracer {
                             let vrec = self.encode_value(py, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
-                        Err(_) => {}
+                        Err(e) => {panic!("Error {:?}",e)}
                     }
                     idx += 1;
                 }
@@ -323,7 +353,7 @@ impl Tracer for RuntimeTracer {
                             let vrec = self.encode_value(py, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
-                        Err(_) => {}
+                        Err(e) => {panic!("Error {:?}", e)}
                     }
                 }
                 idx = idx.saturating_add(kwonly_take);
@@ -336,6 +366,7 @@ impl Tracer for RuntimeTracer {
                         args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                     }
                 }
+                unsafe { ffi::Py_DECREF(frame_ptr.cast()); }
                 Ok(())
             })();
             if let Err(e) = frame_and_args {
@@ -344,7 +375,8 @@ impl Tracer for RuntimeTracer {
                     "on_py_start: failed to capture args: {}",
                     e
                 )));
-                log::debug!("error {:?}", rete);
+                //panic!("error {:?}", rete);
+                log::error!("AAA error {:?}", rete);
                 return rete;
             }
 
