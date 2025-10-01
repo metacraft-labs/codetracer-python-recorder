@@ -40,3 +40,6 @@ Implement the CodeObjectWrapper as designed. Update the Tracer trait as well as 
 There is an issue in the current implementation. We don't use caching effectively, since we create a new CodeObjectWrapper at each callback_xxx call. We need a global cache, probably keyed by the code object id. Propose design changes and update the design documents. Don't implement the changes themselves before I approve them.
 --- FOLLOW UP TASK ---
 Implement the global code object registry.
+
+--- FOLLOW UP TASK ---
+I want to refactor the code of codetracer-python-recorder in order to follow a single-responsibility-principle on the level of files - each file should be concerned with a single cohesive topic. Propose a plan for refactoring and create a self-contained ADR to be given to junior devs for implementation. Specifiy which tasks can be done in parallel
