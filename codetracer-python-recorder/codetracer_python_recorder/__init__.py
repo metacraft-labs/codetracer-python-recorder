@@ -9,5 +9,8 @@ maintains placeholder state and performs no actual tracing.
 
 from . import api as _api
 from .api import *  # re-export public API symbols
+from .auto_start import auto_start_from_env
+
+auto_start_from_env()
 
 __all__ = _api.__all__
