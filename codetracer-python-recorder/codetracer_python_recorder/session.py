@@ -11,7 +11,7 @@ from .codetracer_python_recorder import (
     start_tracing as _start_backend,
     stop_tracing as _stop_backend,
 )
-from .formats import DEFAULT_FORMAT, normalize_format
+from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, is_supported, normalize_format
 
 _active_session: Optional["TraceSession"] = None
 
@@ -53,14 +53,11 @@ def start(
     if _is_tracing_backend():
         raise RuntimeError("tracing already active")
 
-    trace_path = Path(path)
-    normalized_format = normalize_format(format)
+    trace_path = _validate_trace_path(Path(path))
+    normalized_format = _coerce_format(format)
+    activation_path = _normalize_activation_path(start_on_enter)
 
-    _start_backend(
-        str(trace_path),
-        normalized_format,
-        str(Path(start_on_enter)) if start_on_enter is not None else None,
-    )
+    _start_backend(str(trace_path), normalized_format, activation_path)
     session = TraceSession(path=trace_path, format=normalized_format)
     _active_session = session
     return session
@@ -98,6 +95,29 @@ def trace(
         yield session
     finally:
         session.stop()
+
+
+def _coerce_format(value: str) -> str:
+    normalized = normalize_format(value)
+    if not is_supported(normalized):
+        supported = ", ".join(sorted(SUPPORTED_FORMATS))
+        raise ValueError(
+            f"unsupported trace format '{value}'. Expected one of: {supported}"
+        )
+    return normalized
+
+
+def _validate_trace_path(path: Path) -> Path:
+    path = path.expanduser()
+    if path.exists() and not path.is_dir():
+        raise ValueError("trace path exists and is not a directory")
+    return path
+
+
+def _normalize_activation_path(value: str | Path | None) -> str | None:
+    if value is None:
+        return None
+    return str(Path(value).expanduser())
 
 
 __all__ = (
