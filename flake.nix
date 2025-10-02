@@ -33,6 +33,8 @@
               clippy
 	      rust-analyzer
 	      cargo-nextest
+              cargo-llvm-cov
+              llvmPackages_latest.llvm
 
               # Build tooling for Python extensions
               maturin
