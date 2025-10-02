@@ -1,5 +1,9 @@
-use codetracer_python_recorder::{install_tracer, uninstall_tracer, EventSet, Tracer, CodeObjectWrapper};
-use codetracer_python_recorder::tracer::{MonitoringEvents, events_union};
+use codetracer_python_recorder::tracer::{
+    events_union, CallbackOutcome, CallbackResult, MonitoringEvents,
+};
+use codetracer_python_recorder::{
+    install_tracer, uninstall_tracer, CodeObjectWrapper, EventSet, Tracer,
+};
 use pyo3::prelude::*;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,8 +24,9 @@ impl Tracer for PrintTracer {
         _offset: i32,
         _callable: &Bound<'_, PyAny>,
         _arg0: Option<&Bound<'_, PyAny>>,
-    ) {
+    ) -> CallbackResult {
         CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(CallbackOutcome::Continue)
     }
 }
 
@@ -35,7 +40,11 @@ fn tracer_prints_on_call() {
         py.run(code.as_c_str(), None, None).unwrap();
         uninstall_tracer(py).unwrap();
         let count = CALL_COUNT.load(Ordering::SeqCst);
-        assert!(count >= 1, "expected at least one CALL event, got {}", count);
+        assert!(
+            count >= 1,
+            "expected at least one CALL event, got {}",
+            count
+        );
     });
 }
 
@@ -81,94 +90,180 @@ impl Tracer for CountingTracer {
         ])
     }
 
-    fn on_line(&mut self, _py: Python<'_>, _code: &CodeObjectWrapper, lineno: u32) {
+    fn on_line(
+        &mut self,
+        _py: Python<'_>,
+        _code: &CodeObjectWrapper,
+        lineno: u32,
+    ) -> CallbackResult {
         LINE_COUNT.fetch_add(1, Ordering::SeqCst);
         println!("LINE at {}", lineno);
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_instruction(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
+    fn on_instruction(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+    ) -> CallbackResult {
         INSTRUCTION_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("INSTRUCTION at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_jump(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
+    fn on_jump(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _dest: i32,
+    ) -> CallbackResult {
         JUMP_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("JUMP at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_branch(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _dest: i32) {
+    fn on_branch(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _dest: i32,
+    ) -> CallbackResult {
         BRANCH_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("BRANCH at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_start(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) -> PyResult<()> {
+    fn on_py_start(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+    ) -> CallbackResult {
         PY_START_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_START at {}", line);
         }
-        Ok(())
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_resume(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32) {
+    fn on_py_resume(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+    ) -> CallbackResult {
         PY_RESUME_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RESUME at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_return(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _retval: &Bound<'_, PyAny>) {
+    fn on_py_return(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _retval: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         PY_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_RETURN at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_yield(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _retval: &Bound<'_, PyAny>) {
+    fn on_py_yield(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _retval: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         PY_YIELD_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_YIELD at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_throw(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
+    fn on_py_throw(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _exc: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         PY_THROW_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_THROW at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_py_unwind(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
+    fn on_py_unwind(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _exc: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         PY_UNWIND_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("PY_UNWIND at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_raise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
+    fn on_raise(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _exc: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_reraise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
+    fn on_reraise(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _exc: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         RERAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("RERAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_exception_handled(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _exc: &Bound<'_, PyAny>) {
+    fn on_exception_handled(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _exc: &Bound<'_, PyAny>,
+    ) -> CallbackResult {
         EXCEPTION_HANDLED_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("EXCEPTION_HANDLED at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
     // fn on_stop_iteration(
@@ -184,18 +279,34 @@ impl Tracer for CountingTracer {
     //     }
     // }
 
-    fn on_c_return(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _call: &Bound<'_, PyAny>, _arg0: Option<&Bound<'_, PyAny>>) {
+    fn on_c_return(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _call: &Bound<'_, PyAny>,
+        _arg0: Option<&Bound<'_, PyAny>>,
+    ) -> CallbackResult {
         C_RETURN_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RETURN at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 
-    fn on_c_raise(&mut self, py: Python<'_>, code: &CodeObjectWrapper, offset: i32, _call: &Bound<'_, PyAny>, _arg0: Option<&Bound<'_, PyAny>>) {
+    fn on_c_raise(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        offset: i32,
+        _call: &Bound<'_, PyAny>,
+        _arg0: Option<&Bound<'_, PyAny>>,
+    ) -> CallbackResult {
         C_RAISE_COUNT.fetch_add(1, Ordering::SeqCst);
         if let Ok(Some(line)) = code.line_for_offset(py, offset as u32) {
             println!("C_RAISE at {}", line);
         }
+        Ok(CallbackOutcome::Continue)
     }
 }
 
@@ -222,7 +333,8 @@ fn tracer_handles_all_events() {
             e.print(py);
             panic!("Install Tracer failed");
         }
-        let code = CString::new(r#"
+        let code = CString::new(
+            r#"
 def test_all():
     x = 0
     if x == 0:
@@ -280,28 +392,90 @@ def only_stop_iter():
         yield
 for _ in only_stop_iter():
     pass
-"#).expect("CString::new failed");
+"#,
+        )
+        .expect("CString::new failed");
         if let Err(e) = py.run(code.as_c_str(), None, None) {
             e.print(py);
             uninstall_tracer(py).ok();
             panic!("Python raised an exception");
         }
         uninstall_tracer(py).unwrap();
-        assert!(LINE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one LINE event, got {}", LINE_COUNT.load(Ordering::SeqCst));
-        assert!(INSTRUCTION_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one INSTRUCTION event, got {}", INSTRUCTION_COUNT.load(Ordering::SeqCst));
-        assert!(JUMP_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one JUMP event, got {}", JUMP_COUNT.load(Ordering::SeqCst));
-        assert!(BRANCH_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one BRANCH event, got {}", BRANCH_COUNT.load(Ordering::SeqCst));
-        assert!(PY_START_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_START event, got {}", PY_START_COUNT.load(Ordering::SeqCst));
-        assert!(PY_RESUME_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_RESUME event, got {}", PY_RESUME_COUNT.load(Ordering::SeqCst));
-        assert!(PY_RETURN_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_RETURN event, got {}", PY_RETURN_COUNT.load(Ordering::SeqCst));
-        assert!(PY_YIELD_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_YIELD event, got {}", PY_YIELD_COUNT.load(Ordering::SeqCst));
-        assert!(PY_THROW_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_THROW event, got {}", PY_THROW_COUNT.load(Ordering::SeqCst));
-        assert!(PY_UNWIND_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one PY_UNWIND event, got {}", PY_UNWIND_COUNT.load(Ordering::SeqCst));
-        assert!(RAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one RAISE event, got {}", RAISE_COUNT.load(Ordering::SeqCst));
-        assert!(RERAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one RERAISE event, got {}", RERAISE_COUNT.load(Ordering::SeqCst));
-        assert!(EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one EXCEPTION_HANDLED event, got {}", EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst));
+        assert!(
+            LINE_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one LINE event, got {}",
+            LINE_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            INSTRUCTION_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one INSTRUCTION event, got {}",
+            INSTRUCTION_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            JUMP_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one JUMP event, got {}",
+            JUMP_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            BRANCH_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one BRANCH event, got {}",
+            BRANCH_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_START_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_START event, got {}",
+            PY_START_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_RESUME_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_RESUME event, got {}",
+            PY_RESUME_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_RETURN_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_RETURN event, got {}",
+            PY_RETURN_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_YIELD_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_YIELD event, got {}",
+            PY_YIELD_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_THROW_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_THROW event, got {}",
+            PY_THROW_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            PY_UNWIND_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one PY_UNWIND event, got {}",
+            PY_UNWIND_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            RAISE_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one RAISE event, got {}",
+            RAISE_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            RERAISE_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one RERAISE event, got {}",
+            RERAISE_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one EXCEPTION_HANDLED event, got {}",
+            EXCEPTION_HANDLED_COUNT.load(Ordering::SeqCst)
+        );
         // assert!(STOP_ITERATION_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one STOP_ITERATION event, got {}", STOP_ITERATION_COUNT.load(Ordering::SeqCst)); //Issue
-        assert!(C_RETURN_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one C_RETURN event, got {}", C_RETURN_COUNT.load(Ordering::SeqCst));
-        assert!(C_RAISE_COUNT.load(Ordering::SeqCst) >= 1, "expected at least one C_RAISE event, got {}", C_RAISE_COUNT.load(Ordering::SeqCst));
+        assert!(
+            C_RETURN_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one C_RETURN event, got {}",
+            C_RETURN_COUNT.load(Ordering::SeqCst)
+        );
+        assert!(
+            C_RAISE_COUNT.load(Ordering::SeqCst) >= 1,
+            "expected at least one C_RAISE event, got {}",
+            C_RAISE_COUNT.load(Ordering::SeqCst)
+        );
     });
 }
