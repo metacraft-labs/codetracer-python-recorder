@@ -24,5 +24,11 @@ _Last updated: 2025-10-02_
 - **Verification:** `just cargo-test` succeeds (workspace `cargo nextest run`); grep confirms no remaining `PyRuntimeError::new_err` outside the conversion helper in `errors.rs`.
 - **Next actions:** Start WS4 to introduce the FFI wrapper and Python exception hierarchy; continue WS1 by delegating ISSUE-013 (mutex handling) and ISSUE-014 (Python facade) owners.
 
+## WS4 – FFI Wrapper & Python Exception Hierarchy
+- **State:** Completed (2025-10-02)
+- **Deliverables:** Introduced an `ffi` module that wraps every PyO3 entry point (session APIs, monitoring callbacks, and test shims) in a panic guard, converts `RecorderError` values into a structured Python exception tree, and exposes the hierarchy (`RecorderError`, `UsageError`, `EnvironmentError`, `TargetError`, `InternalError`) to the Python package. Updated Rust call sites to rely on the shared mapper and removed all legacy `PyRuntimeError` conversions; added Python unit coverage for the new exceptions and re-exports.
+- **Verification:** `uv run cargo nextest run --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features` succeeds. Python tests pass when executed with the local dev environment (`.venv/bin/python -m pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder`). `just py-test` still requires network access to fetch `maturin`; ran equivalent suite offline after `just dev`.
+- **Next actions:** Proceed to WS5 to wire policy switches and runtime configuration once WS1 locking/monitoring issues (ISSUE-013/ISSUE-014) are resolved.
+
 ## Upcoming Workstreams
-- WS4–WS8 remain **Not started** pending completion of WS1 groundwork and ADR acceptance.
+- WS5–WS8 remain **Not started** pending completion of WS1 groundwork and ADR acceptance.

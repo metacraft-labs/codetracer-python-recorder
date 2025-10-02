@@ -6,6 +6,7 @@
 
 pub mod code_object;
 mod errors;
+mod ffi;
 mod logging;
 pub mod monitoring;
 mod runtime;
@@ -27,6 +28,7 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     // Initialize logging on import so users see logs without extra setup.
     // Respect RUST_LOG if present; otherwise default to debug for this crate.
     logging::init_rust_logging_with_default("codetracer_python_recorder=debug");
+    ffi::register_exceptions(m)?;
     m.add_function(wrap_pyfunction!(start_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(stop_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(is_tracing, m)?)?;

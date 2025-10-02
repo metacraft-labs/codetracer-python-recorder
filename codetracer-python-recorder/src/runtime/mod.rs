@@ -25,7 +25,7 @@ use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
-use crate::errors::to_py_err;
+use crate::ffi;
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
@@ -81,7 +81,7 @@ impl RuntimeTracer {
         log::debug!("{}", start_path.display());
         outputs
             .configure_writer(&mut self.writer, start_path, start_line)
-            .map_err(to_py_err)
+            .map_err(ffi::map_recorder_error)
     }
 
     fn ensure_function_id(
@@ -159,7 +159,7 @@ impl Tracer for RuntimeTracer {
                 Err(err) => {
                     let details = err.to_string();
                     log::error!("on_py_start: failed to capture args: {details}");
-                    return Err(to_py_err(
+                    return Err(ffi::map_recorder_error(
                         enverr!(
                             ErrorCode::FrameIntrospectionFailed,
                             "failed to capture call arguments"
@@ -234,7 +234,7 @@ impl Tracer for RuntimeTracer {
         match self.format {
             TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
                 TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
-                    to_py_err(
+                    ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
                             .with_context("source", err.to_string()),
                     )
@@ -252,19 +252,19 @@ impl Tracer for RuntimeTracer {
         // Trace event entry
         log::debug!("[RuntimeTracer] finish");
         TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(|err| {
-            to_py_err(
+            ffi::map_recorder_error(
                 enverr!(ErrorCode::Io, "failed to finalise trace metadata")
                     .with_context("source", err.to_string()),
             )
         })?;
         TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
-            to_py_err(
+            ffi::map_recorder_error(
                 enverr!(ErrorCode::Io, "failed to finalise trace paths")
                     .with_context("source", err.to_string()),
             )
         })?;
         TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
-            to_py_err(
+            ffi::map_recorder_error(
                 enverr!(ErrorCode::Io, "failed to finalise trace events")
                     .with_context("source", err.to_string()),
             )
@@ -449,24 +449,26 @@ result = compute()\n"
 
     #[pyfunction]
     fn capture_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
-        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
-            let ptr = cell.get();
-            if ptr.is_null() {
-                panic!("No active RuntimeTracer for capture_line");
-            }
-            unsafe {
-                let tracer = &mut *ptr;
-                let wrapper = CodeObjectWrapper::new(py, &code);
-                match tracer.on_line(py, &wrapper, lineno) {
-                    Ok(outcome) => {
-                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
+        ffi::wrap_pyfunction("test_capture_line", || {
+            ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+                let ptr = cell.get();
+                if ptr.is_null() {
+                    panic!("No active RuntimeTracer for capture_line");
                 }
-            }
-        })?;
-        Ok(())
+                unsafe {
+                    let tracer = &mut *ptr;
+                    let wrapper = CodeObjectWrapper::new(py, &code);
+                    match tracer.on_line(py, &wrapper, lineno) {
+                        Ok(outcome) => {
+                            LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            })?;
+            Ok(())
+        })
     }
 
     #[pyfunction]
@@ -475,24 +477,26 @@ result = compute()\n"
         code: Bound<'_, PyCode>,
         value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
-            let ptr = cell.get();
-            if ptr.is_null() {
-                panic!("No active RuntimeTracer for capture_return_event");
-            }
-            unsafe {
-                let tracer = &mut *ptr;
-                let wrapper = CodeObjectWrapper::new(py, &code);
-                match tracer.on_py_return(py, &wrapper, 0, &value) {
-                    Ok(outcome) => {
-                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
+        ffi::wrap_pyfunction("test_capture_return_event", || {
+            ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+                let ptr = cell.get();
+                if ptr.is_null() {
+                    panic!("No active RuntimeTracer for capture_return_event");
                 }
-            }
-        })?;
-        Ok(())
+                unsafe {
+                    let tracer = &mut *ptr;
+                    let wrapper = CodeObjectWrapper::new(py, &code);
+                    match tracer.on_py_return(py, &wrapper, 0, &value) {
+                        Ok(outcome) => {
+                            LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            })?;
+            Ok(())
+        })
     }
 
     const PRELUDE: &str = r#"

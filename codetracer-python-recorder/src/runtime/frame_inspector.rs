@@ -8,7 +8,7 @@ use pyo3::{ffi, Py, PyErr};
 use recorder_errors::{enverr, ErrorCode};
 
 use crate::code_object::CodeObjectWrapper;
-use crate::errors::to_py_err;
+use crate::ffi::map_recorder_error;
 
 extern "C" {
     fn PyFrame_GetLocals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
@@ -63,7 +63,7 @@ pub fn capture_frame<'py>(
 ) -> PyResult<FrameSnapshot<'py>> {
     let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
     if frame_ptr.is_null() {
-        return Err(to_py_err(enverr!(
+        return Err(map_recorder_error(enverr!(
             ErrorCode::FrameIntrospectionFailed,
             "PyEval_GetFrame returned null frame"
         )));
@@ -84,7 +84,7 @@ pub fn capture_frame<'py>(
             unsafe {
                 ffi::Py_DECREF(frame_ptr.cast());
             }
-            return Err(to_py_err(enverr!(
+            return Err(map_recorder_error(enverr!(
                 ErrorCode::FrameIntrospectionFailed,
                 "PyFrame_GetCode returned null"
             )));
@@ -101,7 +101,7 @@ pub fn capture_frame<'py>(
     }
 
     if frame_ptr.is_null() {
-        return Err(to_py_err(enverr!(
+        return Err(map_recorder_error(enverr!(
             ErrorCode::FrameIntrospectionFailed,
             "Failed to locate frame for code object"
         )));
@@ -120,14 +120,14 @@ pub fn capture_frame<'py>(
         unsafe {
             ffi::Py_DECREF(frame_ptr.cast());
         }
-        return Err(to_py_err(enverr!(
+        return Err(map_recorder_error(enverr!(
             ErrorCode::FrameIntrospectionFailed,
             "PyFrame_GetLocals returned null"
         )));
     }
     let locals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw.cast()) };
     let locals_mapping = locals_any.downcast::<PyMapping>().map_err(|_| {
-        to_py_err(enverr!(
+        map_recorder_error(enverr!(
             ErrorCode::FrameIntrospectionFailed,
             "Frame locals was not a mapping"
         ))
@@ -138,14 +138,14 @@ pub fn capture_frame<'py>(
         unsafe {
             ffi::Py_DECREF(frame_ptr.cast());
         }
-        return Err(to_py_err(enverr!(
+        return Err(map_recorder_error(enverr!(
             ErrorCode::GlobalsIntrospectionFailed,
             "PyFrame_GetGlobals returned null"
         )));
     }
     let globals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, globals_raw.cast()) };
     let globals_mapping = globals_any.downcast::<PyMapping>().map_err(|_| {
-        to_py_err(enverr!(
+        map_recorder_error(enverr!(
             ErrorCode::GlobalsIntrospectionFailed,
             "Frame globals was not a mapping"
         ))
@@ -155,7 +155,7 @@ pub fn capture_frame<'py>(
 
     let locals_dict = PyDict::new(py);
     locals_dict.update(&locals_mapping).map_err(|err| {
-        to_py_err(
+        map_recorder_error(
             enverr!(
                 ErrorCode::FrameIntrospectionFailed,
                 "Failed to materialize locals dict"
@@ -169,7 +169,7 @@ pub fn capture_frame<'py>(
     } else {
         let dict = PyDict::new(py);
         dict.update(&globals_mapping).map_err(|err| {
-            to_py_err(
+            map_recorder_error(
                 enverr!(
                     ErrorCode::GlobalsIntrospectionFailed,
                     "Failed to materialize globals dict"
