@@ -47,6 +47,20 @@ py-test:
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder
 
+# Inspect ad-hoc error handling patterns across the Rust/Python recorder
+errors-audit:
+    @echo "== PyRuntimeError construction =="
+    @rg --color=never --no-heading -n "PyRuntimeError::new_err" codetracer-python-recorder/src codetracer-python-recorder/tests codetracer-python-recorder/codetracer_python_recorder || true
+    @echo
+    @echo "== unwrap()/expect()/panic! usage =="
+    @rg --color=never --no-heading -n "\\.unwrap\\(" codetracer-python-recorder/src || true
+    @rg --color=never --no-heading -n "\\.expect\\(" codetracer-python-recorder/src || true
+    @rg --color=never --no-heading -n "panic!" codetracer-python-recorder/src || true
+    @echo
+    @echo "== Python-side bare RuntimeError/ValueError =="
+    @rg --color=never --no-heading -n "raise RuntimeError" codetracer-python-recorder/codetracer_python_recorder || true
+    @rg --color=never --no-heading -n "raise ValueError" codetracer-python-recorder/codetracer_python_recorder || true
+
 # Generate combined coverage artefacts for both crates
 coverage:
     just coverage-rust

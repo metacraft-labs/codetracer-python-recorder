@@ -15,6 +15,7 @@
 ## Workstreams
 
 ### WS1 – Foundations & Inventory
+**Status:** In progress (2025-10-02). `just errors-audit` added; call sites catalogued in the accompanying status log.
 - Add a `just errors-audit` command that runs `rg` to list `PyRuntimeError`, `unwrap`, `expect`, and direct `panic!` usage in the recorder crate.
 - Create issue tracker entries grouping call sites by module (`session`, `runtime`, `monitoring`, Python facade) to guide refactors.
 - Exit criteria: checklist of legacy error sites recorded with owners.
@@ -89,4 +90,3 @@
 - All panics are caught before crossing into Python; fuzz tests confirm no UB.
 - `just test` (and targeted error suites) pass on Linux/macOS CI, with new structured logs and metrics visible.
 - Documentation reflects guarantees, and downstream teams acknowledge new exit codes.
-
