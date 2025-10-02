@@ -12,7 +12,7 @@ without classification:
 - Unit tests cover usage/environment error variants for session startup.
 
 ### Status
-Open
+Completed via WS3 (2025-10-02)
 
 
 ## ISSUE-012

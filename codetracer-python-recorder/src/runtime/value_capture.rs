@@ -2,13 +2,14 @@
 
 use std::collections::HashSet;
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
+use recorder_errors::{usage, ErrorCode};
 use runtime_tracing::{FullValueRecord, NonStreamingTraceWriter, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
+use crate::errors::to_py_err;
 use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
 use crate::runtime::value_encoder::encode_value;
 
@@ -38,9 +39,12 @@ pub fn capture_call_arguments<'py>(
 
     let positional_take = std::cmp::min(argcount, varnames.len());
     for name in varnames.iter().take(positional_take) {
-        let value = locals
-            .get_item(name)?
-            .ok_or_else(|| PyRuntimeError::new_err(format!("missing positional arg '{name}'")))?;
+        let value = locals.get_item(name)?.ok_or_else(|| {
+            to_py_err(usage!(
+                ErrorCode::MissingPositionalArgument,
+                "missing positional arg '{name}'"
+            ))
+        })?;
         let encoded = encode_value(py, writer, &value);
         args.push(TraceWriter::arg(writer, name, encoded));
         idx += 1;
@@ -57,9 +61,12 @@ pub fn capture_call_arguments<'py>(
 
     let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
     for name in varnames.iter().skip(idx).take(kwonly_take) {
-        let value = locals
-            .get_item(name)?
-            .ok_or_else(|| PyRuntimeError::new_err(format!("missing kw-only arg '{name}'")))?;
+        let value = locals.get_item(name)?.ok_or_else(|| {
+            to_py_err(usage!(
+                ErrorCode::MissingKeywordArgument,
+                "missing kw-only arg '{name}'"
+            ))
+        })?;
         let encoded = encode_value(py, writer, &value);
         args.push(TraceWriter::arg(writer, name, encoded));
     }

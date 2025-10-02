@@ -61,6 +61,31 @@ pub enum ErrorCode {
     Io,
 }
 
+impl ErrorCode {
+    /// Stable identifier string for this error code.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ErrorCode::Unknown => "ERR_UNKNOWN",
+            ErrorCode::AlreadyTracing => "ERR_ALREADY_TRACING",
+            ErrorCode::TraceDirectoryConflict => "ERR_TRACE_DIR_CONFLICT",
+            ErrorCode::TraceDirectoryCreateFailed => "ERR_TRACE_DIR_CREATE_FAILED",
+            ErrorCode::UnsupportedFormat => "ERR_UNSUPPORTED_FORMAT",
+            ErrorCode::MissingPositionalArgument => "ERR_MISSING_POSITIONAL_ARG",
+            ErrorCode::MissingKeywordArgument => "ERR_MISSING_KEYWORD_ARG",
+            ErrorCode::FrameIntrospectionFailed => "ERR_FRAME_INTROSPECTION_FAILED",
+            ErrorCode::GlobalsIntrospectionFailed => "ERR_GLOBALS_INTROSPECTION_FAILED",
+            ErrorCode::TracerInstallConflict => "ERR_TRACER_INSTALL_CONFLICT",
+            ErrorCode::Io => "ERR_IO",
+        }
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Canonical error type flowing through the recorder workspace.
 #[derive(Debug)]
 pub struct RecorderError {
@@ -102,6 +127,11 @@ impl RecorderError {
     pub fn with_message(mut self, message: impl Into<Cow<'static, str>>) -> Self {
         self.message = message.into();
         self
+    }
+
+    /// Borrow the primary human-readable message.
+    pub fn message(&self) -> &str {
+        self.message.as_ref()
     }
 
     /// Borrow the optional underlying source.

@@ -20,10 +20,12 @@ use std::path::{Path, PathBuf};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
+use recorder_errors::{enverr, ErrorCode};
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
+use crate::errors::to_py_err;
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
@@ -109,9 +111,14 @@ impl RuntimeTracer {
         if self.ignored_code_ids.contains(&code_id) {
             return ShouldTrace::SkipAndDisable;
         }
-        let filename = code
-            .filename(py)
-            .expect("RuntimeTracer::should_trace_code failed to resolve filename");
+        let filename = match code.filename(py) {
+            Ok(name) => name,
+            Err(err) => {
+                log::error!("failed to resolve code filename: {err}");
+                self.ignored_code_ids.insert(code_id);
+                return ShouldTrace::SkipAndDisable;
+            }
+        };
         if is_real_filename(filename) {
             ShouldTrace::Trace
         } else {
@@ -119,10 +126,6 @@ impl RuntimeTracer {
             ShouldTrace::SkipAndDisable
         }
     }
-}
-
-fn to_py_err(e: Box<dyn std::error::Error>) -> pyo3::PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
 }
 
 impl Tracer for RuntimeTracer {
@@ -154,9 +157,15 @@ impl Tracer for RuntimeTracer {
             match capture_call_arguments(py, &mut self.writer, code) {
                 Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
                 Err(err) => {
-                    let message = format!("on_py_start: failed to capture args: {}", err);
-                    log::error!("{message}");
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(message));
+                    let details = err.to_string();
+                    log::error!("on_py_start: failed to capture args: {details}");
+                    return Err(to_py_err(
+                        enverr!(
+                            ErrorCode::FrameIntrospectionFailed,
+                            "failed to capture call arguments"
+                        )
+                        .with_context("details", details),
+                    ));
                 }
             }
         }
@@ -224,7 +233,12 @@ impl Tracer for RuntimeTracer {
         // For non-streaming formats we can update the events file.
         match self.format {
             TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
-                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
+                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
+                    to_py_err(
+                        enverr!(ErrorCode::Io, "failed to finalise trace events")
+                            .with_context("source", err.to_string()),
+                    )
+                })?;
             }
             TraceEventsFileFormat::Binary => {
                 // Streaming writer: no partial flush to avoid closing the stream.
@@ -237,9 +251,24 @@ impl Tracer for RuntimeTracer {
     fn finish(&mut self, _py: Python<'_>) -> PyResult<()> {
         // Trace event entry
         log::debug!("[RuntimeTracer] finish");
-        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(to_py_err)?;
-        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(to_py_err)?;
-        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
+        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(|err| {
+            to_py_err(
+                enverr!(ErrorCode::Io, "failed to finalise trace metadata")
+                    .with_context("source", err.to_string()),
+            )
+        })?;
+        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
+            to_py_err(
+                enverr!(ErrorCode::Io, "failed to finalise trace paths")
+                    .with_context("source", err.to_string()),
+            )
+        })?;
+        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
+            to_py_err(
+                enverr!(ErrorCode::Io, "failed to finalise trace events")
+                    .with_context("source", err.to_string()),
+            )
+        })?;
         self.ignored_code_ids.clear();
         self.function_ids.clear();
         Ok(())

@@ -4,11 +4,12 @@ use std::any::Any;
 use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
+use crate::errors::to_py_err;
 use pyo3::{
-    exceptions::PyRuntimeError,
     prelude::*,
     types::{PyAny, PyCode, PyModule},
 };
+use recorder_errors::{usage, ErrorCode};
 
 use super::{
     acquire_tool_id, free_tool_id, monitoring_events, register_callback, set_events,
@@ -267,7 +268,10 @@ impl Global {
 pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
     if guard.is_some() {
-        return Err(PyRuntimeError::new_err("tracer already installed"));
+        return Err(to_py_err(usage!(
+            ErrorCode::TracerInstallConflict,
+            "tracer already installed"
+        )));
     }
 
     let tool = acquire_tool_id(py)?;
