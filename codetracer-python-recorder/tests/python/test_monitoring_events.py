@@ -9,6 +9,8 @@ import pytest
 
 import codetracer_python_recorder as codetracer
 
+from .support import ensure_trace_dir
+
 
 @dataclass
 class ParsedTrace:
@@ -80,8 +82,7 @@ def _write_script(tmp: Path) -> Path:
 def test_py_start_line_and_return_events_are_recorded(tmp_path: Path) -> None:
     # Arrange: create a script and start tracing with activation restricted to that file
     script = _write_script(tmp_path)
-    out_dir = tmp_path / "trace_out"
-    out_dir.mkdir()
+    out_dir = ensure_trace_dir(tmp_path)
 
     session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
 
@@ -132,8 +133,7 @@ def test_py_start_line_and_return_events_are_recorded(tmp_path: Path) -> None:
 
 
 def test_start_while_active_raises(tmp_path: Path) -> None:
-    out_dir = tmp_path / "trace_out"
-    out_dir.mkdir()
+    out_dir = ensure_trace_dir(tmp_path)
     session = codetracer.start(out_dir, format=codetracer.TRACE_JSON)
     try:
         with pytest.raises(RuntimeError):

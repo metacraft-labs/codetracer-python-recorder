@@ -11,11 +11,12 @@
 - ✅ Stage 3 – Activation Guard Rails: added unit tests around
   `ActivationController` covering activation start, non-matching frames, and
   deactivation behaviour; existing runtime integration tests continue to pass.
-- ⏳ Stage 4 – Python Unit Coverage: not started.
+- ✅ Stage 4 – Python Unit Coverage: added `tests/python/unit/test_session_helpers.py`
+  for facade utilities and introduced `tests/python/support` for shared
+  fixtures; updated monitoring tests to use the helper directory builder.
 - ⏳ Stage 5 – CI & Coverage Instrumentation: not started.
 - ⏳ Stage 6 – Cleanup & Documentation: not started.
 
 ## Next Actions
-1. Advance Stage 4 by creating Python unit tests for facade helpers and shared
-   fixtures.
-2. Plan Stage 5 CI split once the new unit coverage lands.
+1. Plan Stage 5 CI split so Rust/Python harness results appear separately.
+2. Draft coverage instrumentation approach before implementation (Stage 5).
