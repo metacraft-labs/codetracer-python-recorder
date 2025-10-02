@@ -21,6 +21,7 @@
 - Exit criteria: checklist of legacy error sites recorded with owners.
 
 ### WS2 – `recorder-errors` Crate
+**Status:** Completed (2025-10-02). Crate scaffolded with central types, macros, and unit tests; workspace updated to include it.
 - Scaffold `recorder-errors` under the workspace with `RecorderError`, `RecorderResult`, `ErrorKind`, `ErrorCode`, context map type, and conversion traits from `io::Error`, `PyErr`, etc.
 - Implement ergonomic macros (`usage!`, `enverr!`, `target!`, `bug!`, `ensure_*`) plus unit tests covering formatting, context propagation, and downcasting.
 - Publish crate docs explaining mapping rules and promises; link ADR 0004.

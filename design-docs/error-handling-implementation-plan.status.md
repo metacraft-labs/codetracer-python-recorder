@@ -13,6 +13,11 @@ _Last updated: 2025-10-02_
 - **Follow-up tracking:** New issue entries recorded in `issues.md` — ISSUE-011 (session/bootstrap), ISSUE-012 (runtime), ISSUE-013 (monitoring/FFI), ISSUE-014 (Python facade).
 - **Next actions:** Socialise the audit command with the team; begin refactoring session/bootstrap sites under ISSUE-011 once ADR 0004 is accepted.
 
-## Upcoming Workstreams
-- WS2–WS8 remain **Not started** pending completion of WS1 groundwork and ADR acceptance.
+## WS2 – `recorder-errors` Crate
+- **State:** Completed (2025-10-02)
+- **Deliverables:** Workspace now hosts `crates/recorder-errors` with `RecorderError`, classification enums, context helpers, macros (`usage!`, `enverr!`, `target!`, `bug!`, `ensure_*`), and unit tests (`cargo test -p recorder-errors`). The crate exposes optional serde support and README docs per ADR guidance.
+- **Verification:** `cargo test -p recorder-errors` and `cargo check` run clean in the workspace.
+- **Next actions:** Coordinate WS3 to migrate existing modules (`session`, `runtime`, `monitoring`) onto the new façade and replace direct `PyRuntimeError` usage.
 
+## Upcoming Workstreams
+- WS3–WS8 remain **Not started** pending completion of WS1 groundwork and ADR acceptance.
