@@ -1,12 +1,15 @@
-//! Helpers for capturing call arguments for tracing callbacks.
+//! Helpers for capturing call arguments and variable scope for tracing callbacks.
+
+use std::collections::HashSet;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyString;
 
 use runtime_tracing::{FullValueRecord, NonStreamingTraceWriter, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
-use crate::runtime::frame_inspector::capture_frame;
+use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
 use crate::runtime::value_encoder::encode_value;
 
 /// Capture Python call arguments for the provided code object and encode them
@@ -71,4 +74,47 @@ pub fn capture_call_arguments<'py>(
     }
 
     Ok(args)
+}
+
+/// Record all visible variables from the provided frame snapshot into the writer.
+pub fn record_visible_scope(
+    py: Python<'_>,
+    writer: &mut NonStreamingTraceWriter,
+    snapshot: &FrameSnapshot<'_>,
+    recorded: &mut HashSet<String>,
+) {
+    for (key, value) in snapshot.locals().iter() {
+        let name = match key.downcast::<PyString>() {
+            Ok(pystr) => match pystr.to_str() {
+                Ok(raw) => raw.to_owned(),
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+        let encoded = encode_value(py, writer, &value);
+        TraceWriter::register_variable_with_full_value(writer, &name, encoded);
+        recorded.insert(name);
+    }
+
+    if snapshot.locals_is_globals() {
+        return;
+    }
+
+    if let Some(globals_dict) = snapshot.globals() {
+        for (key, value) in globals_dict.iter() {
+            let name = match key.downcast::<PyString>() {
+                Ok(pystr) => match pystr.to_str() {
+                    Ok(raw) => raw,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+            if name == "__builtins__" || recorded.contains(name) {
+                continue;
+            }
+            let encoded = encode_value(py, writer, &value);
+            TraceWriter::register_variable_with_full_value(writer, name, encoded);
+            recorded.insert(name.to_owned());
+        }
+    }
 }

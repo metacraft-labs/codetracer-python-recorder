@@ -10,7 +10,7 @@ pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
-use value_capture::capture_call_arguments;
+use value_capture::{capture_call_arguments, record_visible_scope};
 use value_encoder::encode_value;
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -193,31 +193,7 @@ impl Tracer for RuntimeTracer {
         let snapshot = capture_frame(py, code)?;
 
         let mut recorded: HashSet<String> = HashSet::new();
-
-        for (key, value) in snapshot.locals().iter() {
-            let name: String = key.extract().expect("Local name was not a string");
-            let encoded = encode_value(py, &mut self.writer, &value);
-            TraceWriter::register_variable_with_full_value(&mut self.writer, &name, encoded);
-            recorded.insert(name);
-        }
-
-        if !snapshot.locals_is_globals() {
-            if let Some(globals_dict) = snapshot.globals() {
-                for (key, value) in globals_dict.iter() {
-                    let name: String = key.extract().expect("Global name was not a string");
-                    if name == "__builtins__" || recorded.contains(&name) {
-                        continue;
-                    }
-                    let encoded = encode_value(py, &mut self.writer, &value);
-                    TraceWriter::register_variable_with_full_value(
-                        &mut self.writer,
-                        &name,
-                        encoded,
-                    );
-                    recorded.insert(name);
-                }
-            }
-        }
+        record_visible_scope(py, &mut self.writer, &snapshot, &mut recorded);
 
         Ok(CallbackOutcome::Continue)
     }
