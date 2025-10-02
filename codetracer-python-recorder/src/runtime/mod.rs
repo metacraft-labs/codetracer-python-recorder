@@ -1,19 +1,21 @@
 //! Runtime tracer facade translating sys.monitoring callbacks into `runtime_tracing` records.
 
 mod activation;
+mod frame_inspector;
 mod output_paths;
 mod value_encoder;
 
 pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
+use frame_inspector::capture_frame;
 use value_encoder::encode_value;
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyMapping};
+use pyo3::types::PyAny;
 use pyo3::{ffi, PyErr};
 
 use runtime_tracing::NonStreamingTraceWriter;
@@ -26,7 +28,6 @@ use crate::monitoring::{
 
 extern "C" {
     fn PyFrame_GetLocals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
-    fn PyFrame_GetGlobals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
 }
 
 // Logging is handled via the `log` crate macros (e.g., log::debug!).
@@ -285,109 +286,37 @@ impl Tracer for RuntimeTracer {
             log::debug!("[RuntimeTracer] on_line: <unknown>:{}", lineno);
         }
 
-        let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
-        if frame_ptr.is_null() {
-            panic!("PyEval_GetFrame returned null frame");
-        }
-        unsafe {
-            ffi::Py_XINCREF(frame_ptr.cast());
-        }
-        let target_code_ptr = code.as_bound(py).as_ptr();
-        loop {
-            if frame_ptr.is_null() {
-                break;
-            }
-            let frame_code_ptr = unsafe { ffi::PyFrame_GetCode(frame_ptr) };
-            if frame_code_ptr.is_null() {
-                unsafe {
-                    ffi::Py_DECREF(frame_ptr.cast());
-                }
-                panic!("PyFrame_GetCode returned null");
-            }
-            let frame_code: Py<PyAny> =
-                unsafe { Py::from_owned_ptr(py, frame_code_ptr as *mut ffi::PyObject) };
-            if frame_code.as_ptr() == target_code_ptr {
-                break;
-            }
-            let back = unsafe { ffi::PyFrame_GetBack(frame_ptr) };
-            unsafe {
-                ffi::Py_DECREF(frame_ptr.cast());
-            }
-            frame_ptr = back;
-        }
-        if frame_ptr.is_null() {
-            panic!("Failed to locate frame for code object {}", code.id());
-        }
-
-        // Synchronise fast locals so PyFrame_GetLocals sees current values.
-        unsafe {
-            if ffi::PyFrame_FastToLocalsWithError(frame_ptr) < 0 {
-                ffi::Py_DECREF(frame_ptr.cast());
-                let err = PyErr::fetch(py);
-                panic!("Failed to sync frame locals: {err}");
-            }
-        }
-
         if let Ok(filename) = code.filename(py) {
             TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
         }
 
-        // Obtain concrete dict objects for iteration.
-        let locals_raw = unsafe { PyFrame_GetLocals(frame_ptr) };
-        if locals_raw.is_null() {
-            unsafe {
-                ffi::Py_DECREF(frame_ptr.cast());
-            }
-            panic!("PyFrame_GetLocals returned null");
-        }
-        let globals_raw = unsafe { PyFrame_GetGlobals(frame_ptr) };
-        if globals_raw.is_null() {
-            unsafe {
-                ffi::Py_DECREF(frame_ptr.cast());
-            }
-            panic!("PyFrame_GetGlobals returned null");
-        }
-        let locals_is_globals = locals_raw == globals_raw;
-        let locals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw) };
-        let globals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, globals_raw) };
-        let locals_mapping = locals_any
-            .downcast::<PyMapping>()
-            .expect("Frame locals was not a mapping");
-        let globals_mapping = globals_any
-            .downcast::<PyMapping>()
-            .expect("Frame globals was not a mapping");
-        let locals_dict = PyDict::new(py);
-        locals_dict
-            .update(&locals_mapping)
-            .expect("Failed to materialize locals dict");
-        let globals_dict = PyDict::new(py);
-        globals_dict
-            .update(&globals_mapping)
-            .expect("Failed to materialize globals dict");
+        let snapshot = capture_frame(py, code)?;
 
         let mut recorded: HashSet<String> = HashSet::new();
 
-        for (key, value) in locals_dict.iter() {
+        for (key, value) in snapshot.locals().iter() {
             let name: String = key.extract().expect("Local name was not a string");
             let encoded = encode_value(py, &mut self.writer, &value);
             TraceWriter::register_variable_with_full_value(&mut self.writer, &name, encoded);
             recorded.insert(name);
         }
 
-        if !locals_is_globals {
-            for (key, value) in globals_dict.iter() {
-                let name: String = key.extract().expect("Global name was not a string");
-                if name == "__builtins__" || recorded.contains(&name) {
-                    continue;
+        if !snapshot.locals_is_globals() {
+            if let Some(globals_dict) = snapshot.globals() {
+                for (key, value) in globals_dict.iter() {
+                    let name: String = key.extract().expect("Global name was not a string");
+                    if name == "__builtins__" || recorded.contains(&name) {
+                        continue;
+                    }
+                    let encoded = encode_value(py, &mut self.writer, &value);
+                    TraceWriter::register_variable_with_full_value(
+                        &mut self.writer,
+                        &name,
+                        encoded,
+                    );
+                    recorded.insert(name);
                 }
-                let encoded = encode_value(py, &mut self.writer, &value);
-                TraceWriter::register_variable_with_full_value(&mut self.writer, &name, encoded);
-                recorded.insert(name);
             }
-        }
-
-        unsafe {
-            ffi::Py_DECREF(frame_ptr.cast());
         }
 
         Ok(CallbackOutcome::Continue)
