@@ -41,7 +41,7 @@ cargo-test:
     uv run cargo nextest run --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
 
 py-test:
-    uv run --group dev --group test pytest
+    uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
     
 # Run tests only on the pure recorder
 test-pure:
@@ -64,4 +64,3 @@ test-all:
         file="${file[0]}"; \
         uv run -p "python3.$v" --with "${file}" --with pytest -- pytest -q; \
     done
-
