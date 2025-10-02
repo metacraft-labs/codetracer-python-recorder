@@ -17,8 +17,10 @@
 - ✅ Stage 5 – CI & Coverage Instrumentation: CI now runs the split Rust/Python
   test jobs plus a non-blocking coverage job that reuses `just coverage`, uploads
   LCOV/XML/JSON artefacts, and posts a per-PR summary comment.
-- ⏳ Stage 6 – Cleanup & Documentation: not started.
+- ✅ Stage 6 – Cleanup & Documentation: ADR 0003 is now Accepted, top-level
+  docs describe the testing/coverage workflow, and the tests README references
+  the CI coverage comment for contributors.
 
 ## Next Actions
-1. Evaluate coverage report stability and prepare enforcement thresholds before
-   Stage 6.
+Plan complete; monitor coverage baselines and propose enforcement thresholds in
+a follow-up task.

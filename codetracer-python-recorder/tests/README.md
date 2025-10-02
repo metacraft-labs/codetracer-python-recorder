@@ -34,6 +34,9 @@ CI configuration:
   in `codetracer-python-recorder/target/coverage/python/`.
 - `just coverage` is a convenience wrapper that invokes both commands in sequence.
 
+CI runs the same helper and posts a coverage summary comment on pull requests so
+reviewers can see the per-file breakdown without downloading artefacts.
+
 All commands create their output directories on first run, so no manual setup is
 required beyond entering the Nix shell (`nix develop`) or syncing the UV virtual
 environment (`just venv`).

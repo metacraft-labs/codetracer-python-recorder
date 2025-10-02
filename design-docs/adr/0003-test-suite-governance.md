@@ -1,6 +1,6 @@
 # ADR 0003: Test Suite Governance for codetracer-python-recorder
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2025-10-02
 - **Deciders:** Platform / Runtime Tracing Team
 - **Consulted:** Python Tooling WG, Developer Experience WG
@@ -67,7 +67,7 @@ We will adopt a tiered test governance model and reorganise the repository to ma
 
 ## Status Tracking
 
-- This ADR is **Proposed**. It becomes **Accepted** once the restructuring PR and the initial coverage additions (TraceSessionBootstrap, TraceOutputPaths, ActivationController, Python facade helpers) are merged and `just test` runs green with the new layout.
+- This ADR is **Accepted**. Directory restructuring, unit/integration coverage for the targeted modules, and the split CI/coverage jobs have landed; future adjustments will be tracked in follow-up ADRs if required.
 
 ## Alternatives Considered
 
