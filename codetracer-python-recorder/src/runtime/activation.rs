@@ -85,6 +85,82 @@ impl ActivationController {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyAnyMethods, PyCode, PyModule};
+    use pyo3::{Bound, Python};
+    use std::ffi::CString;
+
+    fn build_code(py: Python<'_>, name: &str, filename: &str) -> CodeObjectWrapper {
+        let module_src = format!("def {name}():\n    return 42\n");
+        let c_src = CString::new(module_src).expect("source");
+        let c_filename = CString::new(filename).expect("filename");
+        let c_module = CString::new("m").expect("module");
+        let module = PyModule::from_code(
+            py,
+            c_src.as_c_str(),
+            c_filename.as_c_str(),
+            c_module.as_c_str(),
+        )
+        .expect("compile module");
+        let func = module.getattr(name).expect("fetch function");
+        let code: Bound<'_, PyCode> = func
+            .getattr("__code__")
+            .expect("__code__")
+            .downcast_into()
+            .expect("code");
+        CodeObjectWrapper::new(py, &code)
+    }
+
+    #[test]
+    fn starts_active_when_no_activation_path() {
+        let controller = ActivationController::new(None);
+        assert!(controller.is_active());
+    }
+
+    #[test]
+    fn remains_inactive_until_activation_code_runs() {
+        Python::with_gil(|py| {
+            let code = build_code(py, "target", "/tmp/target.py");
+            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            assert!(!controller.is_active());
+            assert!(controller.should_process_event(py, &code));
+            assert!(controller.is_active());
+        });
+    }
+
+    #[test]
+    fn ignores_non_matching_code_objects() {
+        Python::with_gil(|py| {
+            let code = build_code(py, "other", "/tmp/other.py");
+            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            assert!(!controller.should_process_event(py, &code));
+            assert!(!controller.is_active());
+        });
+    }
+
+    #[test]
+    fn deactivates_after_activation_return() {
+        Python::with_gil(|py| {
+            let code = build_code(py, "target", "/tmp/target.py");
+            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            assert!(controller.should_process_event(py, &code));
+            assert!(controller.is_active());
+            assert!(controller.handle_return_event(code.id()));
+            assert!(!controller.is_active());
+            assert!(!controller.should_process_event(py, &code));
+        });
+    }
+
+    #[test]
+    fn start_path_prefers_activation_path() {
+        let controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+        let fallback = Path::new("/tmp/fallback.py");
+        assert_eq!(controller.start_path(fallback), Path::new("/tmp/target.py"));
+    }
+}
+
 impl ActivationController {
     #[allow(dead_code)]
     pub fn handle_return(&mut self, code_id: usize) -> bool {
