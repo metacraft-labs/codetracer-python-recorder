@@ -14,9 +14,11 @@
 - ✅ Stage 4 – Python Unit Coverage: added `tests/python/unit/test_session_helpers.py`
   for facade utilities and introduced `tests/python/support` for shared
   fixtures; updated monitoring tests to use the helper directory builder.
-- ⏳ Stage 5 – CI & Coverage Instrumentation: not started.
+- 🚧 Stage 5 – CI & Coverage Instrumentation: CI now runs Rust and Python
+  suites in separate steps; coverage instrumentation plan still pending.
 - ⏳ Stage 6 – Cleanup & Documentation: not started.
 
 ## Next Actions
-1. Plan Stage 5 CI split so Rust/Python harness results appear separately.
-2. Draft coverage instrumentation approach before implementation (Stage 5).
+1. Implement coverage collection (Just targets + CI artefacts) following the
+   drafted plan while keeping steps non-blocking initially.
+2. Evaluate report stability and prepare enforcement thresholds before Stage 6.

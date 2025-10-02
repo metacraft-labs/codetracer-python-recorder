@@ -22,8 +22,14 @@ jobs:
           nix_path: nixpkgs=channel:nixos-25.05
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Build Rust module and run tests via Nix
-        run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev test'
+      - name: Prepare dev environment
+        run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
+
+      - name: Rust tests
+        run: nix develop --command bash -lc 'just cargo-test'
+
+      - name: Python tests
+        run: nix develop --command bash -lc 'just py-test'
 
   # rust-tests:
   #   name: Rust module test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
