@@ -17,6 +17,11 @@
 - ✅ Step 1: Introduced `runtime::value_capture::capture_call_arguments`; `on_py_start` now delegates to it, keeping the function focused on orchestration while reusing frame inspectors.
 - ✅ Step 2: Added `record_visible_scope` helper and refactored `on_line` to delegate locals/globals registration through it.
 
+## Stage 4 – Return Handling & Logging Harmonisation
+- ✅ Added `runtime::logging::log_event` to consolidate callback logging across start, line, and return handlers.
+- ✅ Exposed `record_return_value` in `runtime::value_capture` and refactored `RuntimeTracer::on_py_return` to orchestrate activation checks, logging, and value recording.
+- ✅ Extended runtime tests with explicit return capture coverage and activation deactivation assertions.
+
 ## Next Actions
 - Draft short notes on activation gating and frame search mechanics to complete Stage 0.
-- Kick off Stage 4 return/logging harmonisation after documenting Stage 0 notes.
+- Begin Stage 5 cleanup/regression sweep once Stage 0 notes are captured.

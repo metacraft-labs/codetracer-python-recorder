@@ -2,6 +2,7 @@
 
 mod activation;
 mod frame_inspector;
+mod logging;
 mod output_paths;
 mod value_capture;
 mod value_encoder;
@@ -10,8 +11,8 @@ pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
-use value_capture::{capture_call_arguments, record_visible_scope};
-use value_encoder::encode_value;
+use logging::log_event;
+use value_capture::{capture_call_arguments, record_return_value, record_visible_scope};
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -147,12 +148,7 @@ impl Tracer for RuntimeTracer {
             return Ok(CallbackOutcome::Continue);
         }
 
-        match (code.filename(py), code.qualname(py)) {
-            (Ok(fname), Ok(qname)) => {
-                log::debug!("[RuntimeTracer] on_py_start: {} ({})", qname, fname)
-            }
-            _ => log::debug!("[RuntimeTracer] on_py_start"),
-        }
+        log_event(py, code, "on_py_start", None);
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
             match capture_call_arguments(py, &mut self.writer, code) {
@@ -180,11 +176,7 @@ impl Tracer for RuntimeTracer {
             return Ok(CallbackOutcome::Continue);
         }
 
-        if let Ok(fname) = code.filename(py) {
-            log::debug!("[RuntimeTracer] on_line: {}:{}", fname, lineno);
-        } else {
-            log::debug!("[RuntimeTracer] on_line: <unknown>:{}", lineno);
-        }
+        log_event(py, code, "on_line", Some(lineno));
 
         if let Ok(filename) = code.filename(py) {
             TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
@@ -216,15 +208,9 @@ impl Tracer for RuntimeTracer {
             return Ok(CallbackOutcome::Continue);
         }
 
-        match (code.filename(py), code.qualname(py)) {
-            (Ok(fname), Ok(qname)) => {
-                log::debug!("[RuntimeTracer] on_py_return: {} ({})", qname, fname)
-            }
-            _ => log::debug!("[RuntimeTracer] on_py_return"),
-        }
+        log_event(py, code, "on_py_return", None);
 
-        let val = encode_value(py, &mut self.writer, retval);
-        TraceWriter::register_return(&mut self.writer, val);
+        record_return_value(py, &mut self.writer, retval);
         if self.activation.handle_return_event(code.id()) {
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
@@ -264,7 +250,7 @@ impl Tracer for RuntimeTracer {
 mod tests {
     use super::*;
     use crate::monitoring::CallbackOutcome;
-    use pyo3::types::{PyCode, PyModule};
+    use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, TraceLowLevelEvent, ValueRecord};
     use std::cell::Cell;
@@ -377,6 +363,61 @@ finally:
         assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
     }
 
+    #[test]
+    fn records_return_values_and_deactivates_activation() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let script_path = tmp.path().join("activation_script.py");
+            let script = format!(
+                "{PRELUDE}\n\n\
+def compute():\n    emit_return(\"tail\")\n    return \"tail\"\n\n\
+result = compute()\n"
+            );
+            std::fs::write(&script_path, &script).expect("write script");
+
+            let program = script_path.to_string_lossy().into_owned();
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Json,
+                Some(script_path.as_path()),
+            );
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute test script");
+            }
+
+            let returns: Vec<SimpleValue> = tracer
+                .writer
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    TraceLowLevelEvent::Return(record) => {
+                        Some(SimpleValue::from_value(&record.return_value))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            assert!(
+                returns.contains(&SimpleValue::String("tail".to_string())),
+                "expected recorded string return, got {:?}",
+                returns
+            );
+            assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
+            assert!(!tracer.activation.is_active());
+        });
+    }
+
     #[pyfunction]
     fn capture_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
         ACTIVE_TRACER.with(|cell| -> PyResult<()> {
@@ -399,9 +440,35 @@ finally:
         Ok(())
     }
 
+    #[pyfunction]
+    fn capture_return_event(
+        py: Python<'_>,
+        code: Bound<'_, PyCode>,
+        value: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+            let ptr = cell.get();
+            if ptr.is_null() {
+                panic!("No active RuntimeTracer for capture_return_event");
+            }
+            unsafe {
+                let tracer = &mut *ptr;
+                let wrapper = CodeObjectWrapper::new(py, &code);
+                match tracer.on_py_return(py, &wrapper, 0, &value) {
+                    Ok(outcome) => {
+                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        })?;
+        Ok(())
+    }
+
     const PRELUDE: &str = r#"
 import inspect
-from test_tracer import capture_line
+from test_tracer import capture_line, capture_return_event
 
 def snapshot(line=None):
     frame = inspect.currentframe().f_back
@@ -411,6 +478,11 @@ def snapshot(line=None):
 def snap(value):
     frame = inspect.currentframe().f_back
     capture_line(frame.f_code, frame.f_lineno)
+    return value
+
+def emit_return(value):
+    frame = inspect.currentframe().f_back
+    capture_return_event(frame.f_code, value)
     return value
 "#;
 
@@ -491,6 +563,11 @@ def snap(value):
         module
             .add_function(wrap_pyfunction!(capture_line, &module).expect("wrap capture_line"))
             .expect("add function");
+        module
+            .add_function(
+                wrap_pyfunction!(capture_return_event, &module).expect("wrap capture_return_event"),
+            )
+            .expect("add return capture function");
         py.import("sys")
             .expect("import sys")
             .getattr("modules")

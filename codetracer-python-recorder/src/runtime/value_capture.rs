@@ -118,3 +118,13 @@ pub fn record_visible_scope(
         }
     }
 }
+
+/// Encode and record a return value for the active trace.
+pub fn record_return_value(
+    py: Python<'_>,
+    writer: &mut NonStreamingTraceWriter,
+    value: &Bound<'_, PyAny>,
+) {
+    let encoded = encode_value(py, writer, value);
+    TraceWriter::register_return(writer, encoded);
+}
