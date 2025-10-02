@@ -18,7 +18,7 @@ use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
-use crate::tracer::{
+use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 
@@ -449,7 +449,7 @@ impl Tracer for RuntimeTracer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tracer::CallbackOutcome;
+    use crate::monitoring::CallbackOutcome;
     use pyo3::types::{PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, TraceLowLevelEvent, ValueRecord};

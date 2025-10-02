@@ -6,15 +6,17 @@
 
 pub mod code_object;
 mod logging;
+pub mod monitoring;
 mod runtime;
 mod session;
-pub mod tracer;
 
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
-pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing};
-pub use crate::tracer::{
-    install_tracer, uninstall_tracer, CallbackOutcome, CallbackResult, EventSet, Tracer,
+pub use crate::monitoring as tracer;
+pub use crate::monitoring::{
+    flush_installed_tracer, install_tracer, uninstall_tracer, CallbackOutcome, CallbackResult,
+    EventSet, Tracer,
 };
+pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing};
 
 use pyo3::prelude::*;
 

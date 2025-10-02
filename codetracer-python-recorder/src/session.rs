@@ -6,8 +6,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::logging::init_rust_logging_with_default;
+use crate::monitoring::{flush_installed_tracer, install_tracer, uninstall_tracer};
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
-use crate::tracer::{flush_installed_tracer, install_tracer, uninstall_tracer};
 
 /// Global flag tracking whether tracing is active.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
