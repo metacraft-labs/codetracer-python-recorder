@@ -10,7 +10,21 @@ maintains placeholder state and performs no actual tracing.
 from . import api as _api
 from .api import *  # re-export public API symbols
 from .auto_start import auto_start_from_env
+from .codetracer_python_recorder import (
+    EnvironmentError,
+    InternalError,
+    RecorderError,
+    TargetError,
+    UsageError,
+)
 
 auto_start_from_env()
 
-__all__ = _api.__all__
+__all__ = (
+    *_api.__all__,
+    "RecorderError",
+    "UsageError",
+    "EnvironmentError",
+    "TargetError",
+    "InternalError",
+)

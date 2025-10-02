@@ -4,7 +4,7 @@ use std::any::Any;
 use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
-use crate::errors::to_py_err;
+use crate::ffi;
 use pyo3::{
     prelude::*,
     types::{PyAny, PyCode, PyModule},
@@ -268,7 +268,7 @@ impl Global {
 pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
     if guard.is_some() {
-        return Err(to_py_err(usage!(
+        return Err(ffi::map_recorder_error(usage!(
             ErrorCode::TracerInstallConflict,
             "tracer already installed"
         )));
@@ -447,24 +447,28 @@ fn callback_call(
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_call(py, &wrapper, offset, &callable, arg0.as_ref());
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_call", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_call(py, &wrapper, offset, &callable, arg0.as_ref());
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
 fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global.tracer.on_line(py, &wrapper, lineno);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_line", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global.tracer.on_line(py, &wrapper, lineno);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -473,14 +477,16 @@ fn callback_instruction(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_instruction(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_instruction", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_instruction(py, &wrapper, instruction_offset);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -490,14 +496,17 @@ fn callback_jump(
     instruction_offset: i32,
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_jump(py, &wrapper, instruction_offset, destination_offset);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_jump", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result =
+                global
+                    .tracer
+                    .on_jump(py, &wrapper, instruction_offset, destination_offset);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -507,14 +516,17 @@ fn callback_branch(
     instruction_offset: i32,
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_branch(py, &wrapper, instruction_offset, destination_offset);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_branch", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result =
+                global
+                    .tracer
+                    .on_branch(py, &wrapper, instruction_offset, destination_offset);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -523,12 +535,14 @@ fn callback_py_start(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global.tracer.on_py_start(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_start", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global.tracer.on_py_start(py, &wrapper, instruction_offset);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -537,12 +551,14 @@ fn callback_py_resume(
     code: Bound<'_, PyCode>,
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global.tracer.on_py_resume(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_resume", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global.tracer.on_py_resume(py, &wrapper, instruction_offset);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -552,14 +568,16 @@ fn callback_py_return(
     instruction_offset: i32,
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_py_return(py, &wrapper, instruction_offset, &retval);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_return", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_py_return(py, &wrapper, instruction_offset, &retval);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -569,14 +587,16 @@ fn callback_py_yield(
     instruction_offset: i32,
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_py_yield(py, &wrapper, instruction_offset, &retval);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_yield", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_py_yield(py, &wrapper, instruction_offset, &retval);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -586,14 +606,16 @@ fn callback_py_throw(
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_py_throw(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_throw", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_py_throw(py, &wrapper, instruction_offset, &exception);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -603,14 +625,16 @@ fn callback_py_unwind(
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_py_unwind(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_py_unwind", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_py_unwind(py, &wrapper, instruction_offset, &exception);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -620,14 +644,16 @@ fn callback_raise(
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_raise(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_raise", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_raise(py, &wrapper, instruction_offset, &exception);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -637,14 +663,16 @@ fn callback_reraise(
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_reraise(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_reraise", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_reraise(py, &wrapper, instruction_offset, &exception);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -654,15 +682,17 @@ fn callback_exception_handled(
     instruction_offset: i32,
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result =
-            global
-                .tracer
-                .on_exception_handled(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_exception_handled", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result =
+                global
+                    .tracer
+                    .on_exception_handled(py, &wrapper, instruction_offset, &exception);
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 // See comment in Tracer trait
@@ -689,14 +719,16 @@ fn callback_c_return(
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref());
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_c_return", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref());
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }
 
 #[pyfunction]
@@ -707,12 +739,14 @@ fn callback_c_raise(
     callable: Bound<'_, PyAny>,
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-        let wrapper = global.registry.get_or_insert(py, &code);
-        let result = global
-            .tracer
-            .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref());
-        return global.handle_callback(py, result);
-    }
-    Ok(py.None())
+    ffi::wrap_pyfunction("callback_c_raise", || {
+        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+            let wrapper = global.registry.get_or_insert(py, &code);
+            let result = global
+                .tracer
+                .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref());
+            return global.handle_callback(py, result);
+        }
+        Ok(py.None())
+    })
 }

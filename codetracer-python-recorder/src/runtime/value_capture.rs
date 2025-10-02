@@ -9,7 +9,7 @@ use recorder_errors::{usage, ErrorCode};
 use runtime_tracing::{FullValueRecord, NonStreamingTraceWriter, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
-use crate::errors::to_py_err;
+use crate::ffi;
 use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
 use crate::runtime::value_encoder::encode_value;
 
@@ -40,7 +40,7 @@ pub fn capture_call_arguments<'py>(
     let positional_take = std::cmp::min(argcount, varnames.len());
     for name in varnames.iter().take(positional_take) {
         let value = locals.get_item(name)?.ok_or_else(|| {
-            to_py_err(usage!(
+            ffi::map_recorder_error(usage!(
                 ErrorCode::MissingPositionalArgument,
                 "missing positional arg '{name}'"
             ))
@@ -62,7 +62,7 @@ pub fn capture_call_arguments<'py>(
     let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
     for name in varnames.iter().skip(idx).take(kwonly_take) {
         let value = locals.get_item(name)?.ok_or_else(|| {
-            to_py_err(usage!(
+            ffi::map_recorder_error(usage!(
                 ErrorCode::MissingKeywordArgument,
                 "missing kw-only arg '{name}'"
             ))
