@@ -35,6 +35,13 @@ impl ActivationController {
         self.started
     }
 
+    /// Ensure activation state reflects the current event and report whether
+    /// tracing should continue processing it.
+    pub fn should_process_event(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> bool {
+        self.ensure_started(py, code);
+        self.is_active()
+    }
+
     /// Return the canonical start path for writer initialisation.
     pub fn start_path<'a>(&'a self, fallback: &'a Path) -> &'a Path {
         self.activation_path.as_deref().unwrap_or(fallback)
@@ -68,12 +75,19 @@ impl ActivationController {
 
     /// Handle return events and turn off tracing when the activation function
     /// exits. Returns `true` when tracing was deactivated by this call.
-    pub fn handle_return(&mut self, code_id: usize) -> bool {
+    pub fn handle_return_event(&mut self, code_id: usize) -> bool {
         if self.activation_code_id == Some(code_id) {
             self.started = false;
             self.activation_done = true;
             return true;
         }
         false
+    }
+}
+
+impl ActivationController {
+    #[allow(dead_code)]
+    pub fn handle_return(&mut self, code_id: usize) -> bool {
+        self.handle_return_event(code_id)
     }
 }

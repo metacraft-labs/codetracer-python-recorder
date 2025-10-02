@@ -11,8 +11,8 @@
 
 ## Stage 2 – Frame Inspection & Activation Separation
 - ✅ Step 1: Added `runtime::frame_inspector::capture_frame` to encapsulate frame lookup, locals/globals materialisation, and reference counting; `on_line` now delegates to the helper while preserving behaviour.
-- ⏳ Step 2: Extend `ActivationController` with orchestration helpers and update callbacks accordingly.
+- ✅ Step 2: Extended `ActivationController` with `should_process_event`/`handle_return_event`, updated callbacks to rely on them, and removed direct state juggling from `RuntimeTracer`.
 
 ## Next Actions
 - Draft short notes on activation gating and frame search mechanics to complete Stage 0.
-- Extend `ActivationController` API and callback usage (Stage 2 – Step 2).
+- Introduce Stage 3 value-capture helpers after Stage 0 documentation wraps.

@@ -84,12 +84,6 @@ impl RuntimeTracer {
             .map_err(to_py_err)
     }
 
-    /// Return true when tracing is active; may become true on first event
-    /// from the activation file if configured.
-    fn ensure_started<'py>(&mut self, py: Python<'py>, code: &CodeObjectWrapper) {
-        self.activation.ensure_started(py, code);
-    }
-
     fn ensure_function_id(
         &mut self,
         py: Python<'_>,
@@ -145,14 +139,14 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
-        self.ensure_started(py, code);
+        let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             ShouldTrace::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.activation.is_active() {
+        if !is_active {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -269,14 +263,14 @@ impl Tracer for RuntimeTracer {
     }
 
     fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) -> CallbackResult {
-        self.ensure_started(py, code);
+        let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             ShouldTrace::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.activation.is_active() {
+        if !is_active {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -329,14 +323,14 @@ impl Tracer for RuntimeTracer {
         _offset: i32,
         retval: &Bound<'_, PyAny>,
     ) -> CallbackResult {
-        self.ensure_started(py, code);
+        let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             ShouldTrace::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.activation.is_active() {
+        if !is_active {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -349,7 +343,7 @@ impl Tracer for RuntimeTracer {
 
         let val = encode_value(py, &mut self.writer, retval);
         TraceWriter::register_return(&mut self.writer, val);
-        if self.activation.handle_return(code.id()) {
+        if self.activation.handle_return_event(code.id()) {
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
 
