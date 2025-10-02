@@ -6,7 +6,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::logging::init_rust_logging_with_default;
-use crate::runtime_tracer;
+use crate::runtime::{RuntimeTracer, TraceOutputPaths};
 use crate::tracer::{flush_installed_tracer, install_tracer, uninstall_tracer};
 
 /// Global flag tracking whether tracing is active.
@@ -50,19 +50,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
         }
     };
 
-    // Build output file paths inside the directory.
-    let (events_path, meta_path, paths_path) = match fmt {
-        runtime_tracing::TraceEventsFileFormat::Json => (
-            out_dir.join("trace.json"),
-            out_dir.join("trace_metadata.json"),
-            out_dir.join("trace_paths.json"),
-        ),
-        _ => (
-            out_dir.join("trace.bin"),
-            out_dir.join("trace_metadata.json"),
-            out_dir.join("trace_paths.json"),
-        ),
-    };
+    let outputs = TraceOutputPaths::new(out_dir, fmt);
 
     // Activation path: when set, tracing starts only after entering it.
     let activation_path = activation_path.map(|s| Path::new(s));
@@ -74,12 +62,8 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
         let program: String = argv.get_item(0)?.extract::<String>()?;
         //TODO: Error-handling. What to do if argv is empty? Does this ever happen?
 
-        let mut tracer = runtime_tracer::RuntimeTracer::new(&program, &[], fmt, activation_path);
-
-        // Start location: prefer activation path, otherwise best-effort argv[0]
-        let start_path: &Path = activation_path.unwrap_or(Path::new(&program));
-        log::debug!("{}", start_path.display());
-        tracer.begin(&meta_path, &paths_path, &events_path, start_path, 1)?;
+        let mut tracer = RuntimeTracer::new(&program, &[], fmt, activation_path);
+        tracer.begin(&outputs, 1)?;
 
         // Install callbacks
         install_tracer(py, Box::new(tracer))?;

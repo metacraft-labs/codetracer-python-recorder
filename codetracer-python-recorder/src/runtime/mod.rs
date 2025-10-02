@@ -1,14 +1,21 @@
+mod activation;
+mod output_paths;
+mod value_encoder;
+
+pub use output_paths::TraceOutputPaths;
+
+use activation::ActivationController;
+use value_encoder::encode_value;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyMapping, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyMapping};
 use pyo3::{ffi, PyErr};
 
 use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{
-    Line, TraceEventsFileFormat, TraceWriter, TypeKind, ValueRecord, NONE_VALUE,
-};
+use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::tracer::{
@@ -27,15 +34,8 @@ extern "C" {
 pub struct RuntimeTracer {
     writer: NonStreamingTraceWriter,
     format: TraceEventsFileFormat,
-    // Activation control: when set, events are ignored until we see
-    // a code object whose filename matches this path. Once triggered,
-    // tracing becomes active for the remainder of the session.
-    activation_path: Option<PathBuf>,
-    // Code object id that triggered activation, used to stop on return
-    activation_code_id: Option<usize>,
-    // Whether we've already completed a one-shot activation window
-    activation_done: bool,
-    started: bool,
+    activation: ActivationController,
+    program_path: PathBuf,
     ignored_code_ids: HashSet<usize>,
 }
 
@@ -59,176 +59,30 @@ impl RuntimeTracer {
     ) -> Self {
         let mut writer = NonStreamingTraceWriter::new(program, args);
         writer.set_format(format);
-        let activation_path = activation_path.map(|p| std::path::absolute(p).unwrap());
-        // If activation path is specified, start in paused mode; otherwise start immediately.
-        let started = activation_path.is_none();
+        let activation = ActivationController::new(activation_path);
+        let program_path = PathBuf::from(program);
         Self {
             writer,
             format,
-            activation_path,
-            activation_code_id: None,
-            activation_done: false,
-            started,
+            activation,
+            program_path,
             ignored_code_ids: HashSet::new(),
         }
     }
 
     /// Configure output files and write initial metadata records.
-    pub fn begin(
-        &mut self,
-        meta_path: &Path,
-        paths_path: &Path,
-        events_path: &Path,
-        start_path: &Path,
-        start_line: u32,
-    ) -> PyResult<()> {
-        TraceWriter::begin_writing_trace_metadata(&mut self.writer, meta_path)
-            .map_err(to_py_err)?;
-        TraceWriter::begin_writing_trace_paths(&mut self.writer, paths_path).map_err(to_py_err)?;
-        TraceWriter::begin_writing_trace_events(&mut self.writer, events_path)
-            .map_err(to_py_err)?;
-        TraceWriter::start(&mut self.writer, start_path, Line(start_line as i64));
-        Ok(())
+    pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
+        let start_path = self.activation.start_path(&self.program_path);
+        log::debug!("{}", start_path.display());
+        outputs
+            .configure_writer(&mut self.writer, start_path, start_line)
+            .map_err(to_py_err)
     }
 
     /// Return true when tracing is active; may become true on first event
     /// from the activation file if configured.
     fn ensure_started<'py>(&mut self, py: Python<'py>, code: &CodeObjectWrapper) {
-        if self.started || self.activation_done {
-            return;
-        }
-        if let Some(activation) = &self.activation_path {
-            if let Ok(filename) = code.filename(py) {
-                let f = Path::new(filename);
-                //NOTE(Tzanko): We expect that code.filename contains an absolute path. If it turns out that this is sometimes not the case
-                //we will investigate. For we won't do additional conversions here.
-                // If there are issues the fool-proof solution is to use fs::canonicalize which needs to do syscalls
-                if f == activation {
-                    self.started = true;
-                    self.activation_code_id = Some(code.id());
-                    log::debug!(
-                        "[RuntimeTracer] activated on enter: {}",
-                        activation.display()
-                    );
-                }
-            }
-        }
-    }
-
-    /// Encode a Python value into a `ValueRecord` used by the trace writer.
-    ///
-    /// Canonical rules:
-    /// - `None` -> `NONE_VALUE`
-    /// - `bool` -> `Bool`
-    /// - `int`  -> `Int`
-    /// - `str`  -> `String` (canonical for text; do not fall back to Raw)
-    /// - common containers:
-    ///   - Python `tuple` -> `Tuple` with encoded elements
-    ///   - Python `list`  -> `Sequence` with encoded elements (not a slice)
-    /// - any other type -> textual `Raw` via `__str__` best-effort
-    fn encode_value<'py>(&mut self, _py: Python<'py>, v: &Bound<'py, PyAny>) -> ValueRecord {
-        // None
-        if v.is_none() {
-            return NONE_VALUE;
-        }
-        // bool must be checked before int in Python
-        if let Ok(b) = v.extract::<bool>() {
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Bool, "Bool");
-            return ValueRecord::Bool { b, type_id: ty };
-        }
-        if let Ok(i) = v.extract::<i64>() {
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Int, "Int");
-            return ValueRecord::Int { i, type_id: ty };
-        }
-        // Strings are encoded canonically as `String` to ensure stable tests
-        // and downstream processing. Falling back to `Raw` for `str` is
-        // not allowed.
-        if let Ok(s) = v.extract::<String>() {
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
-            return ValueRecord::String {
-                text: s,
-                type_id: ty,
-            };
-        }
-
-        // Python tuple -> ValueRecord::Tuple with recursively-encoded elements
-        if let Ok(t) = v.downcast::<PyTuple>() {
-            let mut elements: Vec<ValueRecord> = Vec::with_capacity(t.len());
-            for item in t.iter() {
-                // item: Bound<PyAny>
-                elements.push(self.encode_value(_py, &item));
-            }
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
-            return ValueRecord::Tuple {
-                elements,
-                type_id: ty,
-            };
-        }
-
-        // Python list -> ValueRecord::Sequence with recursively-encoded elements
-        if let Ok(l) = v.downcast::<PyList>() {
-            let mut elements: Vec<ValueRecord> = Vec::with_capacity(l.len());
-            for item in l.iter() {
-                elements.push(self.encode_value(_py, &item));
-            }
-            let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "List");
-            return ValueRecord::Sequence {
-                elements,
-                is_slice: false,
-                type_id: ty,
-            };
-        }
-
-        // Python dict -> represent as a Sequence of (key, value) Tuples.
-        // Keys are expected to be strings for kwargs; for non-str keys we
-        // fall back to best-effort encoding of the key.
-        if let Ok(d) = v.downcast::<PyDict>() {
-            let seq_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Seq, "Dict");
-            let tuple_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Tuple, "Tuple");
-            let str_ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::String, "String");
-            let mut elements: Vec<ValueRecord> = Vec::with_capacity(d.len());
-            let items = d.items();
-            for pair in items.iter() {
-                if let Ok(t) = pair.downcast::<PyTuple>() {
-                    if t.len() == 2 {
-                        let key_obj = t.get_item(0).unwrap();
-                        let val_obj = t.get_item(1).unwrap();
-                        let key_rec = if let Ok(s) = key_obj.extract::<String>() {
-                            ValueRecord::String {
-                                text: s,
-                                type_id: str_ty,
-                            }
-                        } else {
-                            self.encode_value(_py, &key_obj)
-                        };
-                        let val_rec = self.encode_value(_py, &val_obj);
-                        let pair_rec = ValueRecord::Tuple {
-                            elements: vec![key_rec, val_rec],
-                            type_id: tuple_ty,
-                        };
-                        elements.push(pair_rec);
-                    }
-                }
-            }
-            return ValueRecord::Sequence {
-                elements,
-                is_slice: false,
-                type_id: seq_ty,
-            };
-        }
-
-        // Fallback to Raw string representation
-        let ty = TraceWriter::ensure_type_id(&mut self.writer, TypeKind::Raw, "Object");
-        match v.str() {
-            Ok(s) => ValueRecord::Raw {
-                r: s.to_string_lossy().into_owned(),
-                type_id: ty,
-            },
-            Err(_) => ValueRecord::Error {
-                msg: "<unrepr>".to_string(),
-                type_id: ty,
-            },
-        }
+        self.activation.ensure_started(py, code);
     }
 
     fn ensure_function_id(
@@ -236,7 +90,7 @@ impl RuntimeTracer {
         py: Python<'_>,
         code: &CodeObjectWrapper,
     ) -> PyResult<runtime_tracing::FunctionId> {
-        //TODO AI! current runtime_tracer logic expects that `name` is unique and is used as a key for the function.
+        //TODO AI! current runtime tracer logic expects that `name` is unique and is used as a key for the function.
         //This is wrong. We need to write a test that exposes this issue
         let name = code.qualname(py)?;
         let filename = code.filename(py)?;
@@ -289,7 +143,7 @@ impl Tracer for RuntimeTracer {
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.started {
+        if !self.activation.is_active() {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -347,7 +201,7 @@ impl Tracer for RuntimeTracer {
                 for name in varnames.iter().take(take_n) {
                     match locals.get_item(name) {
                         Ok(val) => {
-                            let vrec = self.encode_value(py, &val);
+                            let vrec = encode_value(py, &mut self.writer, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
                         Err(e) => {
@@ -360,7 +214,7 @@ impl Tracer for RuntimeTracer {
                 if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
                     let name = &varnames[idx];
                     if let Ok(val) = locals.get_item(name) {
-                        let vrec = self.encode_value(py, &val);
+                        let vrec = encode_value(py, &mut self.writer, &val);
                         args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                     }
                     idx += 1;
@@ -370,7 +224,7 @@ impl Tracer for RuntimeTracer {
                 for name in varnames.iter().skip(idx).take(kwonly_take) {
                     match locals.get_item(name) {
                         Ok(val) => {
-                            let vrec = self.encode_value(py, &val);
+                            let vrec = encode_value(py, &mut self.writer, &val);
                             args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                         }
                         Err(e) => {
@@ -383,7 +237,7 @@ impl Tracer for RuntimeTracer {
                 if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
                     let name = &varnames[idx];
                     if let Ok(val) = locals.get_item(name) {
-                        let vrec = self.encode_value(py, &val);
+                        let vrec = encode_value(py, &mut self.writer, &val);
                         args.push(TraceWriter::arg(&mut self.writer, name, vrec));
                     }
                 }
@@ -413,7 +267,7 @@ impl Tracer for RuntimeTracer {
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.started {
+        if !self.activation.is_active() {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -507,7 +361,7 @@ impl Tracer for RuntimeTracer {
 
         for (key, value) in locals_dict.iter() {
             let name: String = key.extract().expect("Local name was not a string");
-            let encoded = self.encode_value(py, &value);
+            let encoded = encode_value(py, &mut self.writer, &value);
             TraceWriter::register_variable_with_full_value(&mut self.writer, &name, encoded);
             recorded.insert(name);
         }
@@ -518,7 +372,7 @@ impl Tracer for RuntimeTracer {
                 if name == "__builtins__" || recorded.contains(&name) {
                     continue;
                 }
-                let encoded = self.encode_value(py, &value);
+                let encoded = encode_value(py, &mut self.writer, &value);
                 TraceWriter::register_variable_with_full_value(&mut self.writer, &name, encoded);
                 recorded.insert(name);
             }
@@ -545,7 +399,7 @@ impl Tracer for RuntimeTracer {
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
-        if !self.started {
+        if !self.activation.is_active() {
             return Ok(CallbackOutcome::Continue);
         }
 
@@ -556,16 +410,9 @@ impl Tracer for RuntimeTracer {
             _ => log::debug!("[RuntimeTracer] on_py_return"),
         }
 
-        let is_activation_return = self
-            .activation_code_id
-            .map(|id| id == code.id())
-            .unwrap_or(false);
-
-        let val = self.encode_value(py, retval);
+        let val = encode_value(py, &mut self.writer, retval);
         TraceWriter::register_return(&mut self.writer, val);
-        if is_activation_return {
-            self.started = false;
-            self.activation_done = true;
+        if self.activation.handle_return(code.id()) {
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
 

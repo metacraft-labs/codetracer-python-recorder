@@ -6,7 +6,7 @@
 
 pub mod code_object;
 mod logging;
-mod runtime_tracer;
+mod runtime;
 mod session;
 pub mod tracer;
 
