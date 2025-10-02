@@ -5,6 +5,7 @@
 //! the `sys.monitoring.DISABLE` sentinel.
 
 pub mod code_object;
+mod errors;
 mod logging;
 pub mod monitoring;
 mod runtime;

@@ -2,12 +2,13 @@
 
 use std::ptr;
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyMapping};
 use pyo3::{ffi, Py, PyErr};
+use recorder_errors::{enverr, ErrorCode};
 
 use crate::code_object::CodeObjectWrapper;
+use crate::errors::to_py_err;
 
 extern "C" {
     fn PyFrame_GetLocals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
@@ -62,9 +63,10 @@ pub fn capture_frame<'py>(
 ) -> PyResult<FrameSnapshot<'py>> {
     let mut frame_ptr = unsafe { ffi::PyEval_GetFrame() };
     if frame_ptr.is_null() {
-        return Err(PyRuntimeError::new_err(
-            "PyEval_GetFrame returned null frame",
-        ));
+        return Err(to_py_err(enverr!(
+            ErrorCode::FrameIntrospectionFailed,
+            "PyEval_GetFrame returned null frame"
+        )));
     }
 
     unsafe {
@@ -82,7 +84,10 @@ pub fn capture_frame<'py>(
             unsafe {
                 ffi::Py_DECREF(frame_ptr.cast());
             }
-            return Err(PyRuntimeError::new_err("PyFrame_GetCode returned null"));
+            return Err(to_py_err(enverr!(
+                ErrorCode::FrameIntrospectionFailed,
+                "PyFrame_GetCode returned null"
+            )));
         }
         let frame_code: Py<PyAny> = unsafe { Py::from_owned_ptr(py, frame_code_ptr.cast()) };
         if frame_code.as_ptr() == target_code_ptr {
@@ -96,9 +101,10 @@ pub fn capture_frame<'py>(
     }
 
     if frame_ptr.is_null() {
-        return Err(PyRuntimeError::new_err(
-            "Failed to locate frame for code object",
-        ));
+        return Err(to_py_err(enverr!(
+            ErrorCode::FrameIntrospectionFailed,
+            "Failed to locate frame for code object"
+        )));
     }
 
     unsafe {
@@ -114,38 +120,63 @@ pub fn capture_frame<'py>(
         unsafe {
             ffi::Py_DECREF(frame_ptr.cast());
         }
-        return Err(PyRuntimeError::new_err("PyFrame_GetLocals returned null"));
+        return Err(to_py_err(enverr!(
+            ErrorCode::FrameIntrospectionFailed,
+            "PyFrame_GetLocals returned null"
+        )));
     }
     let locals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw.cast()) };
-    let locals_mapping = locals_any
-        .downcast::<PyMapping>()
-        .map_err(|_| PyRuntimeError::new_err("Frame locals was not a mapping"))?;
+    let locals_mapping = locals_any.downcast::<PyMapping>().map_err(|_| {
+        to_py_err(enverr!(
+            ErrorCode::FrameIntrospectionFailed,
+            "Frame locals was not a mapping"
+        ))
+    })?;
 
     let globals_raw = unsafe { PyFrame_GetGlobals(frame_ptr) };
     if globals_raw.is_null() {
         unsafe {
             ffi::Py_DECREF(frame_ptr.cast());
         }
-        return Err(PyRuntimeError::new_err("PyFrame_GetGlobals returned null"));
+        return Err(to_py_err(enverr!(
+            ErrorCode::GlobalsIntrospectionFailed,
+            "PyFrame_GetGlobals returned null"
+        )));
     }
     let globals_any = unsafe { Bound::<PyAny>::from_owned_ptr(py, globals_raw.cast()) };
-    let globals_mapping = globals_any
-        .downcast::<PyMapping>()
-        .map_err(|_| PyRuntimeError::new_err("Frame globals was not a mapping"))?;
+    let globals_mapping = globals_any.downcast::<PyMapping>().map_err(|_| {
+        to_py_err(enverr!(
+            ErrorCode::GlobalsIntrospectionFailed,
+            "Frame globals was not a mapping"
+        ))
+    })?;
 
     let locals_is_globals = locals_raw == globals_raw;
 
     let locals_dict = PyDict::new(py);
-    locals_dict
-        .update(&locals_mapping)
-        .expect("Failed to materialize locals dict");
+    locals_dict.update(&locals_mapping).map_err(|err| {
+        to_py_err(
+            enverr!(
+                ErrorCode::FrameIntrospectionFailed,
+                "Failed to materialize locals dict"
+            )
+            .with_context("details", err.to_string()),
+        )
+    })?;
 
     let globals_dict = if locals_is_globals {
         None
     } else {
         let dict = PyDict::new(py);
-        dict.update(&globals_mapping)
-            .expect("Failed to materialize globals dict");
+        dict.update(&globals_mapping).map_err(|err| {
+            to_py_err(
+                enverr!(
+                    ErrorCode::GlobalsIntrospectionFailed,
+                    "Failed to materialize globals dict"
+                )
+                .with_context("details", err.to_string()),
+            )
+        })?;
         Some(dict)
     };
 

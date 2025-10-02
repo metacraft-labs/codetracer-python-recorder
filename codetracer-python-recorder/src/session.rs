@@ -5,9 +5,10 @@ mod bootstrap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use recorder_errors::{usage, ErrorCode};
 
+use crate::errors::to_py_err;
 use crate::logging::init_rust_logging_with_default;
 use crate::monitoring::{flush_installed_tracer, install_tracer, uninstall_tracer};
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
@@ -23,18 +24,18 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
     // Default only our crate to debug to avoid excessive verbosity from deps.
     init_rust_logging_with_default("codetracer_python_recorder=debug");
     if ACTIVE.load(Ordering::SeqCst) {
-        return Err(PyRuntimeError::new_err("tracing already active"));
+        return Err(to_py_err(usage!(
+            ErrorCode::AlreadyTracing,
+            "tracing already active"
+        )));
     }
 
     let activation_path = activation_path.map(PathBuf::from);
 
     Python::with_gil(|py| {
-        let bootstrap = TraceSessionBootstrap::prepare(
-            py,
-            Path::new(path),
-            format,
-            activation_path.as_deref(),
-        )?;
+        let bootstrap =
+            TraceSessionBootstrap::prepare(py, Path::new(path), format, activation_path.as_deref())
+                .map_err(to_py_err)?;
 
         let outputs = TraceOutputPaths::new(bootstrap.trace_directory(), bootstrap.format());
 

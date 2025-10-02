@@ -7,10 +7,10 @@
 - Provide developers with ergonomic macros, tooling guardrails, and comprehensive tests covering failure paths.
 
 ## Current Gaps
-- Ad-hoc `PyRuntimeError` strings in `src/session.rs:21-76` and `src/runtime/mod.rs:77-190` prevent stable categorisation and user scripting.
-- FFI trampolines in `src/monitoring/tracer.rs:268-706` and activation helpers in `src/runtime/activation.rs:24-83` still use `unwrap`/`expect`, so poisoned locks or filesystem errors abort the interpreter.
-- Python facade functions (`codetracer_python_recorder/session.py:27-63`) return built-in exceptions and provide no context or exit codes.
-- No support for JSON diagnostics, policy switches, or atomic output staging; disk failures can leave half-written traces and logs mix stdout/stderr.
+- PyO3 entry points still surface plain Python exceptions; `codetracer_python_recorder/session.py:27-63` raises built-in errors without stable codes or hierarchy.
+- Monitoring trampolines continue to rely on `GLOBAL.lock().unwrap()` and lack structured error propagation; poisoned mutexes will still panic.
+- Policy toggles (`--on-recorder-error`, `--keep-partial-trace`, logging controls) and JSON diagnostics remain unimplemented.
+- Atomic output staging is limited to the existing non-streaming writer; detaching/abort semantics are not yet centralised.
 
 ## Workstreams
 
@@ -28,6 +28,7 @@
 - Exit criteria: `cargo test -p recorder-errors` covers all codes; workspace builds with the new crate.
 
 ### WS3 – Retrofit Rust Modules
+**Status:** Completed (2025-10-02). Core Rust modules now emit `RecorderError` instances; PyO3 entry points map them through `to_py_err` with stable codes and context.
 - Replace direct `PyRuntimeError` construction in `src/session/bootstrap.rs`, `src/session.rs`, `src/runtime/mod.rs`, `src/runtime/output_paths.rs`, and helpers with `RecorderResult` + macros.
 - Update `RuntimeTracer` to propagate structured errors instead of strings; remove `expect`/`unwrap` in hot paths by returning classified `bug!` or `enverr!` failures.
 - Introduce a small adapter in `src/runtime/mod.rs` that stages IO writes and applies the atomic/partial policy described in ADR 0004.
