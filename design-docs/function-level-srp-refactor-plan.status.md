@@ -22,6 +22,11 @@
 - ✅ Exposed `record_return_value` in `runtime::value_capture` and refactored `RuntimeTracer::on_py_return` to orchestrate activation checks, logging, and value recording.
 - ✅ Extended runtime tests with explicit return capture coverage and activation deactivation assertions.
 
+## Stage 5 – Cleanup & Regression Sweep
+- ✅ Audited runtime modules for obsolete inline comments or TODOs introduced pre-refactor; none remained after helper extraction.
+- ✅ Documented the helper module map in `design-docs/function-level-srp-refactor-plan.md` for contributor onboarding.
+- ✅ Re-ran `just test` (Rust `cargo nextest` + Python `pytest`) to confirm post-cleanup parity.
+
 ## Next Actions
 - Draft short notes on activation gating and frame search mechanics to complete Stage 0.
-- Begin Stage 5 cleanup/regression sweep once Stage 0 notes are captured.
+- Track Stage 5 fixture comparisons if we decide to snapshot JSON/Binary outputs post-refactor.

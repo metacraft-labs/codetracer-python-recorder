@@ -22,6 +22,13 @@ These functions currently exceed 60–120 lines and interleave control flow with
 3. **Add regression tests around extracted helpers** so that future changes to callbacks can lean on focused coverage instead of broad integration tests.
 4. **Maintain behavioural parity** by running full `just test` plus targeted fixture comparisons after each stage.
 
+### Helper Module Map
+- `runtime::frame_inspector` owns frame discovery and locals/globals snapshots through the `FrameSnapshot` abstraction.
+- `runtime::value_capture` centralises argument, scope, and return-value recording, keeping encoding concerns outside the tracer façade.
+- `runtime::logging` provides the `log_event` helper so callback logging stays consistent and format-agnostic.
+- `session::bootstrap` deals with filesystem setup, format resolution, and program metadata collection for the Rust entrypoint.
+- Python `session.py` mirrors the responsibilities with `_coerce_format`, `_validate_trace_path`, and `_normalize_activation_path` helpers.
+
 ## Work Breakdown
 
 ### Stage 0 – Baseline & Guardrails (1 PR)
@@ -87,4 +94,3 @@ These functions currently exceed 60–120 lines and interleave control flow with
 - **Unsafe code mistakes:** Wrap raw pointer usage in RAII helpers with debug assertions; add fuzz/ stress tests for recursion-heavy scripts.
 - **Performance regressions:** Benchmark tracer overhead before and after major stages; inline trivial helpers where necessary, or mark with `#[inline]` as appropriate.
 - **Merge conflicts:** Finish each stage quickly and rebase branches frequently; keep PRs focused (≤400 LOC diff) to ease review.
-
