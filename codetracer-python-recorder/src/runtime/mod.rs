@@ -3,12 +3,14 @@
 mod activation;
 mod frame_inspector;
 mod output_paths;
+mod value_capture;
 mod value_encoder;
 
 pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
+use value_capture::capture_call_arguments;
 use value_encoder::encode_value;
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -16,7 +18,6 @@ use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use pyo3::{ffi, PyErr};
 
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
@@ -25,10 +26,6 @@ use crate::code_object::CodeObjectWrapper;
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
-
-extern "C" {
-    fn PyFrame_GetLocals(frame: *mut ffi::PyFrameObject) -> *mut ffi::PyObject;
-}
 
 // Logging is handled via the `log` crate macros (e.g., log::debug!).
 
@@ -158,105 +155,14 @@ impl Tracer for RuntimeTracer {
         }
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            let mut args: Vec<runtime_tracing::FullValueRecord> = Vec::new();
-            let frame_and_args = (|| -> PyResult<()> {
-                let frame_ptr = unsafe { ffi::PyEval_GetFrame() };
-                if frame_ptr.is_null() {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "on_py_start: null frame",
-                    ));
+            match capture_call_arguments(py, &mut self.writer, code) {
+                Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
+                Err(err) => {
+                    let message = format!("on_py_start: failed to capture args: {}", err);
+                    log::error!("{message}");
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(message));
                 }
-                unsafe {
-                    ffi::Py_XINCREF(frame_ptr.cast());
-                }
-
-                unsafe {
-                    if ffi::PyFrame_FastToLocalsWithError(frame_ptr) < 0 {
-                        ffi::Py_DECREF(frame_ptr.cast());
-                        let err = PyErr::fetch(py);
-                        return Err(err);
-                    }
-                }
-
-                let locals_raw = unsafe { PyFrame_GetLocals(frame_ptr) };
-                if locals_raw.is_null() {
-                    unsafe {
-                        ffi::Py_DECREF(frame_ptr.cast());
-                    }
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "on_py_start: PyFrame_GetLocals returned null",
-                    ));
-                }
-                let locals = unsafe { Bound::<PyAny>::from_owned_ptr(py, locals_raw) };
-
-                let argcount = code.arg_count(py)? as usize;
-                let _posonly: usize = code.as_bound(py).getattr("co_posonlyargcount")?.extract()?;
-                let kwonly: usize = code.as_bound(py).getattr("co_kwonlyargcount")?.extract()?;
-                let flags = code.flags(py)?;
-                const CO_VARARGS: u32 = 0x04;
-                const CO_VARKEYWORDS: u32 = 0x08;
-
-                let varnames_obj = code.as_bound(py).getattr("co_varnames")?;
-                let varnames: Vec<String> = varnames_obj.extract()?;
-
-                let mut idx = 0usize;
-                let take_n = std::cmp::min(argcount, varnames.len());
-                for name in varnames.iter().take(take_n) {
-                    match locals.get_item(name) {
-                        Ok(val) => {
-                            let vrec = encode_value(py, &mut self.writer, &val);
-                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
-                        }
-                        Err(e) => {
-                            panic!("Error {:?}", e)
-                        }
-                    }
-                    idx += 1;
-                }
-
-                if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
-                    let name = &varnames[idx];
-                    if let Ok(val) = locals.get_item(name) {
-                        let vrec = encode_value(py, &mut self.writer, &val);
-                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
-                    }
-                    idx += 1;
-                }
-
-                let kwonly_take = std::cmp::min(kwonly, varnames.len().saturating_sub(idx));
-                for name in varnames.iter().skip(idx).take(kwonly_take) {
-                    match locals.get_item(name) {
-                        Ok(val) => {
-                            let vrec = encode_value(py, &mut self.writer, &val);
-                            args.push(TraceWriter::arg(&mut self.writer, name, vrec));
-                        }
-                        Err(e) => {
-                            panic!("Error {:?}", e)
-                        }
-                    }
-                }
-                idx = idx.saturating_add(kwonly_take);
-
-                if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
-                    let name = &varnames[idx];
-                    if let Ok(val) = locals.get_item(name) {
-                        let vrec = encode_value(py, &mut self.writer, &val);
-                        args.push(TraceWriter::arg(&mut self.writer, name, vrec));
-                    }
-                }
-                unsafe {
-                    ffi::Py_DECREF(frame_ptr.cast());
-                }
-                Ok(())
-            })();
-
-            if let Err(e) = frame_and_args {
-                let message = format!("on_py_start: failed to capture args: {}", e);
-                log::error!("{message}");
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(message));
             }
-
-            TraceWriter::register_call(&mut self.writer, fid, args);
         }
 
         Ok(CallbackOutcome::Continue)

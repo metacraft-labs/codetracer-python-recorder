@@ -13,6 +13,10 @@
 - ✅ Step 1: Added `runtime::frame_inspector::capture_frame` to encapsulate frame lookup, locals/globals materialisation, and reference counting; `on_line` now delegates to the helper while preserving behaviour.
 - ✅ Step 2: Extended `ActivationController` with `should_process_event`/`handle_return_event`, updated callbacks to rely on them, and removed direct state juggling from `RuntimeTracer`.
 
+## Stage 3 – Value Capture Layer
+- ✅ Step 1: Introduced `runtime::value_capture::capture_call_arguments`; `on_py_start` now delegates to it, keeping the function focused on orchestration while reusing frame inspectors.
+- ⏳ Step 2: Extract locals/globals recording into reusable helper for line events.
+
 ## Next Actions
 - Draft short notes on activation gating and frame search mechanics to complete Stage 0.
-- Introduce Stage 3 value-capture helpers after Stage 0 documentation wraps.
+- Extract scope recording helper for `on_line` (Stage 3 – Step 2) after documenting Stage 0 notes.
