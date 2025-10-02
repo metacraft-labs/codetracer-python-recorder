@@ -1,3 +1,5 @@
+//! PyO3 entry points for starting and managing trace sessions.
+
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,9 +10,22 @@ use pyo3::prelude::*;
 use crate::logging::init_rust_logging_with_default;
 use crate::monitoring::{flush_installed_tracer, install_tracer, uninstall_tracer};
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
+use runtime_tracing::TraceEventsFileFormat;
 
 /// Global flag tracking whether tracing is active.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Map human-friendly strings to `TraceEventsFileFormat` variants.
+fn parse_trace_format(format: &str) -> PyResult<TraceEventsFileFormat> {
+    match format.to_ascii_lowercase().as_str() {
+        "json" => Ok(TraceEventsFileFormat::Json),
+        // Accept historical aliases that may still be referenced by callers.
+        "binary" | "binaryv0" | "binary_v0" | "b0" => Ok(TraceEventsFileFormat::BinaryV0),
+        other => Err(PyRuntimeError::new_err(format!(
+            "unsupported trace format '{other}'. Expected one of: json, binary"
+        ))),
+    }
+}
 
 /// Start tracing using sys.monitoring and runtime_tracing writer.
 #[pyfunction]
@@ -36,19 +51,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
         })?;
     }
 
-    // Map format string to enum
-    let fmt = match format.to_lowercase().as_str() {
-        "json" => runtime_tracing::TraceEventsFileFormat::Json,
-        // Use BinaryV0 for "binary" to avoid streaming writer here.
-        "binary" | "binaryv0" | "binary_v0" | "b0" => {
-            runtime_tracing::TraceEventsFileFormat::BinaryV0
-        }
-        //TODO AI! We need to assert! that the format is among the known values.
-        other => {
-            eprintln!("Unknown format '{}', defaulting to binary (v0)", other);
-            runtime_tracing::TraceEventsFileFormat::BinaryV0
-        }
-    };
+    let fmt = parse_trace_format(format)?;
 
     let outputs = TraceOutputPaths::new(out_dir, fmt);
 
@@ -59,10 +62,23 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
         // Program and args: keep minimal; Python-side API stores full session info if needed
         let sys = py.import("sys")?;
         let argv = sys.getattr("argv")?;
-        let program: String = argv.get_item(0)?.extract::<String>()?;
-        //TODO: Error-handling. What to do if argv is empty? Does this ever happen?
+        let program = match argv.get_item(0) {
+            Ok(obj) => obj.extract::<String>()?,
+            Err(_) => String::from("<unknown>"),
+        };
+        let args = match argv.len() {
+            Ok(len) if len > 1 => {
+                let mut items = Vec::with_capacity(len.saturating_sub(1));
+                for idx in 1..len {
+                    let value: String = argv.get_item(idx)?.extract()?;
+                    items.push(value);
+                }
+                items
+            }
+            _ => Vec::new(),
+        };
 
-        let mut tracer = RuntimeTracer::new(&program, &[], fmt, activation_path);
+        let mut tracer = RuntimeTracer::new(&program, &args, fmt, activation_path);
         tracer.begin(&outputs, 1)?;
 
         // Install callbacks

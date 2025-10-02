@@ -1,3 +1,5 @@
+//! Encode Python values into `runtime_tracing` records.
+
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 use runtime_tracing::{NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};

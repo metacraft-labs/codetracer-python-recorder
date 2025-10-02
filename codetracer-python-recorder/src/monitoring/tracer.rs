@@ -1,3 +1,5 @@
+//! Tracer trait and sys.monitoring callback plumbing.
+
 use std::any::Any;
 use std::sync::Mutex;
 

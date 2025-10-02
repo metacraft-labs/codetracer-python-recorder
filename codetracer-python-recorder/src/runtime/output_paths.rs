@@ -1,3 +1,5 @@
+//! File-system helpers for trace output management.
+
 use std::error::Error;
 use std::path::{Path, PathBuf};
 

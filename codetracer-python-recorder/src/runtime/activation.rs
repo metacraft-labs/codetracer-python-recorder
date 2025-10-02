@@ -1,3 +1,5 @@
+//! Activation gating for the runtime tracer.
+
 use std::path::{Path, PathBuf};
 
 use pyo3::Python;

@@ -1,3 +1,5 @@
+//! Runtime tracer facade translating sys.monitoring callbacks into `runtime_tracing` records.
+
 mod activation;
 mod output_paths;
 mod value_encoder;
@@ -7,7 +9,7 @@ pub use output_paths::TraceOutputPaths;
 use activation::ActivationController;
 use value_encoder::encode_value;
 
-use std::collections::HashSet;
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
@@ -37,6 +39,7 @@ pub struct RuntimeTracer {
     activation: ActivationController,
     program_path: PathBuf,
     ignored_code_ids: HashSet<usize>,
+    function_ids: HashMap<usize, runtime_tracing::FunctionId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +70,7 @@ impl RuntimeTracer {
             activation,
             program_path,
             ignored_code_ids: HashSet::new(),
+            function_ids: HashMap::new(),
         }
     }
 
@@ -90,17 +94,21 @@ impl RuntimeTracer {
         py: Python<'_>,
         code: &CodeObjectWrapper,
     ) -> PyResult<runtime_tracing::FunctionId> {
-        //TODO AI! current runtime tracer logic expects that `name` is unique and is used as a key for the function.
-        //This is wrong. We need to write a test that exposes this issue
-        let name = code.qualname(py)?;
-        let filename = code.filename(py)?;
-        let first_line = code.first_line(py)?;
-        Ok(TraceWriter::ensure_function_id(
-            &mut self.writer,
-            name,
-            Path::new(filename),
-            Line(first_line as i64),
-        ))
+        match self.function_ids.entry(code.id()) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
+            Entry::Vacant(slot) => {
+                let name = code.qualname(py)?;
+                let filename = code.filename(py)?;
+                let first_line = code.first_line(py)?;
+                let function_id = TraceWriter::ensure_function_id(
+                    &mut self.writer,
+                    name,
+                    Path::new(filename),
+                    Line(first_line as i64),
+                );
+                Ok(*slot.insert(function_id))
+            }
+        }
     }
 
     fn should_trace_code(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> ShouldTrace {
@@ -442,6 +450,7 @@ impl Tracer for RuntimeTracer {
         TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(to_py_err)?;
         TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
         self.ignored_code_ids.clear();
+        self.function_ids.clear();
         Ok(())
     }
 }

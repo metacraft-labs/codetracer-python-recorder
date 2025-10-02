@@ -1,3 +1,5 @@
+//! Process-wide logging helpers shared by the PyO3 entry points and tests.
+
 use std::sync::Once;
 
 /// Initialise the process-wide Rust logger with a default filter.
