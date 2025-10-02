@@ -30,8 +30,8 @@ CI configuration:
   so the console mirrors the pytest coverage output. (Run
   `cargo llvm-cov nextest --html` manually if you need a browsable report.)
 - `just coverage-python` executes pytest with `pytest-cov`, limiting collection to
-  `codetracer_python_recorder` and emitting `coverage.xml` in
-  `codetracer-python-recorder/target/coverage/python/`.
+  `codetracer_python_recorder` and emitting both `coverage.xml` and `coverage.json`
+  in `codetracer-python-recorder/target/coverage/python/`.
 - `just coverage` is a convenience wrapper that invokes both commands in sequence.
 
 All commands create their output directories on first run, so no manual setup is

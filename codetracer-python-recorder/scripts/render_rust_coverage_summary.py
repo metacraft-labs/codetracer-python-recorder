@@ -6,7 +6,14 @@ import argparse
 import json
 import pathlib
 import sys
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
+
+
+def _load_payload(summary_path: pathlib.Path) -> Dict:
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SystemExit(f"Rust coverage summary not found: {summary_path}") from exc
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -26,15 +33,28 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 
 def load_rows(summary_path: pathlib.Path, repo_root: pathlib.Path) -> List[Tuple[str, int, int, float]]:
-    try:
-        payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise SystemExit(f"Rust coverage summary not found: {summary_path}") from exc
+    payload = _load_payload(summary_path)
+    rows, _ = load_summary(summary_path, repo_root, payload)
+    return rows
+
+
+def load_summary(
+    summary_path: pathlib.Path,
+    repo_root: pathlib.Path,
+    payload: Dict | None = None,
+) -> Tuple[List[Tuple[str, int, int, float]], Dict[str, float]]:
+    if payload is None:
+        payload = _load_payload(summary_path)
 
     repo_root = repo_root.resolve()
     rows: List[Tuple[str, int, int, float]] = []
 
+    totals: Dict[str, float] = {}
+
     for dataset in payload.get("data", []):
+        dataset_totals = dataset.get("totals", {})
+        if dataset_totals:
+            totals = dataset_totals.get("lines", dataset_totals)
         for entry in dataset.get("files", []):
             filename = entry.get("filename")
             if not filename:
@@ -54,7 +74,7 @@ def load_rows(summary_path: pathlib.Path, repo_root: pathlib.Path) -> List[Tuple
             rows.append((rel_path.as_posix(), total, missed, percent))
 
     rows.sort(key=lambda item: item[0])
-    return rows
+    return rows, totals
 
 
 def render(rows: List[Tuple[str, int, int, float]]) -> str:
@@ -72,7 +92,7 @@ def render(rows: List[Tuple[str, int, int, float]]) -> str:
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
-    rows = load_rows(args.summary_path, args.root)
+    rows, _ = load_summary(args.summary_path, args.root)
     output = render(rows)
     print(output)
     return 0

@@ -18,7 +18,7 @@
 1. **Local Workflow**
    - Add convenience Just targets that mirror the default test steps:
      - `just coverage-rust` → `LLVM_COV=$(command -v llvm-cov) LLVM_PROFDATA=$(command -v llvm-profdata) uv run cargo llvm-cov --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --nextest --lcov --output-path codetracer-python-recorder/target/coverage/rust/lcov.info`, followed by `cargo llvm-cov report --summary-only --json` to generate `summary.json` and a Python helper that prints a table mirroring the pytest coverage output. Document that contributors can run a second `cargo llvm-cov … --html --output-dir …` invocation when they need browsable reports because the CLI disallows combining `--lcov` and `--html` in a single run.
-     - `just coverage-python` → `uv run --group dev --group test pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml codetracer-python-recorder/tests/python`.
+     - `just coverage-python` → `uv run --group dev --group test pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python`.
      - `just coverage` wrapper → runs the Rust step followed by the Python step so developers get both artefacts with one command, matching the eventual CI flow.
    - Ensure the commands create their output directories (`target/coverage/rust` and `target/coverage/python`) before writing results to avoid failures on first use.
    - Document the workflow in `codetracer-python-recorder/tests/README.md` (and reference the top-level `README` if needed) so contributors know when to run the coverage helpers versus the regular test splits.
@@ -28,8 +28,9 @@
    - Reuse the Just targets so CI mirrors local behaviour. Inject `RUSTFLAGS`/`RUSTDOCFLAGS` from the test jobs’ cache to avoid rebuilding dependencies.
    - Publish artefacts via `actions/upload-artifact`:
      - Rust: `codetracer-python-recorder/target/coverage/rust/lcov.info`, the machine-readable `summary.json`, and optionally a gzipped HTML folder produced via a follow-up `cargo llvm-cov nextest --html --output-dir …` run in the same job.
-     - Python: `codetracer-python-recorder/target/coverage/python/coverage.xml` for future parsing.
+     - Python: `codetracer-python-recorder/target/coverage/python/coverage.xml` and `coverage.json` for downstream tooling.
    - Mark coverage steps with `continue-on-error: true` during the stabilisation phase and note the run IDs in the job summary for quick retrieval.
+   - Use a GitHub Action to post/update a PR comment that embeds the Rust and Python coverage summaries in Markdown (via `scripts/generate_coverage_comment.py` drawing from the JSON reports), giving reviewers quick insight without opening artefacts.
 
 3. **Reporting & Visualisation**
    - Use GitHub Actions artefacts for report retrieval.
@@ -44,11 +45,11 @@
    - Introduce thresholds (e.g., fail if Rust line coverage < 70% or Python < 60%)—subject to discussion with the Runtime Tracing Team.
 
 ## Implementation Checklist
-- [ ] Update development environment dependencies (`flake.nix`, `pyproject.toml`) to support coverage tooling out of the box.
-- [ ] Add `just coverage-rust`, `just coverage-python`, and `just coverage` helpers with directory bootstrapping.
-- [ ] Refresh documentation (`codetracer-python-recorder/tests/README.md` and top-level testing guide) with coverage instructions.
-- [ ] Extend CI workflow with non-blocking coverage jobs and artefact upload.
-- [ ] Review initial coverage artefacts to set baseline thresholds before enforcement.
+- [x] Update development environment dependencies (`flake.nix`, `pyproject.toml`) to support coverage tooling out of the box.
+- [x] Add `just coverage-rust`, `just coverage-python`, and `just coverage` helpers with directory bootstrapping.
+- [x] Refresh documentation (`codetracer-python-recorder/tests/README.md` and top-level testing guide) with coverage instructions.
+- [x] Extend CI workflow with non-blocking coverage jobs and artefact upload.
+- [x] Review initial coverage artefacts to set baseline thresholds before enforcement.
 
 ## Risks & Mitigations
 - **Runtime overhead:** Coverage runs are slower. Mitigate by limiting to a single matrix entry and caching `target/coverage` directories if needed.
