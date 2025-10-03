@@ -1,6 +1,7 @@
 //! Tracer trait and sys.monitoring callback plumbing.
 
 use std::any::Any;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
@@ -264,6 +265,32 @@ struct Global {
 
 static GLOBAL: Mutex<Option<Global>> = Mutex::new(None);
 
+fn catch_callback<F>(label: &'static str, callback: F) -> CallbackResult
+where
+    F: FnOnce() -> CallbackResult,
+{
+    match catch_unwind(AssertUnwindSafe(callback)) {
+        Ok(result) => result,
+        Err(payload) => Err(ffi::panic_to_pyerr(label, payload)),
+    }
+}
+
+fn call_tracer_with_code<'py, F>(
+    py: Python<'py>,
+    guard: &mut Option<Global>,
+    code: &Bound<'py, PyCode>,
+    label: &'static str,
+    callback: F,
+) -> CallbackResult
+where
+    F: FnOnce(&mut dyn Tracer, &CodeObjectWrapper) -> CallbackResult,
+{
+    let global = guard.as_mut().expect("tracer installed");
+    let wrapper = global.registry.get_or_insert(py, code);
+    let tracer = global.tracer.as_mut();
+    catch_callback(label, || callback(tracer, &wrapper))
+}
+
 fn handle_callback_result(
     py: Python<'_>,
     guard: &mut Option<Global>,
@@ -519,13 +546,10 @@ fn callback_call(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_call(py, &wrapper, offset, &callable, arg0.as_ref())
-        };
+        let result =
+            call_tracer_with_code(py, &mut guard, &code, "callback_call", |tracer, wrapper| {
+                tracer.on_call(py, wrapper, offset, &callable, arg0.as_ref())
+            });
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -537,11 +561,10 @@ fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResu
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global.tracer.on_line(py, &wrapper, lineno)
-        };
+        let result =
+            call_tracer_with_code(py, &mut guard, &code, "callback_line", |tracer, wrapper| {
+                tracer.on_line(py, wrapper, lineno)
+            });
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -557,13 +580,13 @@ fn callback_instruction(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_instruction(py, &wrapper, instruction_offset)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_instruction",
+            |tracer, wrapper| tracer.on_instruction(py, wrapper, instruction_offset),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -580,13 +603,10 @@ fn callback_jump(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_jump(py, &wrapper, instruction_offset, destination_offset)
-        };
+        let result =
+            call_tracer_with_code(py, &mut guard, &code, "callback_jump", |tracer, wrapper| {
+                tracer.on_jump(py, wrapper, instruction_offset, destination_offset)
+            });
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -603,13 +623,13 @@ fn callback_branch(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_branch(py, &wrapper, instruction_offset, destination_offset)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_branch",
+            |tracer, wrapper| tracer.on_branch(py, wrapper, instruction_offset, destination_offset),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -625,11 +645,13 @@ fn callback_py_start(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global.tracer.on_py_start(py, &wrapper, instruction_offset)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_start",
+            |tracer, wrapper| tracer.on_py_start(py, wrapper, instruction_offset),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -645,11 +667,13 @@ fn callback_py_resume(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global.tracer.on_py_resume(py, &wrapper, instruction_offset)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_resume",
+            |tracer, wrapper| tracer.on_py_resume(py, wrapper, instruction_offset),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -666,13 +690,13 @@ fn callback_py_return(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_py_return(py, &wrapper, instruction_offset, &retval)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_return",
+            |tracer, wrapper| tracer.on_py_return(py, wrapper, instruction_offset, &retval),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -689,13 +713,13 @@ fn callback_py_yield(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_py_yield(py, &wrapper, instruction_offset, &retval)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_yield",
+            |tracer, wrapper| tracer.on_py_yield(py, wrapper, instruction_offset, &retval),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -712,13 +736,13 @@ fn callback_py_throw(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_py_throw(py, &wrapper, instruction_offset, &exception)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_throw",
+            |tracer, wrapper| tracer.on_py_throw(py, wrapper, instruction_offset, &exception),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -735,13 +759,13 @@ fn callback_py_unwind(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_py_unwind(py, &wrapper, instruction_offset, &exception)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_py_unwind",
+            |tracer, wrapper| tracer.on_py_unwind(py, wrapper, instruction_offset, &exception),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -758,13 +782,13 @@ fn callback_raise(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_raise(py, &wrapper, instruction_offset, &exception)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_raise",
+            |tracer, wrapper| tracer.on_raise(py, wrapper, instruction_offset, &exception),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -781,13 +805,13 @@ fn callback_reraise(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_reraise(py, &wrapper, instruction_offset, &exception)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_reraise",
+            |tracer, wrapper| tracer.on_reraise(py, wrapper, instruction_offset, &exception),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -804,13 +828,15 @@ fn callback_exception_handled(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_exception_handled(py, &wrapper, instruction_offset, &exception)
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_exception_handled",
+            |tracer, wrapper| {
+                tracer.on_exception_handled(py, wrapper, instruction_offset, &exception)
+            },
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -844,13 +870,13 @@ fn callback_c_return(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref())
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_c_return",
+            |tracer, wrapper| tracer.on_c_return(py, wrapper, offset, &callable, arg0.as_ref()),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }
@@ -868,13 +894,13 @@ fn callback_c_raise(
         if guard.is_none() {
             return Ok(py.None());
         }
-        let result = {
-            let global = guard.as_mut().expect("tracer installed");
-            let wrapper = global.registry.get_or_insert(py, &code);
-            global
-                .tracer
-                .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref())
-        };
+        let result = call_tracer_with_code(
+            py,
+            &mut guard,
+            &code,
+            "callback_c_raise",
+            |tracer, wrapper| tracer.on_c_raise(py, wrapper, offset, &callable, arg0.as_ref()),
+        );
         handle_callback_result(py, &mut guard, result)
     })
 }

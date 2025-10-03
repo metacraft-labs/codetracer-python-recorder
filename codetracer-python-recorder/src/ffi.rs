@@ -46,6 +46,10 @@ where
 }
 
 /// Convert a captured panic into a `PyInternalError` while logging the payload.
+pub(crate) fn panic_to_pyerr(label: &'static str, payload: Box<dyn Any + Send>) -> PyErr {
+    handle_panic(label, payload)
+}
+
 fn handle_panic(label: &'static str, payload: Box<dyn Any + Send>) -> PyErr {
     let message = panic_payload_to_string(&payload);
     logging::record_panic(label);
