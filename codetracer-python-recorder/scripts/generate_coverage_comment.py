@@ -118,7 +118,13 @@ def _load_rust_rows(
     summary_path: pathlib.Path,
     repo_root: pathlib.Path,
 ) -> Tuple[List[Row], Dict[str, float]]:
-    rows, totals = load_rust_summary(summary_path, repo_root)
+    summary_result = load_rust_summary(summary_path, repo_root)
+    if not isinstance(summary_result, tuple):
+        summary_result = tuple(summary_result)
+    if len(summary_result) < 2:
+        raise SystemExit("Rust summary loader returned an unexpected payload")
+
+    rows, totals = summary_result[:2]
     # Normalise totals dict to expected keys
     total = float(totals.get("count", 0))
     covered = float(totals.get("covered", 0))
