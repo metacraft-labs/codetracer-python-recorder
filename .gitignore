@@ -7,6 +7,6 @@ build
 *~
 .idea/
 .cargo/
-
+.coverage
 **/*.egg-info/
 codetracer-python-recorder/codetracer_python_recorder/*.so
