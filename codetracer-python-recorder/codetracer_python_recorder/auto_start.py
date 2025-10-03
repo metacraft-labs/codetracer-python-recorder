@@ -21,6 +21,9 @@ def auto_start_from_env() -> None:
 
     # Delay import to avoid boot-time circular dependencies.
     from . import session
+    from .codetracer_python_recorder import configure_policy_from_env as _configure_policy_from_env
+
+    _configure_policy_from_env()
 
     if session.is_tracing():
         log.debug("codetracer auto-start skipped: tracing already active")

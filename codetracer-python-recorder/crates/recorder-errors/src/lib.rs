@@ -59,6 +59,8 @@ pub enum ErrorCode {
     TracerInstallConflict,
     /// General IO failure propagated from lower layers.
     Io,
+    /// Invalid runtime policy configuration value.
+    InvalidPolicyValue,
 }
 
 impl ErrorCode {
@@ -76,6 +78,7 @@ impl ErrorCode {
             ErrorCode::GlobalsIntrospectionFailed => "ERR_GLOBALS_INTROSPECTION_FAILED",
             ErrorCode::TracerInstallConflict => "ERR_TRACER_INSTALL_CONFLICT",
             ErrorCode::Io => "ERR_IO",
+            ErrorCode::InvalidPolicyValue => "ERR_INVALID_POLICY_VALUE",
         }
     }
 }

@@ -23,6 +23,7 @@ class RecorderCLIConfig:
     activation_path: Path
     script: Path
     script_args: list[str]
+    policy_overrides: dict[str, object]
 
 
 def _default_trace_dir() -> Path:
@@ -64,6 +65,38 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
             "interpreter enters this file. Defaults to the target script."
         ),
     )
+    parser.add_argument(
+        "--on-recorder-error",
+        choices=["abort", "disable"],
+        help=(
+            "How the recorder reacts to internal errors. "
+            "'abort' propagates the failure, 'disable' stops tracing but keeps the script running."
+        ),
+    )
+    parser.add_argument(
+        "--require-trace",
+        action="store_true",
+        help="Exit with status 1 if no trace artefacts are produced.",
+    )
+    parser.add_argument(
+        "--keep-partial-trace",
+        action="store_true",
+        help="Preserve partially written trace artefacts when failures occur.",
+    )
+    parser.add_argument(
+        "--log-level",
+        help="Override the recorder log verbosity (examples: info, debug).",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        help="Write recorder logs to the specified file instead of stderr.",
+    )
+    parser.add_argument(
+        "--json-errors",
+        action="store_true",
+        help="Emit JSON error trailers on stderr.",
+    )
 
     known, remainder = parser.parse_known_args(argv)
     pending: list[str] = list(remainder)
@@ -99,12 +132,27 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         else script_path
     )
 
+    policy: dict[str, object] = {}
+    if known.on_recorder_error:
+        policy["on_recorder_error"] = known.on_recorder_error
+    if known.require_trace:
+        policy["require_trace"] = True
+    if known.keep_partial_trace:
+        policy["keep_partial_trace"] = True
+    if known.log_level:
+        policy["log_level"] = known.log_level
+    if known.log_file is not None:
+        policy["log_file"] = Path(known.log_file).expanduser().resolve()
+    if known.json_errors:
+        policy["json_errors"] = True
+
     return RecorderCLIConfig(
         trace_dir=trace_dir,
         format=fmt,
         activation_path=activation_path,
         script=script_path,
         script_args=script_args,
+        policy_overrides=policy,
     )
 
 
@@ -168,6 +216,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     trace_dir = config.trace_dir
     script_path = config.script
     script_args = config.script_args
+    policy_overrides = config.policy_overrides if config.policy_overrides else None
 
     old_argv = sys.argv
     sys.argv = [str(script_path)] + script_args
@@ -177,6 +226,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             trace_dir,
             format=config.format,
             start_on_enter=config.activation_path,
+            policy=policy_overrides,
         )
     except Exception as exc:
         sys.stderr.write(f"Failed to start Codetracer session: {exc}\n")

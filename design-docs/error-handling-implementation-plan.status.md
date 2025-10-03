@@ -36,5 +36,13 @@ Highlights:
 - Rust and Python tests cover the new flow (`uv run cargo nextest run ...`; `.venv/bin/python -m pytest ...`).
 Next moves: Hold for WS5 until ISSUES 013/014 close.
 
+## WS5 – Policy Switches & Runtime Configuration
+State: In progress
+Highlights:
+- `TraceSession.start()` and `trace()` now refresh policy from env vars and accept override mappings so embeds wire recorder switches without manual plumbing.
+- Rust exports expose `configure_policy`/`configure_policy_from_env` under the expected Python names; unit tests cover env-driven and explicit override flows.
+Next moves:
+- Thread policy decisions into runtime tracer shutdown (detach vs abort) and partial-trace handling before promoting WS5 to done.
+
 ## Upcoming Workstreams
-WS5–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
+WS6–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.

@@ -9,6 +9,7 @@ mod errors;
 mod ffi;
 mod logging;
 pub mod monitoring;
+mod policy;
 mod runtime;
 mod session;
 
@@ -33,5 +34,8 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     m.add_function(wrap_pyfunction!(stop_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(is_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(flush_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(policy::configure_policy_py, m)?)?;
+    m.add_function(wrap_pyfunction!(policy::py_configure_policy_from_env, m)?)?;
+    m.add_function(wrap_pyfunction!(policy::py_policy_snapshot, m)?)?;
     Ok(())
 }
