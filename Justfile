@@ -31,21 +31,43 @@ venv version=PYTHON_DEFAULT_VERSION:
 
 # Build the module in dev mode
 dev:
-    uv run --directory codetracer-python-recorder maturin develop --uv
+    uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
 
 # Run unit tests of dev build
 test: cargo-test py-test
 
 # Run Rust unit tests without default features to link Python C library
 cargo-test:
-    uv run cargo nextest run --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
+    uv run cargo nextest run --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features
 
 py-test:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
+
+lint: lint-rust lint-errors
+
+lint-rust:
+    uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic
+
+lint-errors:
+    uv run python3 codetracer-python-recorder/scripts/lint_no_unwraps.py
     
 # Run tests only on the pure recorder
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder
+
+# Inspect ad-hoc error handling patterns across the Rust/Python recorder
+errors-audit:
+    @echo "== PyRuntimeError construction =="
+    @rg --color=never --no-heading -n "PyRuntimeError::new_err" codetracer-python-recorder/src codetracer-python-recorder/tests codetracer-python-recorder/codetracer_python_recorder || true
+    @echo
+    @echo "== unwrap()/expect()/panic! usage =="
+    @rg --color=never --no-heading -n "\\.unwrap\\(" codetracer-python-recorder/src || true
+    @rg --color=never --no-heading -n "\\.expect\\(" codetracer-python-recorder/src || true
+    @rg --color=never --no-heading -n "panic!" codetracer-python-recorder/src || true
+    @echo
+    @echo "== Python-side bare RuntimeError/ValueError =="
+    @rg --color=never --no-heading -n "raise RuntimeError" codetracer-python-recorder/codetracer_python_recorder || true
+    @rg --color=never --no-heading -n "raise ValueError" codetracer-python-recorder/codetracer_python_recorder || true
 
 # Generate combined coverage artefacts for both crates
 coverage:

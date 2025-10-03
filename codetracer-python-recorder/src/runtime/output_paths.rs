@@ -1,9 +1,11 @@
 //! File-system helpers for trace output management.
 
-use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use recorder_errors::{enverr, ErrorCode};
 use runtime_tracing::{Line, NonStreamingTraceWriter, TraceEventsFileFormat, TraceWriter};
+
+use crate::errors::Result;
 
 /// File layout for a trace session. Encapsulates the metadata, event, and paths
 /// files that need to be initialised alongside the runtime tracer.
@@ -50,10 +52,22 @@ impl TraceOutputPaths {
         writer: &mut NonStreamingTraceWriter,
         start_path: &Path,
         start_line: u32,
-    ) -> Result<(), Box<dyn Error>> {
-        TraceWriter::begin_writing_trace_metadata(writer, self.metadata())?;
-        TraceWriter::begin_writing_trace_paths(writer, self.paths())?;
-        TraceWriter::begin_writing_trace_events(writer, self.events())?;
+    ) -> Result<()> {
+        TraceWriter::begin_writing_trace_metadata(writer, self.metadata()).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to begin trace metadata")
+                .with_context("path", self.metadata().display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+        TraceWriter::begin_writing_trace_paths(writer, self.paths()).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to begin trace paths")
+                .with_context("path", self.paths().display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+        TraceWriter::begin_writing_trace_events(writer, self.events()).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to begin trace events")
+                .with_context("path", self.events().display().to_string())
+                .with_context("source", err.to_string())
+        })?;
         TraceWriter::start(writer, start_path, Line(start_line as i64));
         Ok(())
     }

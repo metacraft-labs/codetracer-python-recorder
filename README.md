@@ -2,11 +2,68 @@
 
 This repository now hosts two related projects:
 
-- codetracer-pure-python-recorder — the existing pure-Python prototype that records [CodeTracer](https://github.com/metacraft-labs/CodeTracer) traces using sys.settrace.
-- codetracer-python-recorder — a new, Rust-backed Python extension module (PyO3) intended to provide a faster and more featureful recorder.
+- codetracer-pure-python-recorder — a pure-Python tracer that still mirrors the early prototype.
+- codetracer-python-recorder — a Rust-backed Python extension (PyO3 + maturin) with structured errors and tighter tooling.
 
-> [!WARNING]
-> Both projects are early-stage prototypes. Contributions and discussion are welcome!
+Both projects are still in motion. Expect breaking changes while we finish the error-handling rollout.
+
+### Structured errors (Rust-backed recorder)
+
+The Rust module wraps every failure in a `RecorderError` hierarchy that reaches Python with a stable `code`, a readable `kind`, and a `context` dict.
+
+- `UsageError` → bad input or calling pattern. Codes like `ERR_ALREADY_TRACING`.
+- `EnvironmentError` → IO or OS problems. Codes like `ERR_IO`.
+- `TargetError` → the traced program raised or refused inspection. Codes like `ERR_TRACE_INCOMPLETE`.
+- `InternalError` → a recorder bug or panic. Codes default to `ERR_UNKNOWN` unless classified.
+
+Quick catch example:
+
+```python
+from codetracer_python_recorder import RecorderError, start, stop
+
+try:
+    session = start("/tmp/trace", format="json")
+except RecorderError as err:
+    print(f"Recorder failed: {err.code}")
+    for key, value in err.context.items():
+        print(f"  {key}: {value}")
+else:
+    try:
+        ...  # run work here
+    finally:
+        session.flush()
+        stop()
+```
+
+All subclasses carry the same attributes, so existing handlers can migrate by catching `RecorderError` once and branching on `err.code` if needed.
+
+### CLI exit behaviour and JSON trailers
+
+`python -m codetracer_python_recorder` returns:
+
+- `0` when tracing and the target script succeed.
+- The script's own exit code when it calls `sys.exit()`.
+- `1` when a `RecorderError` bubbles out of startup or shutdown.
+- `2` when the CLI arguments are incomplete.
+
+Pass `--codetracer-json-errors` (or set the policy via `configure_policy(json_errors=True)`) to stream a one-line JSON trailer on stderr. The payload includes `run_id`, `trace_id`, `error_code`, `error_kind`, `message`, and the `context` map so downstream tooling can log failures without scraping text.
+
+### Migration checklist for downstream tools
+
+- Catch `RecorderError` (or a subclass) instead of `RuntimeError`.
+- Switch any string matching over to `err.code` values like `ERR_TRACE_DIR_CONFLICT`.
+- Expect structured log lines (JSON) on stderr. Use the `error_code` field instead of parsing text.
+- Opt in to JSON trailers for machine parsing and keep human output short.
+- Update policy wiring to use `configure_policy` / `policy_snapshot()` rather than hand-rolled env parsing.
+- Read `docs/onboarding/error-handling.md` for detailed migration steps and assertion rules.
+
+### Logging defaults
+
+The recorder now installs a JSON logger on first import. Logs include `run_id`, optional `trace_id`, and an `error_code` field when set.
+
+- Control the log filter with `RUST_LOG=target=level` (standard env syntax).
+- Override from Python with `configure_policy(log_level="info")` or `log_file=...` for file output.
+- Metrics counters record dropped events, detach reasons, and caught panics; plug your own sink via the Rust API when embedding.
 
 ### codetracer-pure-python-recorder
 
@@ -53,6 +110,20 @@ Basic workflow:
 - Collect coverage artefacts locally (LCOV + Cobertura/JSON): `just coverage`
 
 The CI workflow mirrors these commands. Pull requests get an automated comment with the latest Rust/Python coverage tables and downloadable artefacts (`lcov.info`, `coverage.xml`, `coverage.json`).
+
+#### Debug logging
+
+Rust-side logging defaults to `warn` so test output stays readable. Export
+`RUST_LOG` when you need more detail:
+
+```bash
+RUST_LOG=codetracer_python_recorder=debug pytest \
+  codetracer-python-recorder/tests/python/unit/test_backend_exceptions.py -q
+```
+
+Any filter accepted by `env_logger` still works, so you can switch to
+`RUST_LOG=codetracer_python_recorder=info` or silence everything with
+`RUST_LOG=off`.
 
 ### Future directions
 

@@ -7,25 +7,28 @@
 - Provide developers with ergonomic macros, tooling guardrails, and comprehensive tests covering failure paths.
 
 ## Current Gaps
-- Ad-hoc `PyRuntimeError` strings in `src/session.rs:21-76` and `src/runtime/mod.rs:77-190` prevent stable categorisation and user scripting.
-- FFI trampolines in `src/monitoring/tracer.rs:268-706` and activation helpers in `src/runtime/activation.rs:24-83` still use `unwrap`/`expect`, so poisoned locks or filesystem errors abort the interpreter.
-- Python facade functions (`codetracer_python_recorder/session.py:27-63`) return built-in exceptions and provide no context or exit codes.
-- No support for JSON diagnostics, policy switches, or atomic output staging; disk failures can leave half-written traces and logs mix stdout/stderr.
+- PyO3 entry points still surface plain Python exceptions; `codetracer_python_recorder/session.py:27-63` raises built-in errors without stable codes or hierarchy.
+- Monitoring trampolines continue to rely on `GLOBAL.lock().unwrap()` and lack structured error propagation; poisoned mutexes will still panic.
+- Policy toggles (`--on-recorder-error`, `--keep-partial-trace`, logging controls) and JSON diagnostics remain unimplemented.
+- Atomic output staging is limited to the existing non-streaming writer; detaching/abort semantics are not yet centralised.
 
 ## Workstreams
 
 ### WS1 – Foundations & Inventory
+**Status:** In progress (2025-10-02). `just errors-audit` added; call sites catalogued in the accompanying status log.
 - Add a `just errors-audit` command that runs `rg` to list `PyRuntimeError`, `unwrap`, `expect`, and direct `panic!` usage in the recorder crate.
 - Create issue tracker entries grouping call sites by module (`session`, `runtime`, `monitoring`, Python facade) to guide refactors.
 - Exit criteria: checklist of legacy error sites recorded with owners.
 
 ### WS2 – `recorder-errors` Crate
+**Status:** Completed (2025-10-02). Crate scaffolded with central types, macros, and unit tests; workspace updated to include it.
 - Scaffold `recorder-errors` under the workspace with `RecorderError`, `RecorderResult`, `ErrorKind`, `ErrorCode`, context map type, and conversion traits from `io::Error`, `PyErr`, etc.
 - Implement ergonomic macros (`usage!`, `enverr!`, `target!`, `bug!`, `ensure_*`) plus unit tests covering formatting, context propagation, and downcasting.
 - Publish crate docs explaining mapping rules and promises; link ADR 0004.
 - Exit criteria: `cargo test -p recorder-errors` covers all codes; workspace builds with the new crate.
 
 ### WS3 – Retrofit Rust Modules
+**Status:** Completed (2025-10-02). Core Rust modules now emit `RecorderError` instances; PyO3 entry points map them through `to_py_err` with stable codes and context.
 - Replace direct `PyRuntimeError` construction in `src/session/bootstrap.rs`, `src/session.rs`, `src/runtime/mod.rs`, `src/runtime/output_paths.rs`, and helpers with `RecorderResult` + macros.
 - Update `RuntimeTracer` to propagate structured errors instead of strings; remove `expect`/`unwrap` in hot paths by returning classified `bug!` or `enverr!` failures.
 - Introduce a small adapter in `src/runtime/mod.rs` that stages IO writes and applies the atomic/partial policy described in ADR 0004.
@@ -52,12 +55,15 @@
 ### WS7 – Test Coverage & Tooling Enforcement
 - Add unit tests for the new error crate, IO façade, policy switches, and FFI wrappers (panic capture, exception mapping).
 - Extend Python tests to cover the new exception hierarchy, JSON diagnostics, and policy flags.
+- Add backend integration coverage for every `RecorderError` kind (exercise unwritable directories for `EnvironmentError`, force a mocked `capture_call_arguments` failure for `TargetError`, and trigger a panic inside a wrapped callback to assert `InternalError` mapping and log capture).
+- Add regression tests that hit the Rust tracer on real scripts (validate IO context metadata from `TraceOutputPaths::configure_writer`, ensure repeated start/stop cycles leave no partial artefacts, and confirm debug logs stay quiet when `RUST_LOG` is unset).
 - Introduce CI lints (`cargo clippy --deny clippy::panic`, custom script rejecting `unwrap` outside allowed modules) and integrate with `just lint`.
 - Exit criteria: CI blocks regressions; failure-path tests cover disk full, permission denied, target exceptions, partial trace recovery, and SIGINT during detach.
 
 ### WS8 – Documentation & Rollout
 - Update README, API docs, and onboarding material to describe guarantees, exit codes, example snippets, and migration guidance for downstream tools.
 - Add a change log entry summarising the policy and how to consume structured errors from Python.
+- Document assertion guidance: prefer `bug!`/`ensure_internal!` for invariant violations, reserve `assert!` for tests, and pair `debug_assert!` with the classified error when you need both dev-time tripwires and production containment.
 - Track adoption status in `design-docs/error-handling-implementation-plan.status.md` (mirror existing planning artifacts).
 - Exit criteria: Documentation merged, status file created, ADR 0004 promoted to **Accepted** once WS2–WS7 land.
 
@@ -89,4 +95,3 @@
 - All panics are caught before crossing into Python; fuzz tests confirm no UB.
 - `just test` (and targeted error suites) pass on Linux/macOS CI, with new structured logs and metrics visible.
 - Documentation reflects guarantees, and downstream teams acknowledge new exit codes.
-

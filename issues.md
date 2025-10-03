@@ -1,63 +1,69 @@
-# General Issues
-
-# Issues Breaking Declared Relations
-
-This document lists concrete mismatches that cause the relations in `relations.md` to fail.
-
-It should be structured like so:
-```md
-## REL-001
-### ISSUE-001-001
-#### Description
-Blah blah blah
-#### Proposed solution
-Blah blah bleh
-
-### ISSUE-001-002
-...
-
-## REL-002
-...
-```
-
-## ISSUE-009
+## ISSUE-011
 ### Description
-Unify list/sequence `lang_type` naming across recorders. The Rust tracer now
-emits `TypeKind::Seq` with name "List" for Python `list`, while the
-pure-Python recorder uses "Array". This divergence can fragment the trace
-schema and complicate downstream consumers.
+Consolidate session/bootstrap error handling while migrating to the central
+`RecorderError` façade. Current call sites return raw `PyRuntimeError` strings
+without classification:
+- `src/session.rs:26`
+- `src/session/bootstrap.rs:71`, `:79`, `:92`
 
 ### Definition of Done
-- Both recorders emit the same `lang_type` for Python list values.
-- Fixtures and docs/spec are updated to reflect the chosen term.
-- Cross-recorder tests pass with consistent types.
-
-### Proposed solution
-- We will use "List" in order to match existing Python nomenclature
+- Replace the call sites above with `RecorderResult` + structured error codes.
+- Python facade work is tracked under ISSUE-014.
+- Unit tests cover usage/environment error variants for session startup.
 
 ### Status
-Low priority. We won't work on this unless it blocks another issue.
+Completed via WS3 (2025-10-02)
 
 
-## ISSUE-010
+## ISSUE-012
 ### Description
-Clarify scope of dict structural encoding and key typing. The current change
-encodes any Python `dict` as a `Sequence` of `(key, value)` tuples and falls
-back to generic encoding for non-string keys. Repo rules favor fail-fast over
-defensive fallbacks, and ISSUE-008 focused specifically on `**kwargs`.
+Retrofit runtime helpers and value capture to use classified errors. A number
+of hotspots still return bare `PyRuntimeError` or rely on `unwrap`/`expect`:
+- `src/runtime/mod.rs:125`, `:159`, `:854`
+- `src/runtime/frame_inspector.rs:65`, `:85`, `:99`, `:117`, `:122`, `:129`,
+  `:134`, `:141`, `:148`
+- `src/runtime/value_capture.rs:43`, `:62`
+- `src/runtime/value_encoder.rs:70-71`
+- `src/runtime/activation.rs:24`
 
 ### Definition of Done
-- Decide whether structural dict encoding should apply only to kwargs or to all
-  dict values; document the choice.
-- If limited to kwargs, restrict structured encoding to kwargs capture sites.
-- If applied generally, define behavior for non-string keys (e.g., fail fast)
-  and add tests for nested and non-string-key dicts.
-
-### Proposed solution
-- Prefer failing fast on non-string keys in contexts representing kwargs; if
-  general dict encoding is retained, update the spec and tests and remove the
-  defensive fallback for key encoding.
+- All sites above return `RecorderResult` with stable `ErrorCode`s; unwraps are
+  replaced by guarded conversions or `bug!` macros.
+- Runtime tracer IO paths adopt the atomic write façade defined in ADR 0004.
+- Regression tests cover failure paths (missing locals/globals, encoding
+  mismatches).
 
 ### Status
-Low priority. We won't work on this until a user reports that it causes issues.
+Open
 
+
+## ISSUE-013
+### Description
+Harden monitoring/FFI plumbing around `GLOBAL` and tool management. The module
+still uses `lock().unwrap()` and direct `PyRuntimeError`:
+- `src/monitoring/tracer.rs:268`, `:270`, `:366`, `:432-706`
+- `src/monitoring/mod.rs:123`
+
+### Definition of Done
+- Replace `unwrap` with fallible guard handling (`RecorderError` + policy).
+- Install global panic-catching wrappers so monitoring callbacks never unwind
+  into CPython.
+- Add integration tests simulating poisoned mutexes and double-install calls.
+
+### Status
+Open
+
+
+## ISSUE-014
+### Description
+Introduce structured Python exception hierarchy for user-facing APIs. The
+module still raises built-ins:
+- `codetracer_python_recorder/session.py:34`, `:57`, `:62`
+
+### Definition of Done
+- Define `RecorderError` Python base class and map subclasses to error kinds.
+- Update API/unit tests to assert the new classes and associated error codes.
+- Document upgrade guidance in the README/changelog.
+
+### Status
+Open

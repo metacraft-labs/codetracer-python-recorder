@@ -3,9 +3,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use recorder_errors::{enverr, usage, ErrorCode};
 use runtime_tracing::TraceEventsFileFormat;
+
+use crate::errors::Result;
 
 /// Basic metadata about the currently running Python program.
 #[derive(Debug, Clone)]
@@ -31,10 +33,13 @@ impl TraceSessionBootstrap {
         trace_directory: &Path,
         format: &str,
         activation_path: Option<&Path>,
-    ) -> PyResult<Self> {
+    ) -> Result<Self> {
         ensure_trace_directory(trace_directory)?;
         let format = resolve_trace_format(format)?;
-        let metadata = collect_program_metadata(py)?;
+        let metadata = collect_program_metadata(py).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to collect program metadata")
+                .with_context("details", err.to_string())
+        })?;
         Ok(Self {
             trace_directory: trace_directory.to_path_buf(),
             format,
@@ -65,33 +70,39 @@ impl TraceSessionBootstrap {
 }
 
 /// Ensure the requested trace directory exists and is writable.
-pub fn ensure_trace_directory(path: &Path) -> PyResult<()> {
+pub fn ensure_trace_directory(path: &Path) -> Result<()> {
     if path.exists() {
         if !path.is_dir() {
-            return Err(PyRuntimeError::new_err(
-                "trace path exists and is not a directory",
-            ));
+            return Err(usage!(
+                ErrorCode::TraceDirectoryConflict,
+                "trace path exists and is not a directory"
+            )
+            .with_context("path", path.display().to_string()));
         }
         return Ok(());
     }
 
     fs::create_dir_all(path).map_err(|e| {
-        PyRuntimeError::new_err(format!(
-            "failed to create trace directory '{}': {e}",
-            path.display()
-        ))
+        enverr!(
+            ErrorCode::TraceDirectoryCreateFailed,
+            "failed to create trace directory"
+        )
+        .with_context("path", path.display().to_string())
+        .with_context("io", e.to_string())
     })
 }
 
 /// Convert a user-provided format string into the runtime representation.
-pub fn resolve_trace_format(value: &str) -> PyResult<TraceEventsFileFormat> {
+pub fn resolve_trace_format(value: &str) -> Result<TraceEventsFileFormat> {
     match value.to_ascii_lowercase().as_str() {
         "json" => Ok(TraceEventsFileFormat::Json),
         // Accept historical aliases for the binary format.
         "binary" | "binaryv0" | "binary_v0" | "b0" => Ok(TraceEventsFileFormat::BinaryV0),
-        other => Err(PyRuntimeError::new_err(format!(
-            "unsupported trace format '{other}'. Expected one of: json, binary"
-        ))),
+        other => Err(usage!(
+            ErrorCode::UnsupportedFormat,
+            "unsupported trace format '{}'. Expected one of: json, binary",
+            other
+        )),
     }
 }
 
@@ -124,6 +135,7 @@ pub fn collect_program_metadata(py: Python<'_>) -> PyResult<ProgramMetadata> {
 mod tests {
     use super::*;
     use pyo3::types::PyList;
+    use recorder_errors::ErrorCode;
     use tempfile::tempdir;
 
     #[test]
@@ -139,7 +151,8 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let file_path = tmp.path().join("trace.bin");
         std::fs::write(&file_path, b"stub").expect("write stub file");
-        assert!(ensure_trace_directory(&file_path).is_err());
+        let err = ensure_trace_directory(&file_path).expect_err("should reject file path");
+        assert_eq!(err.code, ErrorCode::TraceDirectoryConflict);
     }
 
     #[test]
@@ -156,12 +169,9 @@ mod tests {
 
     #[test]
     fn resolve_trace_format_rejects_unknown_values() {
-        Python::with_gil(|py| {
-            let err = resolve_trace_format("yaml").expect_err("should reject yaml");
-            assert_eq!(err.get_type(py).name().expect("type name"), "RuntimeError");
-            let message = err.value(py).to_string();
-            assert!(message.contains("unsupported trace format"));
-        });
+        let err = resolve_trace_format("yaml").expect_err("should reject yaml");
+        assert_eq!(err.code, ErrorCode::UnsupportedFormat);
+        assert!(err.message().contains("unsupported trace format"));
     }
 
     #[test]
