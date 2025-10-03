@@ -61,6 +61,10 @@ pub enum ErrorCode {
     Io,
     /// Invalid runtime policy configuration value.
     InvalidPolicyValue,
+    /// Recorder was configured to require a trace but none was produced.
+    TraceMissing,
+    /// Recorder stopped early leaving partial trace artefacts behind.
+    TraceIncomplete,
 }
 
 impl ErrorCode {
@@ -79,6 +83,8 @@ impl ErrorCode {
             ErrorCode::TracerInstallConflict => "ERR_TRACER_INSTALL_CONFLICT",
             ErrorCode::Io => "ERR_IO",
             ErrorCode::InvalidPolicyValue => "ERR_INVALID_POLICY_VALUE",
+            ErrorCode::TraceMissing => "ERR_TRACE_MISSING",
+            ErrorCode::TraceIncomplete => "ERR_TRACE_INCOMPLETE",
         }
     }
 }

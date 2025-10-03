@@ -41,8 +41,10 @@ State: In progress
 Highlights:
 - `TraceSession.start()` and `trace()` now refresh policy from env vars and accept override mappings so embeds wire recorder switches without manual plumbing.
 - Rust exports expose `configure_policy`/`configure_policy_from_env` under the expected Python names; unit tests cover env-driven and explicit override flows.
+- Runtime tracer finish path honours `RecorderPolicy`: callback errors respect `on_recorder_error` (disable detaches without surfacing exceptions), `require_trace` now fails cleanly when no events land, and partial traces are deleted or retained based on `keep_partial_trace`.
+- Rust unit tests cover policy enforcement for require-trace and partial-trace retention to guard regressions.
 Next moves:
-- Thread policy decisions into runtime tracer shutdown (detach vs abort) and partial-trace handling before promoting WS5 to done.
+- Surface disable vs abort semantics through Python integration coverage and wire CLI exit codes before promoting WS5 to done.
 
 ## Upcoming Workstreams
 WS6–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
