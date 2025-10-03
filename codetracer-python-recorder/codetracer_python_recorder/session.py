@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Mapping, Optional
 
 from .codetracer_python_recorder import (
+    configure_policy as _configure_policy,
+    configure_policy_from_env as _configure_policy_from_env,
     flush_tracing as _flush_backend,
     is_tracing as _is_tracing_backend,
     start_tracing as _start_backend,
@@ -47,8 +50,29 @@ def start(
     *,
     format: str = DEFAULT_FORMAT,
     start_on_enter: str | Path | None = None,
+    policy: Mapping[str, object] | None = None,
+    apply_env_policy: bool = True,
 ) -> TraceSession:
-    """Start a new global trace session."""
+    """Start a new global trace session.
+
+    Parameters
+    ----------
+    path:
+        Destination directory for generated trace artefacts.
+    format:
+        Trace events serialisation format (``"binary"`` or ``"json"``).
+    start_on_enter:
+        Optional path that delays trace activation until the interpreter enters
+        the referenced file.
+    policy:
+        Optional mapping of runtime policy overrides forwarded to
+        :func:`configure_policy` before tracing begins. Keys match the policy
+        keyword arguments (``on_recorder_error``, ``require_trace``, etc.).
+    apply_env_policy:
+        When ``True`` (default), refresh policy settings from environment
+        variables via :func:`configure_policy_from_env` prior to applying
+        explicit overrides.
+    """
     global _active_session
     if _is_tracing_backend():
         raise RuntimeError("tracing already active")
@@ -56,6 +80,11 @@ def start(
     trace_path = _validate_trace_path(Path(path))
     normalized_format = _coerce_format(format)
     activation_path = _normalize_activation_path(start_on_enter)
+
+    if apply_env_policy:
+        _configure_policy_from_env()
+    if policy:
+        _configure_policy(**_coerce_policy_kwargs(policy))
 
     _start_backend(str(trace_path), normalized_format, activation_path)
     session = TraceSession(path=trace_path, format=normalized_format)
@@ -88,9 +117,16 @@ def trace(
     path: str | Path,
     *,
     format: str = DEFAULT_FORMAT,
+    policy: Mapping[str, object] | None = None,
+    apply_env_policy: bool = True,
 ) -> Iterator[TraceSession]:
     """Context manager helper for scoped tracing."""
-    session = start(path, format=format)
+    session = start(
+        path,
+        format=format,
+        policy=policy,
+        apply_env_policy=apply_env_policy,
+    )
     try:
         yield session
     finally:
@@ -118,6 +154,18 @@ def _normalize_activation_path(value: str | Path | None) -> str | None:
     if value is None:
         return None
     return str(Path(value).expanduser())
+
+
+def _coerce_policy_kwargs(policy: Mapping[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    for key, raw_value in policy.items():
+        if key == "log_file" and raw_value is not None:
+            normalized[key] = os.fspath(raw_value)
+        elif key in {"on_recorder_error", "log_level"} and raw_value is not None:
+            normalized[key] = str(raw_value)
+        else:
+            normalized[key] = raw_value
+    return normalized
 
 
 __all__ = (

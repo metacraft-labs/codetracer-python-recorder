@@ -16,8 +16,12 @@ from .codetracer_python_recorder import (
     RecorderError,
     TargetError,
     UsageError,
+    configure_policy,
+    configure_policy_from_env,
+    policy_snapshot,
 )
 
+configure_policy_from_env()
 auto_start_from_env()
 
 __all__ = (
@@ -27,4 +31,7 @@ __all__ = (
     "EnvironmentError",
     "TargetError",
     "InternalError",
+    "configure_policy",
+    "configure_policy_from_env",
+    "policy_snapshot",
 )
