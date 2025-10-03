@@ -136,3 +136,105 @@ where
         Err(panic_payload) => Err(handle_panic(label, panic_payload)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use recorder_errors::{enverr, target, usage};
+
+    #[test]
+    fn map_recorder_error_sets_python_attributes() {
+        Python::with_gil(|py| {
+            let err = usage!(
+                ErrorCode::UnsupportedFormat,
+                "invalid trace format"
+            )
+            .with_context("format", "yaml")
+            .with_source(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
+            let pyerr = map_recorder_error(err);
+            let ty = pyerr.get_type(py);
+            assert!(ty.is(py.get_type::<PyUsageError>()));
+            let value = pyerr.value(py);
+            assert_eq!(
+                value
+                    .getattr("code")
+                    .expect("error code attribute")
+                    .extract::<String>()
+                    .expect("code string"),
+                "ERR_UNSUPPORTED_FORMAT"
+            );
+            assert_eq!(
+                value
+                    .getattr("kind")
+                    .expect("error kind attribute")
+                    .extract::<String>()
+                    .expect("kind string"),
+                "Usage"
+            );
+            let context_obj = value.getattr("context").expect("context attribute");
+            let ctx = context_obj
+                .downcast::<PyDict>()
+                .expect("context attribute downcast");
+            let format_value = ctx
+                .get_item("format")
+                .expect("context lookup failed")
+                .expect("context map missing 'format'");
+            assert_eq!(
+                format_value
+                    .extract::<String>()
+                    .expect("format value extraction"),
+                "yaml"
+            );
+        });
+    }
+
+    #[test]
+    fn dispatch_converts_recorder_error_to_pyerr() {
+        Python::with_gil(|py| {
+            let result: PyResult<()> = dispatch("dispatch_env", || {
+                Err(enverr!(ErrorCode::Io, "disk full"))
+            });
+            let err = result.expect_err("expected PyErr");
+            let ty = err.get_type(py);
+            assert!(ty.is(py.get_type::<PyEnvironmentError>()));
+        });
+    }
+
+    #[test]
+    fn dispatch_converts_panic_into_internal_error() {
+        Python::with_gil(|py| {
+            let result: PyResult<()> = dispatch("dispatch_panic", || panic!("boom"));
+            let err = result.expect_err("expected panic to map into PyErr");
+            let ty = err.get_type(py);
+            assert!(ty.is(py.get_type::<PyInternalError>()));
+            assert!(err.to_string().contains("panic in dispatch_panic"));
+        });
+    }
+
+    #[test]
+    fn wrap_pyfunction_passes_through_success() {
+        let result = wrap_pyfunction("wrap_ok", || Ok::<_, PyErr>(42));
+        assert_eq!(result.expect("expected success"), 42);
+    }
+
+    #[test]
+    fn wrap_pyfunction_converts_errors_and_panics() {
+        Python::with_gil(|py| {
+            let err = wrap_pyfunction("wrap_error", || -> PyResult<()> {
+                Err(map_recorder_error(target!(
+                    ErrorCode::TraceIncomplete,
+                    "target failure"
+                )))
+            })
+            .expect_err("expected error");
+            assert!(err.get_type(py).is(py.get_type::<PyTargetError>()));
+
+            let panic_err = wrap_pyfunction("wrap_panic", || -> PyResult<()> {
+                panic!("boom");
+            })
+            .expect_err("expected panic");
+            assert!(panic_err.get_type(py).is(py.get_type::<PyInternalError>()));
+            assert!(panic_err.to_string().contains("panic in wrap_panic"));
+        });
+    }
+}

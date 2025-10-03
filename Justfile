@@ -42,6 +42,14 @@ cargo-test:
 
 py-test:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
+
+lint: lint-rust lint-errors
+
+lint-rust:
+    uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic
+
+lint-errors:
+    uv run python3 codetracer-python-recorder/scripts/lint_no_unwraps.py
     
 # Run tests only on the pure recorder
 test-pure:

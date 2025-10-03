@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
-use recorder_errors::{bug, enverr, usage, ErrorCode, RecorderResult};
+use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
@@ -97,6 +97,8 @@ impl FailureStage {
 enum FailureMode {
     Stage(FailureStage),
     SuppressEvents,
+    TargetArgs,
+    Panic,
 }
 
 #[cfg(feature = "integration-test")]
@@ -116,6 +118,8 @@ fn configured_failure_mode() -> Option<FailureMode> {
             "line" => Some(FailureMode::Stage(FailureStage::Line)),
             "finish" => Some(FailureMode::Stage(FailureStage::Finish)),
             "suppress-events" | "suppress_events" | "suppress" => Some(FailureMode::SuppressEvents),
+            "target" | "target-args" | "target_args" => Some(FailureMode::TargetArgs),
+            "panic" | "panic-callback" | "panic_callback" => Some(FailureMode::Panic),
             _ => None,
         })
     })
@@ -123,16 +127,34 @@ fn configured_failure_mode() -> Option<FailureMode> {
 
 #[cfg(feature = "integration-test")]
 fn should_inject_failure(stage: FailureStage) -> bool {
-    match configured_failure_mode() {
-        Some(FailureMode::Stage(mode)) if mode == stage => {
-            !FAILURE_TRIGGERED.swap(true, Ordering::SeqCst)
-        }
-        _ => false,
-    }
+    matches!(configured_failure_mode(), Some(FailureMode::Stage(mode)) if mode == stage)
+        && mark_failure_triggered()
 }
 
 #[cfg(not(feature = "integration-test"))]
 fn should_inject_failure(_stage: FailureStage) -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn should_inject_target_error() -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::TargetArgs))
+        && mark_failure_triggered()
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn should_inject_target_error() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn should_panic_in_callback() -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::Panic)) && mark_failure_triggered()
+}
+
+#[cfg(not(feature = "integration-test"))]
+#[allow(dead_code)]
+fn should_panic_in_callback() -> bool {
     false
 }
 
@@ -143,6 +165,17 @@ fn suppress_events() -> bool {
 
 #[cfg(not(feature = "integration-test"))]
 fn suppress_events() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn mark_failure_triggered() -> bool {
+    !FAILURE_TRIGGERED.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(not(feature = "integration-test"))]
+#[allow(dead_code)]
+fn mark_failure_triggered() -> bool {
     false
 }
 
@@ -340,6 +373,16 @@ impl Tracer for RuntimeTracer {
             return Err(injected_failure_err(FailureStage::PyStart));
         }
 
+        if should_inject_target_error() {
+            return Err(ffi::map_recorder_error(
+                target!(
+                    ErrorCode::TraceIncomplete,
+                    "test-injected target error from capture_call_arguments"
+                )
+                .with_context("injection_stage", "capture_call_arguments"),
+            ));
+        }
+
         log_event(py, code, "on_py_start", None);
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
@@ -379,6 +422,13 @@ impl Tracer for RuntimeTracer {
 
         if should_inject_failure(FailureStage::Line) {
             return Err(injected_failure_err(FailureStage::Line));
+        }
+
+        #[cfg(feature = "integration-test")]
+        {
+            if should_panic_in_callback() {
+                panic!("test-injected panic in on_line");
+            }
         }
 
         log_event(py, code, "on_line", Some(lineno));

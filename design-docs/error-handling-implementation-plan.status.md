@@ -1,6 +1,6 @@
 # Error Handling Implementation Plan — Status
 
-_Last updated: 2025-10-03_
+_Last updated: 2025-10-04_
 
 ## WS1 – Foundations & Inventory
 State: In progress
@@ -53,5 +53,14 @@ Highlights:
 - Enabled the `--json-errors` policy path so runtime shutdown emits a single-line JSON trailer on stderr; CLI integration tests now assert the abort flow surfaces the trailer alongside existing stack traces.
 Next moves: Wire the metrics sink into the chosen exporter and align the log schema with Observability consumption before rolling out to downstream tooling.
 
+## WS7 – Test Coverage & Tooling Enforcement
+State: Done (2025-10-04)
+Highlights:
+- Expanded `recorder-errors` and policy unit tests covering every macro (usage/target/internal ensures) plus invalid boolean parsing.
+- Added FFI unit tests for `dispatch`/`wrap_pyfunction`, panic containment, and Python exception attribute propagation.
+- Introduced integration coverage for environment permission failures, injected target argument capture errors, and synthetic callback panics (verifying JSON trailers and error classes).
+- Implemented `just lint` orchestration running `cargo clippy -D clippy::panic` and a repository script that blocks unchecked `.unwrap(` usage outside the legacy allowlist.
+Next moves: Monitor unwrap allowlist shrinkage once WS1 follow-ups land; evaluate extending the lint to `.expect(` once monitoring refactor closes.
+
 ## Upcoming Workstreams
-WS7–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
+WS8 – Documentation & Rollout: Not started. Pending guidance from Docs WG and ADR promotion once downstream consumers validate the new error interfaces.
