@@ -6,12 +6,12 @@ use std::sync::Mutex;
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use crate::ffi;
 use crate::policy::{self, OnRecorderError};
+use log::{error, warn};
 use pyo3::{
     prelude::*,
     types::{PyAny, PyCode, PyModule},
 };
 use recorder_errors::{usage, ErrorCode};
-use log::{error, warn};
 
 use super::{
     acquire_tool_id, free_tool_id, monitoring_events, register_callback, set_events,
@@ -270,12 +270,10 @@ fn handle_callback_result(
 ) -> PyResult<Py<PyAny>> {
     match result {
         Ok(CallbackOutcome::Continue) => Ok(py.None()),
-        Ok(CallbackOutcome::DisableLocation) => Ok(
-            guard
-                .as_ref()
-                .map(|global| global.disable_sentinel.clone_ref(py))
-                .unwrap_or_else(|| py.None()),
-        ),
+        Ok(CallbackOutcome::DisableLocation) => Ok(guard
+            .as_ref()
+            .map(|global| global.disable_sentinel.clone_ref(py))
+            .unwrap_or_else(|| py.None())),
         Err(err) => handle_callback_error(py, guard, err),
     }
 }
@@ -310,62 +308,78 @@ fn handle_callback_error(
 
 fn uninstall_locked(py: Python<'_>, guard: &mut Option<Global>) -> PyResult<()> {
     if let Some(mut global) = guard.take() {
-        let _ = global.tracer.finish(py);
-        let events = monitoring_events(py)?;
-        if global.mask.contains(&events.CALL) {
-            register_callback(py, &global.tool, &events.CALL, None)?;
-        }
-        if global.mask.contains(&events.LINE) {
-            register_callback(py, &global.tool, &events.LINE, None)?;
-        }
-        if global.mask.contains(&events.INSTRUCTION) {
-            register_callback(py, &global.tool, &events.INSTRUCTION, None)?;
-        }
-        if global.mask.contains(&events.JUMP) {
-            register_callback(py, &global.tool, &events.JUMP, None)?;
-        }
-        if global.mask.contains(&events.BRANCH) {
-            register_callback(py, &global.tool, &events.BRANCH, None)?;
-        }
-        if global.mask.contains(&events.PY_START) {
-            register_callback(py, &global.tool, &events.PY_START, None)?;
-        }
-        if global.mask.contains(&events.PY_RESUME) {
-            register_callback(py, &global.tool, &events.PY_RESUME, None)?;
-        }
-        if global.mask.contains(&events.PY_RETURN) {
-            register_callback(py, &global.tool, &events.PY_RETURN, None)?;
-        }
-        if global.mask.contains(&events.PY_YIELD) {
-            register_callback(py, &global.tool, &events.PY_YIELD, None)?;
-        }
-        if global.mask.contains(&events.PY_THROW) {
-            register_callback(py, &global.tool, &events.PY_THROW, None)?;
-        }
-        if global.mask.contains(&events.PY_UNWIND) {
-            register_callback(py, &global.tool, &events.PY_UNWIND, None)?;
-        }
-        if global.mask.contains(&events.RAISE) {
-            register_callback(py, &global.tool, &events.RAISE, None)?;
-        }
-        if global.mask.contains(&events.RERAISE) {
-            register_callback(py, &global.tool, &events.RERAISE, None)?;
-        }
-        if global.mask.contains(&events.EXCEPTION_HANDLED) {
-            register_callback(py, &global.tool, &events.EXCEPTION_HANDLED, None)?;
-        }
-        // if global.mask.contains(&events.STOP_ITERATION) {
-        //     register_callback(py, &global.tool, &events.STOP_ITERATION, None)?;
-        // }
-        if global.mask.contains(&events.C_RETURN) {
-            register_callback(py, &global.tool, &events.C_RETURN, None)?;
-        }
-        if global.mask.contains(&events.C_RAISE) {
-            register_callback(py, &global.tool, &events.C_RAISE, None)?;
+        let finish_result = global.tracer.finish(py);
+
+        let cleanup_result = (|| -> PyResult<()> {
+            let events = monitoring_events(py)?;
+            if global.mask.contains(&events.CALL) {
+                register_callback(py, &global.tool, &events.CALL, None)?;
+            }
+            if global.mask.contains(&events.LINE) {
+                register_callback(py, &global.tool, &events.LINE, None)?;
+            }
+            if global.mask.contains(&events.INSTRUCTION) {
+                register_callback(py, &global.tool, &events.INSTRUCTION, None)?;
+            }
+            if global.mask.contains(&events.JUMP) {
+                register_callback(py, &global.tool, &events.JUMP, None)?;
+            }
+            if global.mask.contains(&events.BRANCH) {
+                register_callback(py, &global.tool, &events.BRANCH, None)?;
+            }
+            if global.mask.contains(&events.PY_START) {
+                register_callback(py, &global.tool, &events.PY_START, None)?;
+            }
+            if global.mask.contains(&events.PY_RESUME) {
+                register_callback(py, &global.tool, &events.PY_RESUME, None)?;
+            }
+            if global.mask.contains(&events.PY_RETURN) {
+                register_callback(py, &global.tool, &events.PY_RETURN, None)?;
+            }
+            if global.mask.contains(&events.PY_YIELD) {
+                register_callback(py, &global.tool, &events.PY_YIELD, None)?;
+            }
+            if global.mask.contains(&events.PY_THROW) {
+                register_callback(py, &global.tool, &events.PY_THROW, None)?;
+            }
+            if global.mask.contains(&events.PY_UNWIND) {
+                register_callback(py, &global.tool, &events.PY_UNWIND, None)?;
+            }
+            if global.mask.contains(&events.RAISE) {
+                register_callback(py, &global.tool, &events.RAISE, None)?;
+            }
+            if global.mask.contains(&events.RERAISE) {
+                register_callback(py, &global.tool, &events.RERAISE, None)?;
+            }
+            if global.mask.contains(&events.EXCEPTION_HANDLED) {
+                register_callback(py, &global.tool, &events.EXCEPTION_HANDLED, None)?;
+            }
+            // if global.mask.contains(&events.STOP_ITERATION) {
+            //     register_callback(py, &global.tool, &events.STOP_ITERATION, None)?;
+            // }
+            if global.mask.contains(&events.C_RETURN) {
+                register_callback(py, &global.tool, &events.C_RETURN, None)?;
+            }
+            if global.mask.contains(&events.C_RAISE) {
+                register_callback(py, &global.tool, &events.C_RAISE, None)?;
+            }
+
+            set_events(py, &global.tool, NO_EVENTS)?;
+            free_tool_id(py, &global.tool)?;
+            Ok(())
+        })();
+
+        if let Err(err) = finish_result {
+            if let Err(cleanup_err) = cleanup_result {
+                warn!(
+                    "failed to reset monitoring callbacks after finish error: {}",
+                    cleanup_err
+                );
+            }
+            return Err(err);
         }
 
-        set_events(py, &global.tool, NO_EVENTS)?;
-        free_tool_id(py, &global.tool)?;
+        cleanup_result?;
     }
     Ok(())
 }
