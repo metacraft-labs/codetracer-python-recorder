@@ -54,6 +54,20 @@ Basic workflow:
 
 The CI workflow mirrors these commands. Pull requests get an automated comment with the latest Rust/Python coverage tables and downloadable artefacts (`lcov.info`, `coverage.xml`, `coverage.json`).
 
+#### Debug logging
+
+Rust-side logging defaults to `warn` so test output stays readable. Export
+`RUST_LOG` when you need more detail:
+
+```bash
+RUST_LOG=codetracer_python_recorder=debug pytest \
+  codetracer-python-recorder/tests/python/unit/test_backend_exceptions.py -q
+```
+
+Any filter accepted by `env_logger` works, so you can switch to
+`RUST_LOG=codetracer_python_recorder=info` or silence everything with
+`RUST_LOG=off`.
+
 ### Future directions
 
 The current Python support is an unfinished prototype. We can finish it. In the future, it may be expanded to function in a way to similar to the more complete implementations, e.g. [Noir](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer).

@@ -22,8 +22,8 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) -> PyResult<()> {
     ffi::wrap_pyfunction("start_tracing", || {
         // Ensure logging is ready before any tracer logs might be emitted.
-        // Default only our crate to debug to avoid excessive verbosity from deps.
-        init_rust_logging_with_default("codetracer_python_recorder=debug");
+        // Default our crate to warnings-only so tests stay quiet unless explicitly enabled.
+        init_rust_logging_with_default("codetracer_python_recorder=warn");
         if ACTIVE.load(Ordering::SeqCst) {
             return Err(ffi::map_recorder_error(usage!(
                 ErrorCode::AlreadyTracing,
