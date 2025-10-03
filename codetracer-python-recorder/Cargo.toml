@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 extension-module = ["pyo3/extension-module"]
+integration-test = []
 default = ["extension-module"]
 
 [dependencies]

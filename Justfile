@@ -31,7 +31,7 @@ venv version=PYTHON_DEFAULT_VERSION:
 
 # Build the module in dev mode
 dev:
-    uv run --directory codetracer-python-recorder maturin develop --uv
+    uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
 
 # Run unit tests of dev build
 test: cargo-test py-test

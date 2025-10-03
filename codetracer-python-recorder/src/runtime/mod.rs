@@ -17,7 +17,9 @@ use value_capture::{capture_call_arguments, record_return_value, record_visible_
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "integration-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "integration-test")]
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
@@ -89,15 +91,20 @@ impl FailureStage {
     }
 }
 
+// Failure injection helpers are only compiled for integration tests.
+#[cfg_attr(not(feature = "integration-test"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FailureMode {
     Stage(FailureStage),
     SuppressEvents,
 }
 
+#[cfg(feature = "integration-test")]
 static FAILURE_MODE: OnceLock<Option<FailureMode>> = OnceLock::new();
+#[cfg(feature = "integration-test")]
 static FAILURE_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "integration-test")]
 fn configured_failure_mode() -> Option<FailureMode> {
     *FAILURE_MODE.get_or_init(|| {
         let raw = std::env::var("CODETRACER_TEST_INJECT_FAILURE").ok();
@@ -114,6 +121,7 @@ fn configured_failure_mode() -> Option<FailureMode> {
     })
 }
 
+#[cfg(feature = "integration-test")]
 fn should_inject_failure(stage: FailureStage) -> bool {
     match configured_failure_mode() {
         Some(FailureMode::Stage(mode)) if mode == stage => {
@@ -123,14 +131,37 @@ fn should_inject_failure(stage: FailureStage) -> bool {
     }
 }
 
+#[cfg(not(feature = "integration-test"))]
+fn should_inject_failure(_stage: FailureStage) -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
 fn suppress_events() -> bool {
     matches!(configured_failure_mode(), Some(FailureMode::SuppressEvents))
 }
 
+#[cfg(not(feature = "integration-test"))]
+fn suppress_events() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
 fn injected_failure_err(stage: FailureStage) -> PyErr {
     let err = bug!(
         ErrorCode::TraceIncomplete,
         "test-injected failure at {}",
+        stage.as_str()
+    )
+    .with_context("injection_stage", stage.as_str().to_string());
+    ffi::map_recorder_error(err)
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn injected_failure_err(stage: FailureStage) -> PyErr {
+    let err = bug!(
+        ErrorCode::TraceIncomplete,
+        "failure injection requested at {} without fail-injection feature",
         stage.as_str()
     )
     .with_context("injection_stage", stage.as_str().to_string());
