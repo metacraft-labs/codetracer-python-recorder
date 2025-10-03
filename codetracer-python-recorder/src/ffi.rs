@@ -145,12 +145,9 @@ mod tests {
     #[test]
     fn map_recorder_error_sets_python_attributes() {
         Python::with_gil(|py| {
-            let err = usage!(
-                ErrorCode::UnsupportedFormat,
-                "invalid trace format"
-            )
-            .with_context("format", "yaml")
-            .with_source(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
+            let err = usage!(ErrorCode::UnsupportedFormat, "invalid trace format")
+                .with_context("format", "yaml")
+                .with_source(std::io::Error::new(std::io::ErrorKind::Other, "boom"));
             let pyerr = map_recorder_error(err);
             let ty = pyerr.get_type(py);
             assert!(ty.is(py.get_type::<PyUsageError>()));
@@ -191,9 +188,8 @@ mod tests {
     #[test]
     fn dispatch_converts_recorder_error_to_pyerr() {
         Python::with_gil(|py| {
-            let result: PyResult<()> = dispatch("dispatch_env", || {
-                Err(enverr!(ErrorCode::Io, "disk full"))
-            });
+            let result: PyResult<()> =
+                dispatch("dispatch_env", || Err(enverr!(ErrorCode::Io, "disk full")));
             let err = result.expect_err("expected PyErr");
             let ty = err.get_type(py);
             assert!(ty.is(py.get_type::<PyEnvironmentError>()));
