@@ -40,3 +40,6 @@ Implement the CodeObjectWrapper as designed. Update the Tracer trait as well as 
 There is an issue in the current implementation. We don't use caching effectively, since we create a new CodeObjectWrapper at each callback_xxx call. We need a global cache, probably keyed by the code object id. Propose design changes and update the design documents. Don't implement the changes themselves before I approve them.
 --- FOLLOW UP TASK ---
 Implement the global code object registry.
+
+--- FOLLOW UP TASK ---
+I have ADHD and can't follow long verbose documentation. Rewrite the documents in 'design-docs' because now they are full of shit

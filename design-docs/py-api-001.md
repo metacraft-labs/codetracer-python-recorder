@@ -1,73 +1,39 @@
-# Python sys.monitoring Tracer API
+# Python API Cheat Sheet
 
-## Overview
-This document describes the user-facing Python API for the `codetracer` module built on top of `runtime_tracing` and `sys.monitoring`.  The API exposes a minimal surface for starting and stopping traces, managing trace sessions, and integrating tracing into scripts or test suites.
-
-## Module `codetracer`
-
-### Constants
-- `DEFAULT_FORMAT: str = "binary"`
-- `TRACE_BINARY: str = "binary"`
-- `TRACE_JSON: str = "json"`
-
-### Session Management
-- Start a global trace; returns a `TraceSession`.
-  ```py
-  def start(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT,
-            start_on_enter: str | os.PathLike | None = None) -> TraceSession
-  ```
-- Stop the active trace if any.
-  ```py
-  def stop() -> None
-  ```
-- Query whether tracing is active.
-  ```py
-  def is_tracing() -> bool
-  ```
-- Context manager helper for scoped tracing.
-  ```py
-  @contextlib.contextmanager
-  def trace(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT):
-      ...
-  ```
-- Flush buffered data to disk without ending the session.
-  ```py
-  def flush() -> None
-  ```
-
-## Class `TraceSession`
-Represents a live tracing session returned by `start()` and used by the context manager.
-
-```py
-class TraceSession:
-    path: pathlib.Path
-    format: str
-
-    def stop(self) -> None: ...
-    def flush(self) -> None: ...
-    def __enter__(self) -> TraceSession: ...
-    def __exit__(self, exc_type, exc, tb) -> None: ...
-```
-
-### Start Behavior
-- `start_on_enter`: Optional path; when provided, tracing starts only after execution first enters this file (useful to avoid interpreter/import noise when launching via CLI).
-
-### Output Location
-- `path` is a directory. The tracer writes three files inside it:
-  - `trace.json` when `format == "json"` or `trace.bin` when `format == "binary"`
-  - `trace_metadata.json`
-  - `trace_paths.json`
-
-## Environment Integration
-- Auto-start tracing when `CODETRACER_TRACE` is set; the value is interpreted as the output directory.
-- When `CODETRACER_FORMAT` is provided, it overrides the default output format.
-
-## Usage Example
+## Imports
 ```py
 import codetracer
-from pathlib import Path
-
-out_dir = Path("./traces/run-001")
-with codetracer.trace(out_dir, format=codetracer.TRACE_JSON):
-    run_application()
 ```
+
+## Constants
+- `codetracer.TRACE_BINARY` / `codetracer.TRACE_JSON`
+- `codetracer.DEFAULT_FORMAT` (defaults to binary)
+
+## Core calls
+```py
+session = codetracer.start(path, format=codetracer.DEFAULT_FORMAT, start_on_enter=None)
+codetracer.stop()
+is_active = codetracer.is_tracing()
+codetracer.flush()
+```
+
+`start_on_enter` (optional path) delays tracing until we enter that file.
+
+## Context manager
+```py
+with codetracer.trace(path, format=codetracer.TRACE_JSON):
+    run_code()
+```
+
+## TraceSession object
+- Attributes: `path`, `format`
+- Methods: `stop()`, `flush()`, context-manager support.
+
+## Files we write
+- `trace.bin` or `trace.json`
+- `trace_metadata.json`
+- `trace_paths.json`
+
+## Environment auto-start
+- `CODETRACER_TRACE=/tmp/out` starts tracing on import.
+- `CODETRACER_FORMAT=json` overrides the format.

@@ -1,11 +1,11 @@
-# Test Suite Coverage Plan Status
+# Coverage Plan Status Snapshot
 
-## Current Status
-- ✅ Plan doc expanded with prerequisites, detailed Just targets, CI strategy, and an implementation checklist (see `design-docs/test-suite-coverage-plan.md`).
-- ✅ Implementation: coverage dependencies added to the dev shell (`flake.nix`) and UV groups (`pyproject.toml`).
-- ✅ Implementation: `just coverage-*` helpers landed with matching documentation in `codetracer-python-recorder/tests/README.md`.
-- ✅ Implementation: CI now runs `just coverage` on Python 3.12 with non-blocking jobs, uploads JSON/XML/LCOV artefacts, and posts a PR comment summarising Rust/Python coverage (`.github/workflows/ci.yml`).
-- ✅ Assessment: capture baseline coverage numbers before proposing enforcement thresholds.
+## Done
+- ✅ Coverage plan doc updated with tooling + rollout details.
+- ✅ Dev env ships `cargo-llvm-cov`, `pytest-cov`, and friends.
+- ✅ `just coverage-rust`, `just coverage-python`, and `just coverage` exist with docs in `tests/README.md`.
+- ✅ CI runs the coverage recipe on Ubuntu/Python 3.12, uploads artefacts, and posts the summary comment.
+- ✅ Baseline numbers recorded for future thresholds.
 
-## Next Steps
-We are Done
+## Next
+- Nothing pending.
