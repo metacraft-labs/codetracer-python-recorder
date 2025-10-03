@@ -2,8 +2,11 @@
 
 mod activation;
 mod frame_inspector;
+mod io_capture;
 mod logging;
 mod output_paths;
+mod thread_snapshots;
+mod trace_writer_host;
 mod value_capture;
 mod value_encoder;
 
@@ -11,7 +14,10 @@ pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
+use io_capture::ActiveCapture;
 use logging::log_event;
+use thread_snapshots::{SnapshotEntry, ThreadSnapshotStore};
+use trace_writer_host::{register_step_with_guard, TraceWriterHost};
 use value_capture::{capture_call_arguments, record_return_value, record_visible_scope};
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -26,7 +32,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
-use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
@@ -53,10 +58,24 @@ impl Drop for TraceIdResetGuard {
     }
 }
 
+/// Hook invoked before the tracer finishes to drain auxiliary workers.
+pub trait IoDrain: Send {
+    fn drain(&mut self, py: Python<'_>) -> RecorderResult<()>;
+}
+
+#[derive(Default)]
+struct NoopIoDrain;
+
+impl IoDrain for NoopIoDrain {
+    fn drain(&mut self, _py: Python<'_>) -> RecorderResult<()> {
+        Ok(())
+    }
+}
+
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
 pub struct RuntimeTracer {
-    writer: NonStreamingTraceWriter,
+    writer: TraceWriterHost,
     format: TraceEventsFileFormat,
     activation: ActivationController,
     program_path: PathBuf,
@@ -66,6 +85,8 @@ pub struct RuntimeTracer {
     events_recorded: bool,
     encountered_failure: bool,
     trace_id: String,
+    thread_snapshots: ThreadSnapshotStore,
+    io_drain: Box<dyn IoDrain + Send>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,8 +159,7 @@ fn should_inject_failure(_stage: FailureStage) -> bool {
 
 #[cfg(feature = "integration-test")]
 fn should_inject_target_error() -> bool {
-    matches!(configured_failure_mode(), Some(FailureMode::TargetArgs))
-        && mark_failure_triggered()
+    matches!(configured_failure_mode(), Some(FailureMode::TargetArgs)) && mark_failure_triggered()
 }
 
 #[cfg(not(feature = "integration-test"))]
@@ -213,8 +233,7 @@ impl RuntimeTracer {
         format: TraceEventsFileFormat,
         activation_path: Option<&Path>,
     ) -> Self {
-        let mut writer = NonStreamingTraceWriter::new(program, args);
-        writer.set_format(format);
+        let writer = TraceWriterHost::new(program, args, format);
         let activation = ActivationController::new(activation_path);
         let program_path = PathBuf::from(program);
         Self {
@@ -228,6 +247,8 @@ impl RuntimeTracer {
             events_recorded: false,
             encountered_failure: false,
             trace_id: Uuid::new_v4().to_string(),
+            thread_snapshots: ThreadSnapshotStore::new(),
+            io_drain: Box::new(NoopIoDrain::default()),
         }
     }
 
@@ -235,13 +256,15 @@ impl RuntimeTracer {
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         let start_path = self.activation.start_path(&self.program_path);
         log::debug!("{}", start_path.display());
-        outputs
-            .configure_writer(&mut self.writer, start_path, start_line)
+        self.writer
+            .configure_outputs(outputs, start_path, start_line)
             .map_err(ffi::map_recorder_error)?;
         self.output_paths = Some(outputs.clone());
         self.events_recorded = false;
         self.encountered_failure = false;
         set_active_trace_id(Some(self.trace_id.clone()));
+        self.thread_snapshots.reset();
+        self.configure_io_capture()?;
         Ok(())
     }
 
@@ -255,6 +278,31 @@ impl RuntimeTracer {
 
     fn mark_failure(&mut self) {
         self.encountered_failure = true;
+    }
+
+    /// Replace the IO drain hook. Intended for future IO capture integration.
+    #[allow(dead_code)]
+    pub fn set_io_drain(&mut self, drain: Box<dyn IoDrain + Send>) {
+        self.io_drain = drain;
+    }
+
+    /// Share the writer host for background workers.
+    #[allow(dead_code)]
+    pub fn writer_host(&self) -> TraceWriterHost {
+        self.writer.clone()
+    }
+
+    /// Share the snapshot store for read-only observers.
+    #[allow(dead_code)]
+    pub fn snapshot_store(&self) -> ThreadSnapshotStore {
+        self.thread_snapshots.clone()
+    }
+
+    fn configure_io_capture(&mut self) -> PyResult<()> {
+        let capture = ActiveCapture::start(self.writer.clone(), self.thread_snapshots.clone())
+            .map_err(ffi::map_recorder_error)?;
+        self.io_drain = Box::new(capture);
+        Ok(())
     }
 
     fn cleanup_partial_outputs(&self) -> RecorderResult<()> {
@@ -283,19 +331,7 @@ impl RuntimeTracer {
     }
 
     fn finalise_writer(&mut self) -> RecorderResult<()> {
-        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace metadata")
-                .with_context("source", err.to_string())
-        })?;
-        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace paths")
-                .with_context("source", err.to_string())
-        })?;
-        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace events")
-                .with_context("source", err.to_string())
-        })?;
-        Ok(())
+        self.writer.finalize()
     }
 
     fn ensure_function_id(
@@ -309,8 +345,9 @@ impl RuntimeTracer {
                 let name = code.qualname(py)?;
                 let filename = code.filename(py)?;
                 let first_line = code.first_line(py)?;
+                let mut writer = self.writer.lock().map_err(ffi::map_recorder_error)?;
                 let function_id = TraceWriter::ensure_function_id(
-                    &mut self.writer,
+                    &mut *writer,
                     name,
                     Path::new(filename),
                     Line(first_line as i64),
@@ -386,20 +423,23 @@ impl Tracer for RuntimeTracer {
         log_event(py, code, "on_py_start", None);
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            match capture_call_arguments(py, &mut self.writer, code) {
-                Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
-                Err(err) => {
-                    let details = err.to_string();
-                    with_error_code(ErrorCode::FrameIntrospectionFailed, || {
-                        log::error!("on_py_start: failed to capture args: {details}");
-                    });
-                    return Err(ffi::map_recorder_error(
-                        enverr!(
-                            ErrorCode::FrameIntrospectionFailed,
-                            "failed to capture call arguments"
-                        )
-                        .with_context("details", details),
-                    ));
+            {
+                let mut writer = self.writer.lock().map_err(ffi::map_recorder_error)?;
+                match capture_call_arguments(py, &mut writer, code) {
+                    Ok(args) => TraceWriter::register_call(&mut *writer, fid, args),
+                    Err(err) => {
+                        let details = err.to_string();
+                        with_error_code(ErrorCode::FrameIntrospectionFailed, || {
+                            log::error!("on_py_start: failed to capture args: {details}");
+                        });
+                        return Err(ffi::map_recorder_error(
+                            enverr!(
+                                ErrorCode::FrameIntrospectionFailed,
+                                "failed to capture call arguments"
+                            )
+                            .with_context("details", details),
+                        ));
+                    }
                 }
             }
             self.mark_event();
@@ -433,15 +473,22 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_line", Some(lineno));
 
-        if let Ok(filename) = code.filename(py) {
-            TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
-            self.mark_event();
-        }
-
         let snapshot = capture_frame(py, code)?;
-
-        let mut recorded: HashSet<String> = HashSet::new();
-        record_visible_scope(py, &mut self.writer, &snapshot, &mut recorded);
+        let filename = code.filename(py)?;
+        let line = Line(lineno as i64);
+        let path_id = {
+            let mut writer = self.writer.lock().map_err(ffi::map_recorder_error)?;
+            let path_id = register_step_with_guard(&mut writer, Path::new(filename), line);
+            let mut recorded: HashSet<String> = HashSet::new();
+            record_visible_scope(py, &mut writer, &snapshot, &mut recorded);
+            path_id
+        };
+        self.mark_event();
+        self.thread_snapshots.update_current(SnapshotEntry {
+            path_id,
+            line,
+            frame_id: snapshot.frame_id(),
+        });
 
         Ok(CallbackOutcome::Continue)
     }
@@ -466,8 +513,12 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_py_return", None);
 
-        record_return_value(py, &mut self.writer, retval);
+        {
+            let mut writer = self.writer.lock().map_err(ffi::map_recorder_error)?;
+            record_return_value(py, &mut writer, retval);
+        }
         self.mark_event();
+        self.thread_snapshots.clear_current();
         if self.activation.handle_return_event(code.id()) {
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
@@ -486,12 +537,9 @@ impl Tracer for RuntimeTracer {
         // For non-streaming formats we can update the events file.
         match self.format {
             TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
-                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
-                    ffi::map_recorder_error(
-                        enverr!(ErrorCode::Io, "failed to finalise trace events")
-                            .with_context("source", err.to_string()),
-                    )
-                })?;
+                self.writer
+                    .finalize_events()
+                    .map_err(ffi::map_recorder_error)?;
             }
             TraceEventsFileFormat::Binary => {
                 // Streaming writer: no partial flush to avoid closing the stream.
@@ -501,7 +549,7 @@ impl Tracer for RuntimeTracer {
         Ok(())
     }
 
-    fn finish(&mut self, _py: Python<'_>) -> PyResult<()> {
+    fn finish(&mut self, py: Python<'_>) -> PyResult<()> {
         // Trace event entry
         log::debug!("[RuntimeTracer] finish");
 
@@ -512,6 +560,8 @@ impl Tracer for RuntimeTracer {
         set_active_trace_id(Some(self.trace_id.clone()));
         let _reset = TraceIdResetGuard::new();
         let policy = policy_snapshot();
+
+        self.io_drain.drain(py).map_err(ffi::map_recorder_error)?;
 
         if self.encountered_failure {
             if policy.keep_partial_trace {
@@ -537,6 +587,7 @@ impl Tracer for RuntimeTracer {
             }
             self.ignored_code_ids.clear();
             self.function_ids.clear();
+            self.thread_snapshots.reset();
             return Ok(());
         }
 
@@ -545,6 +596,7 @@ impl Tracer for RuntimeTracer {
         self.finalise_writer().map_err(ffi::map_recorder_error)?;
         self.ignored_code_ids.clear();
         self.function_ids.clear();
+        self.thread_snapshots.reset();
         Ok(())
     }
 }
@@ -621,10 +673,12 @@ mod tests {
                 py.run(script_c.as_c_str(), None, None)
                     .expect("execute synthetic script");
             }
+            let writer = tracer.writer.lock().expect("lock writer");
             assert!(
-                tracer.writer.events.is_empty(),
+                writer.events.is_empty(),
                 "expected no events for synthetic filename"
             );
+            drop(writer);
             assert_eq!(last_outcome(), Some(CallbackOutcome::DisableLocation));
 
             let compile_fn = py
@@ -652,6 +706,42 @@ mod tests {
             "expected snapshots for real file execution"
         );
         assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
+    }
+
+    #[test]
+    fn updates_thread_snapshot_store_for_active_thread() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let script_path = tmp.path().join("store_script.py");
+            let script = format!("{PRELUDE}\n\nsnapshot()\n");
+            std::fs::write(&script_path, &script).expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_str().expect("utf8"),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("nul byte free");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+
+            let store = tracer.snapshot_store();
+            let thread_id = std::thread::current().id();
+            let snapshot = store
+                .snapshot_for(thread_id)
+                .expect("snapshot for current thread");
+            assert_ne!(snapshot.frame_id, 0, "expected non-zero frame id");
+        });
     }
 
     #[test]
@@ -712,17 +802,19 @@ result = compute()\n"
                     .expect("execute test script");
             }
 
-            let returns: Vec<SimpleValue> = tracer
-                .writer
-                .events
-                .iter()
-                .filter_map(|event| match event {
-                    TraceLowLevelEvent::Return(record) => {
-                        Some(SimpleValue::from_value(&record.return_value))
-                    }
-                    _ => None,
-                })
-                .collect();
+            let returns: Vec<SimpleValue> = {
+                let writer = tracer.writer.lock().expect("lock writer");
+                writer
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        TraceLowLevelEvent::Return(record) => {
+                            Some(SimpleValue::from_value(&record.return_value))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
 
             assert!(
                 returns.contains(&SimpleValue::String("tail".to_string())),
@@ -915,7 +1007,8 @@ def emit_return(value):
                 py.run(run_code_c.as_c_str(), None, None)
                     .expect("execute test script");
             }
-            collect_snapshots(&tracer.writer.events)
+            let writer = tracer.writer.lock().expect("lock writer");
+            collect_snapshots(&writer.events)
         })
     }
 

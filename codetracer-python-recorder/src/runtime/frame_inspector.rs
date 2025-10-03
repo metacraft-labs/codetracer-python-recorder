@@ -40,6 +40,11 @@ impl<'py> FrameSnapshot<'py> {
     pub fn locals_is_globals(&self) -> bool {
         self.locals_is_globals
     }
+
+    /// Return a stable identifier for the captured frame.
+    pub fn frame_id(&self) -> usize {
+        self.frame_ptr as usize
+    }
 }
 
 impl<'py> Drop for FrameSnapshot<'py> {
