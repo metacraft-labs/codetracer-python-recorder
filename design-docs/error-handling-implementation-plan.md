@@ -63,6 +63,7 @@
 ### WS8 – Documentation & Rollout
 - Update README, API docs, and onboarding material to describe guarantees, exit codes, example snippets, and migration guidance for downstream tools.
 - Add a change log entry summarising the policy and how to consume structured errors from Python.
+- Document assertion guidance: prefer `bug!`/`ensure_internal!` for invariant violations, reserve `assert!` for tests, and pair `debug_assert!` with the classified error when you need both dev-time tripwires and production containment.
 - Track adoption status in `design-docs/error-handling-implementation-plan.status.md` (mirror existing planning artifacts).
 - Exit criteria: Documentation merged, status file created, ADR 0004 promoted to **Accepted** once WS2–WS7 land.
 
