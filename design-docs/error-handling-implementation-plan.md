@@ -55,6 +55,8 @@
 ### WS7 – Test Coverage & Tooling Enforcement
 - Add unit tests for the new error crate, IO façade, policy switches, and FFI wrappers (panic capture, exception mapping).
 - Extend Python tests to cover the new exception hierarchy, JSON diagnostics, and policy flags.
+- Add backend integration coverage for every `RecorderError` kind (exercise unwritable directories for `EnvironmentError`, force a mocked `capture_call_arguments` failure for `TargetError`, and trigger a panic inside a wrapped callback to assert `InternalError` mapping and log capture).
+- Add regression tests that hit the Rust tracer on real scripts (validate IO context metadata from `TraceOutputPaths::configure_writer`, ensure repeated start/stop cycles leave no partial artefacts, and confirm debug logs stay quiet when `RUST_LOG` is unset).
 - Introduce CI lints (`cargo clippy --deny clippy::panic`, custom script rejecting `unwrap` outside allowed modules) and integrate with `just lint`.
 - Exit criteria: CI blocks regressions; failure-path tests cover disk full, permission denied, target exceptions, partial trace recovery, and SIGINT during detach.
 
