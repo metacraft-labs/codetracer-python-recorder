@@ -12,12 +12,68 @@ use std::fmt;
 use std::io;
 
 /// Result alias used throughout the recorder workspace.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, ErrorKind, RecorderError, RecorderResult};
+///
+/// fn validate(flag: &str) -> RecorderResult<()> {
+///     if flag == "ok" {
+///         Ok(())
+///     } else {
+///         Err(RecorderError::new(
+///             ErrorKind::Usage,
+///             ErrorCode::UnsupportedFormat,
+///             "flag must be 'ok'",
+///         ))
+///     }
+/// }
+///
+/// assert!(validate("ok").is_ok());
+/// assert!(validate("nope").is_err());
+/// ```
 pub type RecorderResult<T> = Result<T, RecorderError>;
 
 /// Key-value metadata associated with an error.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ContextMap, RecorderError, ErrorKind, ErrorCode};
+///
+/// let mut context: ContextMap = ContextMap::new();
+/// context.insert("path", "/tmp/trace.json".into());
+///
+/// let error = RecorderError::new(
+///     ErrorKind::Environment,
+///     ErrorCode::Io,
+///     "failed to write trace",
+/// )
+/// .with_context("path", "/tmp/trace.json");
+///
+/// assert_eq!(context.get("path"), Some(&"/tmp/trace.json".to_owned()));
+/// assert_eq!(error.context.get("path"), Some(&"/tmp/trace.json".to_owned()));
+/// ```
 pub type ContextMap = BTreeMap<&'static str, String>;
 
 /// High-level grouping of recorder failures.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+///
+/// let err = RecorderError::new(ErrorKind::Target, ErrorCode::TraceIncomplete, "target failed");
+///
+/// match err.kind {
+///     ErrorKind::Target => {
+///         // Target code misbehaved; take recovery action.
+///     }
+///     // Non-exhaustive enums require a catch-all branch for forward compatibility.
+///     _ => {}
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -33,6 +89,17 @@ pub enum ErrorKind {
 }
 
 /// Stable error codes used for analytics and tooling.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::ErrorCode;
+///
+/// let code = ErrorCode::TraceMissing;
+/// assert_eq!(code.as_str(), "ERR_TRACE_MISSING");
+/// assert_eq!(ErrorCode::parse("ERR_TRACE_MISSING"), Some(ErrorCode::TraceMissing));
+/// assert_eq!(ErrorCode::parse("ERR_DOES_NOT_EXIST"), None);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -69,6 +136,14 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Stable identifier string for this error code.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::ErrorCode;
+    ///
+    /// assert_eq!(ErrorCode::Io.as_str(), "ERR_IO");
+    /// ```
     pub const fn as_str(self) -> &'static str {
         match self {
             ErrorCode::Unknown => "ERR_UNKNOWN",
@@ -89,6 +164,16 @@ impl ErrorCode {
     }
 
     /// Parse a string representation (e.g. `ERR_TRACE_MISSING`) back into an `ErrorCode`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::ErrorCode;
+    ///
+    /// let parsed = ErrorCode::parse("ERR_TRACE_INCOMPLETE");
+    /// assert_eq!(parsed, Some(ErrorCode::TraceIncomplete));
+    /// assert!(ErrorCode::parse("ERR_UNKNOWN_CODE").is_none());
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "ERR_UNKNOWN" => Some(ErrorCode::Unknown),
@@ -117,6 +202,23 @@ impl fmt::Display for ErrorCode {
 }
 
 /// Canonical error type flowing through the recorder workspace.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+///
+/// let err = RecorderError::new(
+///     ErrorKind::Environment,
+///     ErrorCode::Io,
+///     "failed to create trace directory",
+/// )
+/// .with_context("path", "/tmp/trace")
+/// .with_message("unable to prepare trace output");
+///
+/// assert_eq!(err.message(), "unable to prepare trace output");
+/// assert_eq!(err.context.get("path"), Some(&"/tmp/trace".to_owned()));
+/// ```
 #[derive(Debug)]
 pub struct RecorderError {
     pub kind: ErrorKind,
@@ -128,6 +230,19 @@ pub struct RecorderError {
 
 impl RecorderError {
     /// Create a new error with the provided classification and message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let err = RecorderError::new(
+    ///     ErrorKind::Usage,
+    ///     ErrorCode::UnsupportedFormat,
+    ///     "format must be json",
+    /// );
+    /// assert_eq!(err.code, ErrorCode::UnsupportedFormat);
+    /// ```
     pub fn new(kind: ErrorKind, code: ErrorCode, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             kind,
@@ -139,12 +254,34 @@ impl RecorderError {
     }
 
     /// Attach a context key/value pair to the error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let err = RecorderError::new(ErrorKind::Target, ErrorCode::TraceIncomplete, "failed")
+    ///     .with_context("function", "process_event");
+    /// assert_eq!(err.context.get("function"), Some(&"process_event".to_owned()));
+    /// ```
     pub fn with_context(mut self, key: &'static str, value: impl Into<String>) -> Self {
         self.context.insert(key, value.into());
         self
     }
 
     /// Attach an underlying error source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io;
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let io_err = io::Error::new(io::ErrorKind::Other, "disk full");
+    /// let err = RecorderError::new(ErrorKind::Environment, ErrorCode::Io, "write failed")
+    ///     .with_source(io_err);
+    /// assert!(err.source_ref().is_some());
+    /// ```
     pub fn with_source<E>(mut self, source: E) -> Self
     where
         E: StdError + Send + Sync + 'static,
@@ -154,17 +291,48 @@ impl RecorderError {
     }
 
     /// Update the error message while retaining classification and metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let err = RecorderError::new(ErrorKind::Usage, ErrorCode::TraceMissing, "not found")
+    ///     .with_message("trace is required");
+    /// assert_eq!(err.message(), "trace is required");
+    /// ```
     pub fn with_message(mut self, message: impl Into<Cow<'static, str>>) -> Self {
         self.message = message.into();
         self
     }
 
     /// Borrow the primary human-readable message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let err = RecorderError::new(ErrorKind::Usage, ErrorCode::MissingKeywordArgument, "missing");
+    /// assert_eq!(err.message(), "missing");
+    /// ```
     pub fn message(&self) -> &str {
         self.message.as_ref()
     }
 
     /// Borrow the optional underlying source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io;
+    /// use recorder_errors::{ErrorCode, ErrorKind, RecorderError};
+    ///
+    /// let io_err = io::Error::new(io::ErrorKind::Other, "network down");
+    /// let err = RecorderError::new(ErrorKind::Environment, ErrorCode::Io, "request failed")
+    ///     .with_source(io_err);
+    /// assert!(err.source_ref().is_some());
+    /// ```
     pub fn source_ref(&self) -> Option<&(dyn StdError + Send + Sync + 'static)> {
         self.source.as_deref()
     }
@@ -185,12 +353,35 @@ impl StdError for RecorderError {
 }
 
 impl From<io::Error> for RecorderError {
+    /// Convert an `io::Error` into a recorder error with `ErrorKind::Environment`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io;
+    /// use recorder_errors::{ErrorCode, RecorderError};
+    ///
+    /// let io_err = io::Error::new(io::ErrorKind::Other, "disk full");
+    /// let err: RecorderError = io_err.into();
+    /// assert_eq!(err.code, ErrorCode::Io);
+    /// ```
     fn from(err: io::Error) -> Self {
         RecorderError::new(ErrorKind::Environment, ErrorCode::Io, err.to_string()).with_source(err)
     }
 }
 
 /// Declare a recorder error using formatting syntax.
+///
+/// # Examples
+///
+/// ```
+/// let err = recorder_errors::recorder_error!(
+///     recorder_errors::ErrorKind::Usage,
+///     recorder_errors::ErrorCode::UnsupportedFormat,
+///     "format not supported",
+/// );
+/// assert_eq!(err.code, recorder_errors::ErrorCode::UnsupportedFormat);
+/// ```
 #[macro_export]
 macro_rules! recorder_error {
     ($kind:expr, $code:expr, $msg:literal $(,)?) => {
@@ -202,6 +393,16 @@ macro_rules! recorder_error {
 }
 
 /// Convenience macro for usage errors.
+///
+/// # Examples
+///
+/// ```
+/// let err = recorder_errors::usage!(
+///     recorder_errors::ErrorCode::MissingPositionalArgument,
+///     "argument missing",
+/// );
+/// assert_eq!(err.kind, recorder_errors::ErrorKind::Usage);
+/// ```
 #[macro_export]
 macro_rules! usage {
     ($code:expr, $msg:literal $(,)?) => {
@@ -213,6 +414,16 @@ macro_rules! usage {
 }
 
 /// Convenience macro for environment/IO errors.
+///
+/// # Examples
+///
+/// ```
+/// let err = recorder_errors::enverr!(
+///     recorder_errors::ErrorCode::Io,
+///     "failed to write",
+/// );
+/// assert_eq!(err.kind, recorder_errors::ErrorKind::Environment);
+/// ```
 #[macro_export]
 macro_rules! enverr {
     ($code:expr, $msg:literal $(,)?) => {
@@ -224,6 +435,16 @@ macro_rules! enverr {
 }
 
 /// Convenience macro for target errors.
+///
+/// # Examples
+///
+/// ```
+/// let err = recorder_errors::target!(
+///     recorder_errors::ErrorCode::TraceIncomplete,
+///     "target raised",
+/// );
+/// assert_eq!(err.kind, recorder_errors::ErrorKind::Target);
+/// ```
 #[macro_export]
 macro_rules! target {
     ($code:expr, $msg:literal $(,)?) => {
@@ -235,6 +456,16 @@ macro_rules! target {
 }
 
 /// Convenience macro for internal bugs/invariants.
+///
+/// # Examples
+///
+/// ```
+/// let err = recorder_errors::bug!(
+///     recorder_errors::ErrorCode::TraceIncomplete,
+///     "unexpected state",
+/// );
+/// assert_eq!(err.kind, recorder_errors::ErrorKind::Internal);
+/// ```
 #[macro_export]
 macro_rules! bug {
     ($code:expr, $msg:literal $(,)?) => {
@@ -246,6 +477,20 @@ macro_rules! bug {
 }
 
 /// Ensure a predicate holds, returning a usage error when it does not.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, RecorderResult};
+///
+/// fn guard(active: bool) -> RecorderResult<()> {
+///     recorder_errors::ensure_usage!(active, ErrorCode::AlreadyTracing, "already tracing");
+///     Ok(())
+/// }
+///
+/// assert!(guard(true).is_ok());
+/// assert_eq!(guard(false).unwrap_err().code, ErrorCode::AlreadyTracing);
+/// ```
 #[macro_export]
 macro_rules! ensure_usage {
     ($cond:expr, $code:expr, $msg:literal $(,)?) => {
@@ -261,6 +506,20 @@ macro_rules! ensure_usage {
 }
 
 /// Ensure a predicate holds, returning an environment error when it does not.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, RecorderResult};
+///
+/// fn guard(io_ready: bool) -> RecorderResult<()> {
+///     recorder_errors::ensure_env!(io_ready, ErrorCode::Io, "io failure");
+///     Ok(())
+/// }
+///
+/// assert!(guard(true).is_ok());
+/// assert_eq!(guard(false).unwrap_err().code, ErrorCode::Io);
+/// ```
 #[macro_export]
 macro_rules! ensure_env {
     ($cond:expr, $code:expr, $msg:literal $(,)?) => {
@@ -276,6 +535,20 @@ macro_rules! ensure_env {
 }
 
 /// Ensure a predicate holds, returning an internal bug otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use recorder_errors::{ErrorCode, RecorderResult};
+///
+/// fn guard(invariant_ok: bool) -> RecorderResult<()> {
+///     recorder_errors::ensure_internal!(invariant_ok, ErrorCode::TraceIncomplete, "corrupted state");
+///     Ok(())
+/// }
+///
+/// assert!(guard(true).is_ok());
+/// assert_eq!(guard(false).unwrap_err().kind, recorder_errors::ErrorKind::Internal);
+/// ```
 #[macro_export]
 macro_rules! ensure_internal {
     ($cond:expr, $code:expr, $msg:literal $(,)?) => {
