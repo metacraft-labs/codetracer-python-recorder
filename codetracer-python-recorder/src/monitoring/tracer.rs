@@ -5,11 +5,13 @@ use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use crate::ffi;
+use crate::policy::{self, OnRecorderError};
 use pyo3::{
     prelude::*,
     types::{PyAny, PyCode, PyModule},
 };
 use recorder_errors::{usage, ErrorCode};
+use log::{error, warn};
 
 use super::{
     acquire_tool_id, free_tool_id, monitoring_events, register_callback, set_events,
@@ -107,6 +109,12 @@ pub trait Tracer: Send + Any {
         _offset: i32,
     ) -> CallbackResult {
         Ok(CallbackOutcome::Continue)
+    }
+
+    /// Notify the tracer that an unrecoverable error occurred and the runtime
+    /// is transitioning into a detach/disable flow.
+    fn notify_failure(&mut self, _py: Python<'_>) -> PyResult<()> {
+        Ok(())
     }
 
     /// Called on resumption of a generator/coroutine (not via throw()).
@@ -255,13 +263,111 @@ struct Global {
 
 static GLOBAL: Mutex<Option<Global>> = Mutex::new(None);
 
-impl Global {
-    fn handle_callback(&self, py: Python<'_>, result: CallbackResult) -> PyResult<Py<PyAny>> {
-        match result? {
-            CallbackOutcome::Continue => Ok(py.None()),
-            CallbackOutcome::DisableLocation => Ok(self.disable_sentinel.clone_ref(py)),
+fn handle_callback_result(
+    py: Python<'_>,
+    guard: &mut Option<Global>,
+    result: CallbackResult,
+) -> PyResult<Py<PyAny>> {
+    match result {
+        Ok(CallbackOutcome::Continue) => Ok(py.None()),
+        Ok(CallbackOutcome::DisableLocation) => Ok(
+            guard
+                .as_ref()
+                .map(|global| global.disable_sentinel.clone_ref(py))
+                .unwrap_or_else(|| py.None()),
+        ),
+        Err(err) => handle_callback_error(py, guard, err),
+    }
+}
+
+fn handle_callback_error(
+    py: Python<'_>,
+    guard: &mut Option<Global>,
+    err: PyErr,
+) -> PyResult<Py<PyAny>> {
+    let policy = policy::policy_snapshot();
+    match policy.on_recorder_error {
+        OnRecorderError::Abort => Err(err),
+        OnRecorderError::Disable => {
+            let message = err.to_string();
+            error!(
+                "recorder callback error; disabling tracer per policy: {}",
+                message
+            );
+            if let Some(global) = guard.as_mut() {
+                if let Err(notify_err) = global.tracer.notify_failure(py) {
+                    warn!(
+                        "failed to notify tracer about disable transition: {}",
+                        notify_err
+                    );
+                }
+            }
+            uninstall_locked(py, guard)?;
+            Ok(py.None())
         }
     }
+}
+
+fn uninstall_locked(py: Python<'_>, guard: &mut Option<Global>) -> PyResult<()> {
+    if let Some(mut global) = guard.take() {
+        let _ = global.tracer.finish(py);
+        let events = monitoring_events(py)?;
+        if global.mask.contains(&events.CALL) {
+            register_callback(py, &global.tool, &events.CALL, None)?;
+        }
+        if global.mask.contains(&events.LINE) {
+            register_callback(py, &global.tool, &events.LINE, None)?;
+        }
+        if global.mask.contains(&events.INSTRUCTION) {
+            register_callback(py, &global.tool, &events.INSTRUCTION, None)?;
+        }
+        if global.mask.contains(&events.JUMP) {
+            register_callback(py, &global.tool, &events.JUMP, None)?;
+        }
+        if global.mask.contains(&events.BRANCH) {
+            register_callback(py, &global.tool, &events.BRANCH, None)?;
+        }
+        if global.mask.contains(&events.PY_START) {
+            register_callback(py, &global.tool, &events.PY_START, None)?;
+        }
+        if global.mask.contains(&events.PY_RESUME) {
+            register_callback(py, &global.tool, &events.PY_RESUME, None)?;
+        }
+        if global.mask.contains(&events.PY_RETURN) {
+            register_callback(py, &global.tool, &events.PY_RETURN, None)?;
+        }
+        if global.mask.contains(&events.PY_YIELD) {
+            register_callback(py, &global.tool, &events.PY_YIELD, None)?;
+        }
+        if global.mask.contains(&events.PY_THROW) {
+            register_callback(py, &global.tool, &events.PY_THROW, None)?;
+        }
+        if global.mask.contains(&events.PY_UNWIND) {
+            register_callback(py, &global.tool, &events.PY_UNWIND, None)?;
+        }
+        if global.mask.contains(&events.RAISE) {
+            register_callback(py, &global.tool, &events.RAISE, None)?;
+        }
+        if global.mask.contains(&events.RERAISE) {
+            register_callback(py, &global.tool, &events.RERAISE, None)?;
+        }
+        if global.mask.contains(&events.EXCEPTION_HANDLED) {
+            register_callback(py, &global.tool, &events.EXCEPTION_HANDLED, None)?;
+        }
+        // if global.mask.contains(&events.STOP_ITERATION) {
+        //     register_callback(py, &global.tool, &events.STOP_ITERATION, None)?;
+        // }
+        if global.mask.contains(&events.C_RETURN) {
+            register_callback(py, &global.tool, &events.C_RETURN, None)?;
+        }
+        if global.mask.contains(&events.C_RAISE) {
+            register_callback(py, &global.tool, &events.C_RAISE, None)?;
+        }
+
+        set_events(py, &global.tool, NO_EVENTS)?;
+        free_tool_id(py, &global.tool)?;
+    }
+    Ok(())
 }
 
 /// Install a tracer and hook it into Python's `sys.monitoring`.
@@ -368,67 +474,7 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
 /// Remove the installed tracer if any.
 pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
-    if let Some(mut global) = guard.take() {
-        // Give the tracer a chance to finish underlying writers before
-        // unregistering callbacks.
-        let _ = global.tracer.finish(py);
-        let events = monitoring_events(py)?;
-        if global.mask.contains(&events.CALL) {
-            register_callback(py, &global.tool, &events.CALL, None)?;
-        }
-        if global.mask.contains(&events.LINE) {
-            register_callback(py, &global.tool, &events.LINE, None)?;
-        }
-        if global.mask.contains(&events.INSTRUCTION) {
-            register_callback(py, &global.tool, &events.INSTRUCTION, None)?;
-        }
-        if global.mask.contains(&events.JUMP) {
-            register_callback(py, &global.tool, &events.JUMP, None)?;
-        }
-        if global.mask.contains(&events.BRANCH) {
-            register_callback(py, &global.tool, &events.BRANCH, None)?;
-        }
-        if global.mask.contains(&events.PY_START) {
-            register_callback(py, &global.tool, &events.PY_START, None)?;
-        }
-        if global.mask.contains(&events.PY_RESUME) {
-            register_callback(py, &global.tool, &events.PY_RESUME, None)?;
-        }
-        if global.mask.contains(&events.PY_RETURN) {
-            register_callback(py, &global.tool, &events.PY_RETURN, None)?;
-        }
-        if global.mask.contains(&events.PY_YIELD) {
-            register_callback(py, &global.tool, &events.PY_YIELD, None)?;
-        }
-        if global.mask.contains(&events.PY_THROW) {
-            register_callback(py, &global.tool, &events.PY_THROW, None)?;
-        }
-        if global.mask.contains(&events.PY_UNWIND) {
-            register_callback(py, &global.tool, &events.PY_UNWIND, None)?;
-        }
-        if global.mask.contains(&events.RAISE) {
-            register_callback(py, &global.tool, &events.RAISE, None)?;
-        }
-        if global.mask.contains(&events.RERAISE) {
-            register_callback(py, &global.tool, &events.RERAISE, None)?;
-        }
-        if global.mask.contains(&events.EXCEPTION_HANDLED) {
-            register_callback(py, &global.tool, &events.EXCEPTION_HANDLED, None)?;
-        }
-        // if global.mask.contains(&events.STOP_ITERATION) {
-        //     register_callback(py, &global.tool, &events.STOP_ITERATION, None)?;
-        // }
-        if global.mask.contains(&events.C_RETURN) {
-            register_callback(py, &global.tool, &events.C_RETURN, None)?;
-        }
-        if global.mask.contains(&events.C_RAISE) {
-            register_callback(py, &global.tool, &events.C_RAISE, None)?;
-        }
-
-        set_events(py, &global.tool, NO_EVENTS)?;
-        free_tool_id(py, &global.tool)?;
-    }
-    Ok(())
+    uninstall_locked(py, &mut guard)
 }
 
 /// Flush the currently installed tracer if any.
@@ -448,26 +494,34 @@ fn callback_call(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_call", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_call(py, &wrapper, offset, &callable, arg0.as_ref());
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_call(py, &wrapper, offset, &callable, arg0.as_ref())
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
 #[pyfunction]
 fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_line", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global.tracer.on_line(py, &wrapper, lineno);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global.tracer.on_line(py, &wrapper, lineno)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -478,14 +532,18 @@ fn callback_instruction(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_instruction", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_instruction(py, &wrapper, instruction_offset);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_instruction(py, &wrapper, instruction_offset)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -497,15 +555,18 @@ fn callback_jump(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_jump", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result =
-                global
-                    .tracer
-                    .on_jump(py, &wrapper, instruction_offset, destination_offset);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_jump(py, &wrapper, instruction_offset, destination_offset)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -517,15 +578,18 @@ fn callback_branch(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_branch", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result =
-                global
-                    .tracer
-                    .on_branch(py, &wrapper, instruction_offset, destination_offset);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_branch(py, &wrapper, instruction_offset, destination_offset)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -536,12 +600,16 @@ fn callback_py_start(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_start", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global.tracer.on_py_start(py, &wrapper, instruction_offset);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global.tracer.on_py_start(py, &wrapper, instruction_offset)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -552,12 +620,16 @@ fn callback_py_resume(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_resume", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global.tracer.on_py_resume(py, &wrapper, instruction_offset);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global.tracer.on_py_resume(py, &wrapper, instruction_offset)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -569,14 +641,18 @@ fn callback_py_return(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_return", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_py_return(py, &wrapper, instruction_offset, &retval);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_py_return(py, &wrapper, instruction_offset, &retval)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -588,14 +664,18 @@ fn callback_py_yield(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_yield", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_py_yield(py, &wrapper, instruction_offset, &retval);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_py_yield(py, &wrapper, instruction_offset, &retval)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -607,14 +687,18 @@ fn callback_py_throw(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_throw", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_py_throw(py, &wrapper, instruction_offset, &exception);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_py_throw(py, &wrapper, instruction_offset, &exception)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -626,14 +710,18 @@ fn callback_py_unwind(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_unwind", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_py_unwind(py, &wrapper, instruction_offset, &exception);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_py_unwind(py, &wrapper, instruction_offset, &exception)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -645,14 +733,18 @@ fn callback_raise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_raise", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_raise(py, &wrapper, instruction_offset, &exception);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_raise(py, &wrapper, instruction_offset, &exception)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -664,14 +756,18 @@ fn callback_reraise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_reraise", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_reraise(py, &wrapper, instruction_offset, &exception);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_reraise(py, &wrapper, instruction_offset, &exception)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -683,15 +779,18 @@ fn callback_exception_handled(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_exception_handled", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result =
-                global
-                    .tracer
-                    .on_exception_handled(py, &wrapper, instruction_offset, &exception);
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_exception_handled(py, &wrapper, instruction_offset, &exception)
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -720,14 +819,18 @@ fn callback_c_return(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_return", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref());
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_c_return(py, &wrapper, offset, &callable, arg0.as_ref())
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
 
@@ -740,13 +843,17 @@ fn callback_c_raise(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_raise", || {
-        if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
-            let wrapper = global.registry.get_or_insert(py, &code);
-            let result = global
-                .tracer
-                .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref());
-            return global.handle_callback(py, result);
+        let mut guard = GLOBAL.lock().unwrap();
+        if guard.is_none() {
+            return Ok(py.None());
         }
-        Ok(py.None())
+        let result = {
+            let global = guard.as_mut().expect("tracer installed");
+            let wrapper = global.registry.get_or_insert(py, &code);
+            global
+                .tracer
+                .on_c_raise(py, &wrapper, offset, &callable, arg0.as_ref())
+        };
+        handle_callback_result(py, &mut guard, result)
     })
 }
