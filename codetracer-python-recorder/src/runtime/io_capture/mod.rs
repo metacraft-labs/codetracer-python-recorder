@@ -1,16 +1,19 @@
-#![allow(dead_code)]
-
 //! Cross-platform IO capture workers for stdout, stderr, and stdin.
 
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use base64::Engine;
 use crossbeam_channel::{bounded, Receiver, Sender};
-
 use recorder_errors::{bug, enverr, ErrorCode, RecorderResult};
+use runtime_tracing::{EventLogKind, RecordEvent, TraceLowLevelEvent, TraceWriter};
+use serde::Serialize;
 
 use crate::errors::Result;
 
+use super::thread_snapshots::{SnapshotEntry, ThreadSnapshotStore};
+use super::trace_writer_host::TraceWriterHost;
 use super::IoDrain;
 
 #[cfg(unix)]
@@ -44,7 +47,6 @@ impl StreamKind {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct IoChunk {
     pub stream: StreamKind,
@@ -105,18 +107,183 @@ impl IoCapture {
     }
 }
 
-impl IoDrain for IoCapture {
-    fn drain(&mut self, _py: pyo3::Python<'_>) -> RecorderResult<()> {
-        self.shutdown()
-    }
-}
-
 impl Drop for IoCapture {
     fn drop(&mut self) {
         if self.platform.is_some() {
             if let Err(err) = self.shutdown() {
                 log::error!("failed to shutdown IO capture cleanly: {}", err);
             }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct IoEventSink {
+    writer: TraceWriterHost,
+    snapshots: ThreadSnapshotStore,
+    start: Instant,
+}
+
+impl IoEventSink {
+    fn new(writer: TraceWriterHost, snapshots: ThreadSnapshotStore) -> Self {
+        Self {
+            writer,
+            snapshots,
+            start: Instant::now(),
+        }
+    }
+
+    fn pump(self, receiver: IoChunkReceiver) -> Result<()> {
+        let mut sink = self;
+        while let Ok(chunk) = receiver.recv() {
+            sink.record_chunk(chunk)?;
+        }
+        Ok(())
+    }
+
+    fn record_chunk(&mut self, chunk: IoChunk) -> Result<()> {
+        let event = TraceLowLevelEvent::Event(RecordEvent {
+            kind: map_stream_to_event_kind(chunk.stream),
+            metadata: self.serialize_metadata(&chunk)?,
+            content: BASE64_ENGINE.encode(&chunk.bytes),
+        });
+
+        let mut writer = self.writer.lock()?;
+        writer.add_event(event);
+        Ok(())
+    }
+
+    fn serialize_metadata(&self, chunk: &IoChunk) -> Result<String> {
+        let metadata = IoChunkMetadata {
+            stream: chunk.stream.as_str(),
+            timestamp_ns: self.relative_timestamp_ns(chunk.timestamp),
+            thread_id: format!("{:?}", chunk.producer_thread),
+            byte_len: chunk.bytes.len(),
+            snapshot: self.snapshot_metadata(chunk.producer_thread),
+        };
+
+        serde_json::to_string(&metadata).map_err(|err| {
+            bug!(
+                ErrorCode::Unknown,
+                "failed to encode IO chunk metadata as JSON"
+            )
+            .with_context("error", err.to_string())
+        })
+    }
+
+    fn relative_timestamp_ns(&self, timestamp: Instant) -> u128 {
+        match timestamp.checked_duration_since(self.start) {
+            Some(duration) => duration.as_nanos(),
+            None => 0,
+        }
+    }
+
+    fn snapshot_metadata(&self, thread_id: std::thread::ThreadId) -> Option<IoSnapshotMetadata> {
+        let snapshot = self
+            .snapshots
+            .snapshot_for(thread_id)
+            .or_else(|| self.snapshots.latest());
+        snapshot.map(IoSnapshotMetadata::from)
+    }
+}
+
+#[derive(Serialize)]
+struct IoChunkMetadata<'a> {
+    stream: &'a str,
+    timestamp_ns: u128,
+    thread_id: String,
+    byte_len: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<IoSnapshotMetadata>,
+}
+
+#[derive(Serialize)]
+struct IoSnapshotMetadata {
+    path_id: usize,
+    line: i64,
+    frame_id: usize,
+}
+
+impl From<SnapshotEntry> for IoSnapshotMetadata {
+    fn from(entry: SnapshotEntry) -> Self {
+        IoSnapshotMetadata {
+            path_id: entry.path_id.0,
+            line: entry.line.0,
+            frame_id: entry.frame_id,
+        }
+    }
+}
+
+fn map_stream_to_event_kind(stream: StreamKind) -> EventLogKind {
+    match stream {
+        StreamKind::Stdout => EventLogKind::Write,
+        StreamKind::Stderr => EventLogKind::WriteOther,
+        StreamKind::Stdin => EventLogKind::Read,
+    }
+}
+
+pub struct ActiveCapture {
+    capture: IoCapture,
+    sink: Option<WorkerHandle>,
+}
+
+impl ActiveCapture {
+    pub fn start(writer: TraceWriterHost, snapshots: ThreadSnapshotStore) -> Result<Self> {
+        let mut capture = IoCapture::start()?;
+        let receiver = capture.take_receiver().ok_or_else(|| {
+            bug!(
+                ErrorCode::Unknown,
+                "IO capture receiver already taken before sink start"
+            )
+        })?;
+
+        let sink_worker = spawn_reader_thread("sink", move || {
+            IoEventSink::new(writer, snapshots).pump(receiver)
+        })?;
+
+        Ok(Self {
+            capture,
+            sink: Some(sink_worker),
+        })
+    }
+
+    fn join_sink(&mut self) -> Result<()> {
+        if let Some(handle) = self.sink.take() {
+            match handle.join() {
+                Ok(result) => result,
+                Err(panic) => {
+                    let message = if let Some(msg) = panic.downcast_ref::<&'static str>() {
+                        (*msg).to_string()
+                    } else if let Some(msg) = panic.downcast_ref::<String>() {
+                        msg.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    Err(bug!(ErrorCode::Unknown, "IO capture sink worker panicked")
+                        .with_context("details", message))
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl IoDrain for ActiveCapture {
+    fn drain(&mut self, _py: pyo3::Python<'_>) -> RecorderResult<()> {
+        let shutdown_result = self.capture.shutdown();
+        let sink_result = self.join_sink();
+        shutdown_result.and(sink_result)
+    }
+}
+
+impl Drop for ActiveCapture {
+    fn drop(&mut self) {
+        if let Err(err) = self.capture.shutdown() {
+            log::error!("failed to shutdown IO capture cleanly: {}", err);
+        }
+        if let Err(err) = self.join_sink() {
+            log::error!("failed to join IO sink worker: {}", err);
         }
     }
 }

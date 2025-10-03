@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};

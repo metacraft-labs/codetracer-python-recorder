@@ -23,6 +23,7 @@ default = ["extension-module"]
 [dependencies]
 pyo3 = { version = "0.25.1" }
 runtime_tracing = "0.14.0"
+base64 = "0.22"
 bitflags = "2.4"
 once_cell = "1.19"
 dashmap = "5.5"

@@ -14,6 +14,7 @@ pub use output_paths::TraceOutputPaths;
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
+use io_capture::ActiveCapture;
 use logging::log_event;
 use thread_snapshots::{SnapshotEntry, ThreadSnapshotStore};
 use trace_writer_host::{register_step_with_guard, TraceWriterHost};
@@ -263,7 +264,7 @@ impl RuntimeTracer {
         self.encountered_failure = false;
         set_active_trace_id(Some(self.trace_id.clone()));
         self.thread_snapshots.reset();
-        self.io_drain = Box::new(NoopIoDrain::default());
+        self.configure_io_capture()?;
         Ok(())
     }
 
@@ -295,6 +296,13 @@ impl RuntimeTracer {
     #[allow(dead_code)]
     pub fn snapshot_store(&self) -> ThreadSnapshotStore {
         self.thread_snapshots.clone()
+    }
+
+    fn configure_io_capture(&mut self) -> PyResult<()> {
+        let capture = ActiveCapture::start(self.writer.clone(), self.thread_snapshots.clone())
+            .map_err(ffi::map_recorder_error)?;
+        self.io_drain = Box::new(capture);
+        Ok(())
     }
 
     fn cleanup_partial_outputs(&self) -> RecorderResult<()> {

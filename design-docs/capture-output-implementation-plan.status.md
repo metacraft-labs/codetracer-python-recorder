@@ -9,8 +9,8 @@
 - **Highlights:** Introduced the `runtime::io_capture` module with Unix and Windows backends, wiring descriptor duplication, pipe installation, and crossbeam-channel queues into the new `IoCapture` worker harness. Added shutdown-safe mirroring of stdout/stderr plus stdin pumping, and covered the code with focused unit tests (`captures_stdout_and_preserves_passthrough`, `captures_stdin_and_forwards_bytes`, and a Windows tempfile-based regression). `just test` passes.
 
 ## Stage 2 – Connect capture to the tracer
-- **Status:** Not started
-- **Notes:** Depends on Stage 1 artifacts. Awaiting design sign-off for event metadata schema.
+- **Status:** Completed (2025-10-03)
+- **Highlights:** Landed the `IoEventSink` + `ActiveCapture` bridge so IO chunks become runtime tracing events with base64 content and JSON metadata (including snapshot fallback), wired the sink into `RuntimeTracer` lifecycle, logged failures through `recorder-errors`, and added the end-to-end Python trace assertion. `just test` passes.
 
 ## Stage 3 – Policy flag, CLI wiring, and guards
 - **Status:** Not started

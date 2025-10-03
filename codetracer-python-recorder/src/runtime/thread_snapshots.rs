@@ -8,7 +8,6 @@ use log::warn;
 use runtime_tracing::{Line, PathId};
 
 /// Snapshot of the last recorded step for a thread.
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SnapshotEntry {
     pub path_id: PathId,
@@ -46,14 +45,12 @@ impl ThreadSnapshotStore {
     }
 
     /// Return the latest snapshot for a given thread id.
-    #[allow(dead_code)]
     pub fn snapshot_for(&self, thread_id: ThreadId) -> Option<SnapshotEntry> {
         let store = lock(&self.inner);
         store.get(&thread_id).cloned()
     }
 
     /// Return the most recent snapshot observed across all threads.
-    #[allow(dead_code)]
     pub fn latest(&self) -> Option<SnapshotEntry> {
         let global = lock(&self.last_global);
         global.clone()

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::io::ErrorKind;
 
 use crossbeam_channel::Sender;

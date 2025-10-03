@@ -22,11 +22,14 @@
 - Tests: add Rust unit tests that fake pipes (use `os_pipe` on Unix, `tempfile` handles on Windows via CI) to confirm duplication and restoration.
 
 ## Stage 2 – Connect capture to the tracer
-- Add an `IoEventSink` struct that owns `Arc<Mutex<TraceWriterHost>>` plus a snapshot reader.
-- Reader threads push `IoChunk` structs (`stream`, `timestamp`, `bytes`, `producer_thread`) into the sink. The sink converts them into runtime tracing events and records them.
-- Use `recorder-errors` for all failures (`usage!` for bad config, `enverr!` for IO problems). Log through the existing logging module; never `println!`.
-- Update `RuntimeTracer::begin` to start the sink when policy allows. Store the `IoCapture` handle and drain it in `finish`.
-- Tests: add integration tests in `tests/` that run a sample script writing to stdout/stderr and reading from stdin, then assert trace files contain the matching events. Verify passthrough stays intact.
+- Add an `IoEventSink` that wraps the `TraceWriterHost` and `ThreadSnapshotStore`, captures a start `Instant`, and exposes a `pump` loop to drain `IoChunk` messages from the channel.
+- When serialising a chunk, emit `TraceLowLevelEvent::Event` records with:
+  - `EventLogKind::{Write, WriteOther, Read}` selected from the stream;
+  - Base64-encoded payload bytes stored in `content`;
+  - JSON metadata containing the stream label, elapsed time in nanoseconds relative to the sink start, the producing thread identifier string, the raw byte length, and an optional snapshot `{path_id, line, frame_id}` (fall back to the latest snapshot if the specific thread is missing).
+- Extend the platform `IoCapture` to hand ownership to an `ActiveCapture` helper that spawns the sink worker thread, records panics or shutdown issues with `bug!`, reports IO/thread spawn failures via `enverr!`, and logs warnings if the receiver disappears before shutdown.
+- Update `RuntimeTracer::begin` (via `configure_io_capture`) to instantiate `ActiveCapture` when capture is enabled, storing it as the runtime’s `IoDrain` so `finish` always drains and joins both the platform workers and the sink.
+- Tests: add a Python integration test under `tests/python` that drives stdout, stderr, and stdin through the recorder, asserts the console passthrough matches, and inspects the emitted JSON trace to validate event kinds, metadata fields, and base64 payload reconstruction. Keep the Rust unit tests covering channel plumbing and metadata edge cases.
 
 ## Stage 3 – Policy flag, CLI wiring, and guards
 - Extend `RecorderPolicy` with `io_capture_enabled` plus env var `CODETRACER_CAPTURE_IO`.
