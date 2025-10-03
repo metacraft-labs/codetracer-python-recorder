@@ -119,3 +119,121 @@ pub fn collect_program_metadata(py: Python<'_>) -> PyResult<ProgramMetadata> {
 
     Ok(ProgramMetadata { program, args })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyList;
+    use tempfile::tempdir;
+
+    #[test]
+    fn ensure_trace_directory_creates_missing_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let target = tmp.path().join("trace-out");
+        ensure_trace_directory(&target).expect("create directory");
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn ensure_trace_directory_rejects_file_path() {
+        let tmp = tempdir().expect("tempdir");
+        let file_path = tmp.path().join("trace.bin");
+        std::fs::write(&file_path, b"stub").expect("write stub file");
+        assert!(ensure_trace_directory(&file_path).is_err());
+    }
+
+    #[test]
+    fn resolve_trace_format_accepts_supported_aliases() {
+        assert!(matches!(
+            resolve_trace_format("json").expect("json format"),
+            TraceEventsFileFormat::Json
+        ));
+        assert!(matches!(
+            resolve_trace_format("BiNaRy").expect("binary alias"),
+            TraceEventsFileFormat::BinaryV0
+        ));
+    }
+
+    #[test]
+    fn resolve_trace_format_rejects_unknown_values() {
+        Python::with_gil(|py| {
+            let err = resolve_trace_format("yaml").expect_err("should reject yaml");
+            assert_eq!(err.get_type(py).name().expect("type name"), "RuntimeError");
+            let message = err.value(py).to_string();
+            assert!(message.contains("unsupported trace format"));
+        });
+    }
+
+    #[test]
+    fn collect_program_metadata_reads_sys_argv() {
+        Python::with_gil(|py| {
+            let sys = py.import("sys").expect("import sys");
+            let original = sys.getattr("argv").expect("argv").unbind();
+            let argv = PyList::new(py, ["/tmp/prog.py", "--flag", "value"]).expect("argv");
+            sys.setattr("argv", argv).expect("set argv");
+
+            let result = collect_program_metadata(py);
+            sys.setattr("argv", original.bind(py))
+                .expect("restore argv");
+
+            let metadata = result.expect("metadata");
+            assert_eq!(metadata.program, "/tmp/prog.py");
+            assert_eq!(
+                metadata.args,
+                vec!["--flag".to_string(), "value".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn collect_program_metadata_defaults_unknown_program() {
+        Python::with_gil(|py| {
+            let sys = py.import("sys").expect("import sys");
+            let original = sys.getattr("argv").expect("argv").unbind();
+            let empty = PyList::empty(py);
+            sys.setattr("argv", empty).expect("set empty argv");
+
+            let result = collect_program_metadata(py);
+            sys.setattr("argv", original.bind(py))
+                .expect("restore argv");
+
+            let metadata = result.expect("metadata");
+            assert_eq!(metadata.program, "<unknown>");
+            assert!(metadata.args.is_empty());
+        });
+    }
+
+    #[test]
+    fn prepare_bootstrap_populates_fields_and_creates_directory() {
+        Python::with_gil(|py| {
+            let tmp = tempdir().expect("tempdir");
+            let trace_dir = tmp.path().join("out");
+            let activation = tmp.path().join("entry.py");
+            std::fs::write(&activation, "print('hi')\n").expect("write activation file");
+
+            let sys = py.import("sys").expect("import sys");
+            let original = sys.getattr("argv").expect("argv").unbind();
+            let program_str = activation.to_str().expect("utf8 path");
+            let argv = PyList::new(py, [program_str, "--verbose"]).expect("argv");
+            sys.setattr("argv", argv).expect("set argv");
+
+            let result = TraceSessionBootstrap::prepare(
+                py,
+                trace_dir.as_path(),
+                "json",
+                Some(activation.as_path()),
+            );
+            sys.setattr("argv", original.bind(py))
+                .expect("restore argv");
+
+            let bootstrap = result.expect("bootstrap");
+            assert!(trace_dir.is_dir());
+            assert_eq!(bootstrap.trace_directory(), trace_dir.as_path());
+            assert!(matches!(bootstrap.format(), TraceEventsFileFormat::Json));
+            assert_eq!(bootstrap.activation_path(), Some(activation.as_path()));
+            assert_eq!(bootstrap.program(), program_str);
+            let expected_args: Vec<String> = vec!["--verbose".to_string()];
+            assert_eq!(bootstrap.args(), expected_args.as_slice());
+        });
+    }
+}

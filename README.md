@@ -45,6 +45,15 @@ Basic workflow:
   - from codetracer_python_recorder import hello
   - hello()
 
+#### Testing & Coverage
+
+- Run the full split test suite (Rust nextest + Python pytest): `just test`
+- Run only Rust integration/unit tests: `just cargo-test`
+- Run only Python tests (including the pure-Python recorder to guard regressions): `just py-test`
+- Collect coverage artefacts locally (LCOV + Cobertura/JSON): `just coverage`
+
+The CI workflow mirrors these commands. Pull requests get an automated comment with the latest Rust/Python coverage tables and downloadable artefacts (`lcov.info`, `coverage.xml`, `coverage.json`).
+
 ### Future directions
 
 The current Python support is an unfinished prototype. We can finish it. In the future, it may be expanded to function in a way to similar to the more complete implementations, e.g. [Noir](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer).

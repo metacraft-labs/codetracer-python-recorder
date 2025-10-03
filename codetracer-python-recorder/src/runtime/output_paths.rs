@@ -58,3 +58,62 @@ impl TraceOutputPaths {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runtime_tracing::{Line, TraceLowLevelEvent};
+    use tempfile::tempdir;
+
+    #[test]
+    fn json_paths_use_json_filenames() {
+        let tmp = tempdir().expect("tempdir");
+        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+        assert_eq!(paths.events(), tmp.path().join("trace.json").as_path());
+        assert_eq!(
+            paths.metadata(),
+            tmp.path().join("trace_metadata.json").as_path()
+        );
+        assert_eq!(paths.paths(), tmp.path().join("trace_paths.json").as_path());
+    }
+
+    #[test]
+    fn binary_paths_use_bin_extension() {
+        let tmp = tempdir().expect("tempdir");
+        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
+        assert_eq!(paths.events(), tmp.path().join("trace.bin").as_path());
+    }
+
+    #[test]
+    fn configure_writer_initialises_writer_state() {
+        let tmp = tempdir().expect("tempdir");
+        let start_path = tmp.path().join("program.py");
+        std::fs::write(&start_path, "print('hi')\n").expect("write script");
+
+        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+        let mut writer = NonStreamingTraceWriter::new("program.py", &[]);
+
+        paths
+            .configure_writer(&mut writer, &start_path, 123)
+            .expect("configure writer");
+
+        let recorded_path = writer.events.iter().find_map(|event| match event {
+            TraceLowLevelEvent::Path(p) => Some(p.clone()),
+            _ => None,
+        });
+        assert_eq!(recorded_path.as_deref(), Some(start_path.as_path()));
+
+        let function_record = writer.events.iter().find_map(|event| match event {
+            TraceLowLevelEvent::Function(record) => Some(record.clone()),
+            _ => None,
+        });
+        let record = function_record.expect("function record");
+        assert_eq!(record.line, Line(123));
+
+        let has_call = writer
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceLowLevelEvent::Call(_)));
+        assert!(has_call, "expected toplevel call event");
+    }
+}

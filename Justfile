@@ -41,11 +41,29 @@ cargo-test:
     uv run cargo nextest run --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features
 
 py-test:
-    uv run --group dev --group test pytest
+    uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
     
 # Run tests only on the pure recorder
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder
+
+# Generate combined coverage artefacts for both crates
+coverage:
+    just coverage-rust
+    just coverage-python
+
+coverage-rust:
+    mkdir -p codetracer-python-recorder/target/coverage/rust
+    LLVM_COV="$(command -v llvm-cov)" LLVM_PROFDATA="$(command -v llvm-profdata)" \
+        uv run cargo llvm-cov nextest --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --lcov --output-path codetracer-python-recorder/target/coverage/rust/lcov.info
+    LLVM_COV="$(command -v llvm-cov)" LLVM_PROFDATA="$(command -v llvm-profdata)" \
+        uv run cargo llvm-cov report --summary-only --json --manifest-path codetracer-python-recorder/Cargo.toml --output-path codetracer-python-recorder/target/coverage/rust/summary.json
+    python3 codetracer-python-recorder/scripts/render_rust_coverage_summary.py \
+        codetracer-python-recorder/target/coverage/rust/summary.json --root "$(pwd)"
+
+coverage-python:
+    mkdir -p codetracer-python-recorder/target/coverage/python
+    uv run --group dev --group test pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python
 
 # Build the module in release mode
 build:
@@ -64,4 +82,3 @@ test-all:
         file="${file[0]}"; \
         uv run -p "python3.$v" --with "${file}" --with pytest -- pytest -q; \
     done
-
