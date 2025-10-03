@@ -1,6 +1,6 @@
 # Error Handling Implementation Plan — Status
 
-_Last updated: 2025-10-04_
+_Last updated: 2025-10-05_
 
 ## WS1 – Foundations & Inventory
 State: In progress
@@ -62,5 +62,15 @@ Highlights:
 - Implemented `just lint` orchestration running `cargo clippy -D clippy::panic` and a repository script that blocks unchecked `.unwrap(` usage outside the legacy allowlist.
 Next moves: Monitor unwrap allowlist shrinkage once WS1 follow-ups land; evaluate extending the lint to `.expect(` once monitoring refactor closes.
 
+## WS8 – Documentation & Rollout
+State: Done (2025-10-05)
+Highlights:
+- README now covers the recorder error policy, JSON trailers, exit codes, and a short Python `RecorderError` catch example.
+- Added `docs/onboarding/error-handling.md` with migration steps, policy wiring tips, and assertion rules for contributors.
+- Started `codetracer-python-recorder/CHANGELOG.md` to brief downstream tools on consuming structured errors.
+Next moves:
+- Share the onboarding doc with downstream maintainers and collect gaps before promoting ADR 0004 to **Accepted**.
+- Fold feedback into the change log before the next release tag.
+
 ## Upcoming Workstreams
-WS8 – Documentation & Rollout: Not started. Pending guidance from Docs WG and ADR promotion once downstream consumers validate the new error interfaces.
+- None. Hold for ADR 0004 promotion once downstream validation wraps up.

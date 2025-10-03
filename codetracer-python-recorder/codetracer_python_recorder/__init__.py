@@ -1,10 +1,10 @@
-"""High-level tracing API built on a Rust backend.
+"""Public tracing surface with structured recorder errors.
 
-This module exposes a minimal interface for starting and stopping
-runtime traces. The heavy lifting is delegated to the
-`codetracer_python_recorder` Rust extension which will eventually hook
-into `runtime_tracing` and `sys.monitoring`.  For now the Rust side only
-maintains placeholder state and performs no actual tracing.
+Importing this package installs policy defaults, wires the Rust backend,
+and exposes helpers to start and stop tracing. Every failure travels
+through :class:`RecorderError` or one of its subclasses. Each exception
+carries a stable ``code`` string (``ERR_*``), a ``kind`` label, and a
+``context`` dict for tooling.
 """
 
 from . import api as _api

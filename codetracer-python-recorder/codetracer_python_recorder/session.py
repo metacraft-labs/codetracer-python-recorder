@@ -1,4 +1,8 @@
-"""Tracing session management helpers."""
+"""Tracing session management helpers with policy integration.
+
+These wrappers load policy from env vars, call into the Rust backend,
+and surface structured :class:`RecorderError` instances on failure.
+"""
 from __future__ import annotations
 
 import contextlib
@@ -20,7 +24,11 @@ _active_session: Optional["TraceSession"] = None
 
 
 class TraceSession:
-    """Handle representing a live tracing session."""
+    """Handle representing a live tracing session.
+
+    The object keeps the resolved trace path and format. Use
+    :meth:`flush` and :meth:`stop` to interact with the global session.
+    """
 
     path: Path
     format: str
@@ -72,6 +80,20 @@ def start(
         When ``True`` (default), refresh policy settings from environment
         variables via :func:`configure_policy_from_env` prior to applying
         explicit overrides.
+
+    Returns
+    -------
+    TraceSession
+        Handle for the active recorder session.
+
+    Raises
+    ------
+    RecorderError
+        Raised by the Rust backend when configuration, IO, or the target
+        script fails.
+    RuntimeError
+        Raised when ``start`` is called while another session is still
+        active. The guard lives in Python so the error stays synchronous.
     """
     global _active_session
     if _is_tracing_backend():
