@@ -128,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         trace_path,
         format=fmt,
         start_on_enter=script_path,
+        policy=policy_kwargs if policy_kwargs else None,
     )
     try:
         runpy.run_path(str(script_path), run_name="__main__")

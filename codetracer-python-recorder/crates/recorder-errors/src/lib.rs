@@ -87,6 +87,27 @@ impl ErrorCode {
             ErrorCode::TraceIncomplete => "ERR_TRACE_INCOMPLETE",
         }
     }
+
+    /// Parse a string representation (e.g. `ERR_TRACE_MISSING`) back into an `ErrorCode`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ERR_UNKNOWN" => Some(ErrorCode::Unknown),
+            "ERR_ALREADY_TRACING" => Some(ErrorCode::AlreadyTracing),
+            "ERR_TRACE_DIR_CONFLICT" => Some(ErrorCode::TraceDirectoryConflict),
+            "ERR_TRACE_DIR_CREATE_FAILED" => Some(ErrorCode::TraceDirectoryCreateFailed),
+            "ERR_UNSUPPORTED_FORMAT" => Some(ErrorCode::UnsupportedFormat),
+            "ERR_MISSING_POSITIONAL_ARG" => Some(ErrorCode::MissingPositionalArgument),
+            "ERR_MISSING_KEYWORD_ARG" => Some(ErrorCode::MissingKeywordArgument),
+            "ERR_FRAME_INTROSPECTION_FAILED" => Some(ErrorCode::FrameIntrospectionFailed),
+            "ERR_GLOBALS_INTROSPECTION_FAILED" => Some(ErrorCode::GlobalsIntrospectionFailed),
+            "ERR_TRACER_INSTALL_CONFLICT" => Some(ErrorCode::TracerInstallConflict),
+            "ERR_IO" => Some(ErrorCode::Io),
+            "ERR_INVALID_POLICY_VALUE" => Some(ErrorCode::InvalidPolicyValue),
+            "ERR_TRACE_MISSING" => Some(ErrorCode::TraceMissing),
+            "ERR_TRACE_INCOMPLETE" => Some(ErrorCode::TraceIncomplete),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for ErrorCode {
@@ -325,5 +346,29 @@ mod tests {
         let err = bug!(ErrorCode::FrameIntrospectionFailed, "panic avoided");
         assert_eq!(err.kind, ErrorKind::Internal);
         assert_eq!(err.code, ErrorCode::FrameIntrospectionFailed);
+    }
+
+    #[test]
+    fn parse_roundtrip_matches_known_codes() {
+        for code in [
+            ErrorCode::Unknown,
+            ErrorCode::AlreadyTracing,
+            ErrorCode::TraceDirectoryConflict,
+            ErrorCode::TraceDirectoryCreateFailed,
+            ErrorCode::UnsupportedFormat,
+            ErrorCode::MissingPositionalArgument,
+            ErrorCode::MissingKeywordArgument,
+            ErrorCode::FrameIntrospectionFailed,
+            ErrorCode::GlobalsIntrospectionFailed,
+            ErrorCode::TracerInstallConflict,
+            ErrorCode::Io,
+            ErrorCode::InvalidPolicyValue,
+            ErrorCode::TraceMissing,
+            ErrorCode::TraceIncomplete,
+        ] {
+            let code_str = code.as_str();
+            assert_eq!(ErrorCode::parse(code_str), Some(code));
+        }
+        assert_eq!(ErrorCode::parse("ERR_NOT_REAL"), None);
     }
 }

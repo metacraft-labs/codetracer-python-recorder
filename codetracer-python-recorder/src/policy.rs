@@ -141,6 +141,7 @@ pub fn policy_snapshot() -> RecorderPolicy {
 fn apply_policy_update(update: PolicyUpdate) {
     let mut guard = policy_cell().write().expect("policy lock poisoned");
     guard.apply_update(update);
+    crate::logging::apply_policy(&guard);
 }
 
 /// Load policy overrides from environment variables.

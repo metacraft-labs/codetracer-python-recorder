@@ -1,6 +1,6 @@
 # Error Handling Implementation Plan — Status
 
-_Last updated: 2025-10-02_
+_Last updated: 2025-10-03_
 
 ## WS1 – Foundations & Inventory
 State: In progress
@@ -45,5 +45,13 @@ Highlights:
 - Python CLI integration tests exercise disable vs abort paths and require-trace enforcement using the new failure-injection toggles; CLI now propagates runtime shutdown errors so exit codes reflect policy outcomes while partial traces are cleaned per configuration.
 Next moves: Kick off WS6 once upstream WS1 cleanups land.
 
+## WS6 – Logging, Metrics, and Diagnostics
+State: Done (2025-10-03)
+Highlights:
+- Replaced the `env_logger` helper with a structured JSON logger that always emits `run_id`, active `trace_id`, and `error_code` fields while honouring policy-driven log level and log file overrides.
+- Introduced a pluggable `RecorderMetrics` sink and instrumented dropped locations, policy-triggered detachments, and caught panics across the monitoring/runtime paths; Rust unit tests exercise the metrics capture.
+- Enabled the `--json-errors` policy path so runtime shutdown emits a single-line JSON trailer on stderr; CLI integration tests now assert the abort flow surfaces the trailer alongside existing stack traces.
+Next moves: Wire the metrics sink into the chosen exporter and align the log schema with Observability consumption before rolling out to downstream tooling.
+
 ## Upcoming Workstreams
-WS6–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
+WS7–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
