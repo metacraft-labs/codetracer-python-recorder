@@ -1,3 +1,5 @@
+//! Shared code-object caching utilities for sys.monitoring callbacks.
+
 use dashmap::DashMap;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
@@ -148,7 +150,8 @@ impl CodeObjectRegistry {
         self.map
             .entry(id)
             .or_insert_with(|| Arc::new(CodeObjectWrapper::new(py, code)))
-            .clone() //AI? Why do we need to clone here?
+            // Clone the `Arc` so each caller receives its own reference-counted handle.
+            .clone()
     }
 
     /// Remove the wrapper for a given code id, if present.

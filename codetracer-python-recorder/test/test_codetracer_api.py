@@ -41,6 +41,20 @@ class TracingApiTests(unittest.TestCase):
             out = subprocess.check_output([sys.executable, "-c", script], env=env)
             self.assertEqual(out.decode(), "True")
 
+    def test_start_rejects_unsupported_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                codetracer.start(Path(tmpdir), format="yaml")
+        self.assertFalse(codetracer.is_tracing())
+
+    def test_start_rejects_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = Path(tmpdir) / "trace.bin"
+            file_path.write_text("placeholder")
+            with self.assertRaises(ValueError):
+                codetracer.start(file_path)
+        self.assertFalse(codetracer.is_tracing())
+
 
 if __name__ == "__main__":
     unittest.main()
