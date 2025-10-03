@@ -29,12 +29,27 @@ use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
+use crate::logging::{record_dropped_event, set_active_trace_id, with_error_code};
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
 
-// Logging is handled via the `log` crate macros (e.g., log::debug!).
+use uuid::Uuid;
+
+struct TraceIdResetGuard;
+
+impl TraceIdResetGuard {
+    fn new() -> Self {
+        TraceIdResetGuard
+    }
+}
+
+impl Drop for TraceIdResetGuard {
+    fn drop(&mut self) {
+        set_active_trace_id(None);
+    }
+}
 
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
@@ -48,6 +63,7 @@ pub struct RuntimeTracer {
     output_paths: Option<TraceOutputPaths>,
     events_recorded: bool,
     encountered_failure: bool,
+    trace_id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +163,7 @@ impl RuntimeTracer {
             output_paths: None,
             events_recorded: false,
             encountered_failure: false,
+            trace_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -160,6 +177,7 @@ impl RuntimeTracer {
         self.output_paths = Some(outputs.clone());
         self.events_recorded = false;
         self.encountered_failure = false;
+        set_active_trace_id(Some(self.trace_id.clone()));
         Ok(())
     }
 
@@ -246,7 +264,10 @@ impl RuntimeTracer {
         let filename = match code.filename(py) {
             Ok(name) => name,
             Err(err) => {
-                log::error!("failed to resolve code filename: {err}");
+                with_error_code(ErrorCode::Io, || {
+                    log::error!("failed to resolve code filename: {err}");
+                });
+                record_dropped_event("filename_lookup_failed");
                 self.ignored_code_ids.insert(code_id);
                 return ShouldTrace::SkipAndDisable;
             }
@@ -255,6 +276,7 @@ impl RuntimeTracer {
             ShouldTrace::Trace
         } else {
             self.ignored_code_ids.insert(code_id);
+            record_dropped_event("synthetic_filename");
             ShouldTrace::SkipAndDisable
         }
     }
@@ -294,7 +316,9 @@ impl Tracer for RuntimeTracer {
                 Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
                 Err(err) => {
                     let details = err.to_string();
-                    log::error!("on_py_start: failed to capture args: {details}");
+                    with_error_code(ErrorCode::FrameIntrospectionFailed, || {
+                        log::error!("on_py_start: failed to capture args: {details}");
+                    });
                     return Err(ffi::map_recorder_error(
                         enverr!(
                             ErrorCode::FrameIntrospectionFailed,
@@ -404,21 +428,27 @@ impl Tracer for RuntimeTracer {
             return Err(injected_failure_err(FailureStage::Finish));
         }
 
+        set_active_trace_id(Some(self.trace_id.clone()));
+        let _reset = TraceIdResetGuard::new();
         let policy = policy_snapshot();
 
         if self.encountered_failure {
             if policy.keep_partial_trace {
                 if let Err(err) = self.finalise_writer() {
-                    log::warn!(
-                        "failed to finalise partial trace after disable: {}",
-                        err.message()
-                    );
+                    with_error_code(ErrorCode::TraceIncomplete, || {
+                        log::warn!(
+                            "failed to finalise partial trace after disable: {}",
+                            err.message()
+                        );
+                    });
                 }
                 if let Some(outputs) = &self.output_paths {
-                    log::warn!(
-                        "recorder detached after failure; keeping partial trace at {}",
-                        outputs.events().display()
-                    );
+                    with_error_code(ErrorCode::TraceIncomplete, || {
+                        log::warn!(
+                            "recorder detached after failure; keeping partial trace at {}",
+                            outputs.events().display()
+                        );
+                    });
                 }
             } else {
                 self.cleanup_partial_outputs()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -29,11 +30,11 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
 
     result = _run_cli(
         script,
-        "--codetracer-trace",
+        "--trace-dir",
         str(trace_dir),
-        "--codetracer-format",
+        "--format",
         "json",
-        "--codetracer-on-recorder-error",
+        "--on-recorder-error",
         "disable",
         env=env,
     )
@@ -59,11 +60,11 @@ def test_cli_abort_policy_propagates_internal_error(tmp_path: Path) -> None:
 
     result = _run_cli(
         script,
-        "--codetracer-trace",
+        "--trace-dir",
         str(trace_dir),
-        "--codetracer-format",
+        "--format",
         "json",
-        "--codetracer-on-recorder-error",
+        "--on-recorder-error",
         "abort",
         env=env,
     )
@@ -89,14 +90,48 @@ def test_cli_require_trace_fails_when_no_events_recorded(tmp_path: Path) -> None
 
     result = _run_cli(
         alias,
-        "--codetracer-trace",
+        "--trace-dir",
         str(trace_dir),
-        "--codetracer-format",
+        "--format",
         "json",
-        "--codetracer-require-trace",
+        "--require-trace",
         env=env,
     )
 
     assert result.returncode != 0
     assert trace_dir.is_dir()
     assert "requires a trace but no events were recorded" in result.stderr
+
+
+def test_cli_json_errors_emits_trailer(tmp_path: Path) -> None:
+    script = tmp_path / "app.py"
+    script.write_text("value = 1\nprint(value)\n")
+    trace_dir = tmp_path / "trace"
+
+    env = os.environ.copy()
+    env["CODETRACER_TEST_INJECT_FAILURE"] = "line"
+
+    result = _run_cli(
+        script,
+        "--trace-dir",
+        str(trace_dir),
+        "--format",
+        "json",
+        "--json-errors",
+        "--on-recorder-error",
+        "abort",
+        env=env,
+    )
+
+    assert result.returncode != 0
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if line.lstrip().startswith("{"):
+            trailer = json.loads(line)
+            break
+    else:
+        raise AssertionError(f"missing JSON error trailer in stderr: {result.stderr!r}")
+    assert trailer["error_code"] == "ERR_TRACE_INCOMPLETE"
+    assert trailer["message"].startswith("test-injected failure")
+    assert trailer["run_id"]
+    assert trailer["trace_id"]

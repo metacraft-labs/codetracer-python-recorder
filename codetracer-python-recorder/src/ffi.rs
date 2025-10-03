@@ -3,12 +3,13 @@
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use log::error;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use recorder_errors::{ErrorCode, ErrorKind, RecorderError, RecorderResult};
+
+use crate::logging;
 
 create_exception!(codetracer_python_recorder, PyRecorderError, PyException);
 create_exception!(codetracer_python_recorder, PyUsageError, PyRecorderError);
@@ -47,7 +48,7 @@ where
 /// Convert a captured panic into a `PyInternalError` while logging the payload.
 fn handle_panic(label: &'static str, payload: Box<dyn Any + Send>) -> PyErr {
     let message = panic_payload_to_string(&payload);
-    error!("panic in {label}: {message}");
+    logging::record_panic(label);
     map_recorder_error(RecorderError::new(
         ErrorKind::Internal,
         ErrorCode::Unknown,
@@ -67,6 +68,8 @@ fn panic_payload_to_string(payload: &Box<dyn Any + Send>) -> String {
 
 /// Map a `RecorderError` into the appropriate Python exception subclass.
 pub fn map_recorder_error(err: RecorderError) -> PyErr {
+    logging::log_recorder_error("recorder_error", &err);
+    logging::emit_error_trailer(&err);
     let source_desc = err.source_ref().map(|src| src.to_string());
     let RecorderError {
         kind,

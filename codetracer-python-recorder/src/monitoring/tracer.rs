@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use crate::ffi;
+use crate::logging;
 use crate::policy::{self, OnRecorderError};
 use log::{error, warn};
 use pyo3::{
@@ -288,16 +289,22 @@ fn handle_callback_error(
         OnRecorderError::Abort => Err(err),
         OnRecorderError::Disable => {
             let message = err.to_string();
-            error!(
-                "recorder callback error; disabling tracer per policy: {}",
-                message
-            );
+            let code = logging::error_code_from_pyerr(py, &err);
+            logging::record_detach("policy_disable", code.map(|code| code.as_str()));
+            logging::with_error_code_opt(code, || {
+                error!(
+                    "recorder callback error; disabling tracer per policy: {}",
+                    message
+                );
+            });
             if let Some(global) = guard.as_mut() {
                 if let Err(notify_err) = global.tracer.notify_failure(py) {
-                    warn!(
-                        "failed to notify tracer about disable transition: {}",
-                        notify_err
-                    );
+                    logging::with_error_code(ErrorCode::TraceIncomplete, || {
+                        warn!(
+                            "failed to notify tracer about disable transition: {}",
+                            notify_err
+                        );
+                    });
                 }
             }
             uninstall_locked(py, guard)?;
