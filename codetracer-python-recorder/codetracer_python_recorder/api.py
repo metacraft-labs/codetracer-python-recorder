@@ -1,4 +1,9 @@
-"""High-level tracing API built on a Rust backend."""
+"""High-level tracing helpers with structured error propagation.
+
+Expose the core session helpers (:func:`start`, :func:`stop`,
+:func:`trace`, etc.). These wrappers bubble up :class:`RecorderError`
+instances from the Rust layer so callers see stable ``ERR_*`` codes.
+"""
 from __future__ import annotations
 
 from typing import Iterable
