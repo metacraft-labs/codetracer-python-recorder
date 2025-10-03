@@ -351,6 +351,19 @@ mod tests {
         reset_policy();
     }
 
+    #[test]
+    fn configure_policy_from_env_rejects_invalid_boolean() {
+        reset_policy();
+        let env_guard = env_lock();
+        env::set_var(ENV_REQUIRE_TRACE, "sometimes");
+
+        let err = configure_policy_from_env().expect_err("invalid bool should error");
+        assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
+
+        drop(env_guard);
+        reset_policy();
+    }
+
     fn env_lock() -> EnvGuard {
         EnvGuard
     }

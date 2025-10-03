@@ -622,6 +622,26 @@ mod tests {
     }
 
     #[test]
+    fn target_macro_marks_target_error() {
+        let err = target!(ErrorCode::TraceIncomplete, "target callback failed");
+        assert_eq!(err.kind, ErrorKind::Target);
+        assert_eq!(err.code, ErrorCode::TraceIncomplete);
+    }
+
+    #[test]
+    fn ensure_internal_marks_internal_failures() {
+        fn guarded(assert_ok: bool) -> RecorderResult<()> {
+            ensure_internal!(assert_ok, ErrorCode::TraceIncomplete, "invariant broken");
+            Ok(())
+        }
+
+        let err = guarded(false).expect_err("expected invariant failure");
+        assert_eq!(err.kind, ErrorKind::Internal);
+        assert_eq!(err.code, ErrorCode::TraceIncomplete);
+        guarded(true).expect("guarded success");
+    }
+
+    #[test]
     fn parse_roundtrip_matches_known_codes() {
         for code in [
             ErrorCode::Unknown,
