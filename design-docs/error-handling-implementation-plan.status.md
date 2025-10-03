@@ -37,14 +37,13 @@ Highlights:
 Next moves: Hold for WS5 until ISSUES 013/014 close.
 
 ## WS5 – Policy Switches & Runtime Configuration
-State: In progress
+State: Done (2025-10-03)
 Highlights:
 - `TraceSession.start()` and `trace()` now refresh policy from env vars and accept override mappings so embeds wire recorder switches without manual plumbing.
 - Rust exports expose `configure_policy`/`configure_policy_from_env` under the expected Python names; unit tests cover env-driven and explicit override flows.
 - Runtime tracer finish path honours `RecorderPolicy`: callback errors respect `on_recorder_error` (disable detaches without surfacing exceptions), `require_trace` now fails cleanly when no events land, and partial traces are deleted or retained based on `keep_partial_trace`.
-- Rust unit tests cover policy enforcement for require-trace and partial-trace retention to guard regressions.
-Next moves:
-- Surface disable vs abort semantics through Python integration coverage and wire CLI exit codes before promoting WS5 to done.
+- Python CLI integration tests exercise disable vs abort paths and require-trace enforcement using the new failure-injection toggles; CLI now propagates runtime shutdown errors so exit codes reflect policy outcomes while partial traces are cleaned per configuration.
+Next moves: Kick off WS6 once upstream WS1 cleanups land.
 
 ## Upcoming Workstreams
 WS6–WS8: Not started. Blocked on WS1 follow-ups and ADR sign-off.
