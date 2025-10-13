@@ -90,7 +90,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: -m codetracer-python-recorder/Cargo.toml ${{ matrix.publish-args }}
+          args: ${{ matrix.publish-args }}
           manylinux: ${{ matrix.manylinux }}
           before-script-linux: yum install -y capnproto
           working-directory: codetracer-python-recorder
