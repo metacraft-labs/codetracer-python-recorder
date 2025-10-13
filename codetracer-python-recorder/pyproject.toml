@@ -12,6 +12,9 @@ classifiers = [
     "Programming Language :: Rust",
 ]
 
+[project.scripts]
+codetracer-python-recorder = "codetracer_python_recorder.cli:main"
+
 [tool.maturin]
 # Build the PyO3 extension module
 bindings = "pyo3"
