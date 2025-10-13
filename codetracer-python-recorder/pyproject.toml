@@ -3,22 +3,53 @@ name = "codetracer-python-recorder"
 version = "0.1.0"
 description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)"
 authors = [{name = "Metacraft Labs Ltd"}]
-license = {text = "MIT"}
-requires-python = ">=3.8"
+license = {file = "LICENSE"}
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Debuggers",
 ]
 
 [project.scripts]
 codetracer-python-recorder = "codetracer_python_recorder.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/metacraft-labs/codetracer-python-recorder/tree/main/codetracer-python-recorder"
+Repository = "https://github.com/metacraft-labs/codetracer-python-recorder"
+Issues = "https://github.com/metacraft-labs/codetracer-python-recorder/issues"
+Changelog = "https://github.com/metacraft-labs/codetracer-python-recorder/releases"
+
 [tool.maturin]
 # Build the PyO3 extension module
 bindings = "pyo3"
 # Use the library name as the Python import name: codetracer_python_recorder
+
+[tool.maturin.sdist]
+include = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+    "src/**",
+    "codetracer_python_recorder/**",
+]
+exclude = [
+    "target/**",
+    "codetracer_python_recorder/*.so",
+]
 
 [build-system]
 requires = ["maturin>=1.5,<2"]

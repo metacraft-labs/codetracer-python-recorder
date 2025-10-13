@@ -5,6 +5,20 @@ tracing inside Codetracer. The PyO3 extension exposes a small Python façade so
 packaged environments (desktop bundles, `uv run`, virtualenvs) can start and stop
 recording without shipping an additional interpreter.
 
+## Installation
+
+`codetracer-python-recorder` publishes binary wheels for CPython 3.12 and 3.13 on
+Linux (manylinux2014 `x86_64`/`aarch64`), macOS 11+ universal2 (`arm64` + `x86_64`),
+and Windows 10+ (`win_amd64`). Install the package into the interpreter you plan to
+trace:
+
+```bash
+python -m pip install codetracer-python-recorder
+```
+
+Source distributions are available for audit and custom builds; maturin and a Rust
+toolchain are required when building from source.
+
 ## Command-line entry point
 
 The wheel installs a console script named `codetracer-python-recorder` and the

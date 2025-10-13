@@ -25,6 +25,9 @@ jobs:
       - name: Prepare dev environment
         run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
 
+      - name: Verify recorder version metadata
+        run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
+
       - name: Rust tests
         run: nix develop --command bash -lc 'just cargo-test'
 
