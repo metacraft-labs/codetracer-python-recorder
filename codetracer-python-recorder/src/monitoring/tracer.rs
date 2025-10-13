@@ -1,13 +1,15 @@
 //! Tracer trait and sys.monitoring callback plumbing.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use pyo3::{
     exceptions::PyRuntimeError,
     prelude::*,
-    types::{PyAny, PyCode, PyModule},
+    types::{PyAny, PyCode, PyModule, PyTuple},
+    ToPyObject,
 };
 
 use super::{
@@ -248,23 +250,64 @@ struct Global {
     registry: CodeObjectRegistry,
     tracer: Box<dyn Tracer>,
     mask: EventSet,
-    tool: ToolId,
-    disable_sentinel: Py<PyAny>,
+    backend: Backend,
+}
+
+enum Backend {
+    Monitoring {
+        tool: ToolId,
+        disable_sentinel: Py<PyAny>,
+    },
+    Legacy(LegacyState),
+}
+
+struct LegacyState {
+    events: MonitoringEvents,
+    global_trace: Py<PyAny>,
+    local_trace: Py<PyAny>,
+    disabled_codes: HashSet<usize>,
 }
 
 static GLOBAL: Mutex<Option<Global>> = Mutex::new(None);
 
 impl Global {
-    fn handle_callback(&self, py: Python<'_>, result: CallbackResult) -> PyResult<Py<PyAny>> {
+    fn handle_monitoring_callback(
+        &self,
+        py: Python<'_>,
+        result: CallbackResult,
+    ) -> PyResult<Py<PyAny>> {
+        let Backend::Monitoring {
+            disable_sentinel, ..
+        } = &self.backend
+        else {
+            // Legacy callbacks do not use monitoring sentinels.
+            return Ok(py.None());
+        };
+
         match result? {
             CallbackOutcome::Continue => Ok(py.None()),
-            CallbackOutcome::DisableLocation => Ok(self.disable_sentinel.clone_ref(py)),
+            CallbackOutcome::DisableLocation => Ok(disable_sentinel.clone_ref(py)),
         }
     }
 }
 
-/// Install a tracer and hook it into Python's `sys.monitoring`.
+/// Install a tracer and hook it into Python's tracing facilities.
 pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
+    if has_sys_monitoring(py) {
+        install_with_monitoring(py, tracer)
+    } else {
+        install_with_legacy_tracing(py, tracer)
+    }
+}
+
+fn has_sys_monitoring(py: Python<'_>) -> bool {
+    py.import("sys")
+        .and_then(|sys| sys.getattr("monitoring"))
+        .map(|monitoring| monitoring.hasattr("use_tool_id").unwrap_or(false))
+        .unwrap_or(false)
+}
+
+fn install_with_monitoring(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
     if guard.is_some() {
         return Err(PyRuntimeError::new_err("tracer already installed"));
@@ -335,11 +378,6 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
         let cb = wrap_pyfunction!(callback_exception_handled, &module)?;
         register_callback(py, &tool, &events.EXCEPTION_HANDLED, Some(&cb))?;
     }
-    // See comment in Tracer trait
-    // if mask.contains(&events.STOP_ITERATION) {
-    //     let cb = wrap_pyfunction!(callback_stop_iteration, &module)?;
-    //     register_callback(py, &tool, &events.STOP_ITERATION, Some(&cb))?;
-    // }
     if mask.contains(&events.C_RETURN) {
         let cb = wrap_pyfunction!(callback_c_return, &module)?;
         register_callback(py, &tool, &events.C_RETURN, Some(&cb))?;
@@ -355,10 +393,71 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
         registry: CodeObjectRegistry::default(),
         tracer,
         mask,
-        tool,
-        disable_sentinel,
+        backend: Backend::Monitoring {
+            tool,
+            disable_sentinel,
+        },
     });
     Ok(())
+}
+
+fn install_with_legacy_tracing(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
+    let mut guard = GLOBAL.lock().unwrap();
+    if guard.is_some() {
+        return Err(PyRuntimeError::new_err("tracer already installed"));
+    }
+
+    let events = legacy_monitoring_events();
+    let mask = tracer.interest(&events);
+
+    let module = PyModule::new(py, "_codetracer_legacy_callbacks")?;
+    let global_cb = wrap_pyfunction!(legacy_global_trace, &module)?;
+    let local_cb = wrap_pyfunction!(legacy_local_trace, &module)?;
+
+    let global_trace = global_cb.unbind();
+    let local_trace = local_cb.unbind();
+
+    *guard = Some(Global {
+        registry: CodeObjectRegistry::default(),
+        tracer,
+        mask,
+        backend: Backend::Legacy(LegacyState {
+            events,
+            global_trace: global_trace.clone_ref(py),
+            local_trace: local_trace.clone_ref(py),
+            disabled_codes: HashSet::new(),
+        }),
+    });
+    drop(guard);
+
+    let sys = py.import("sys")?;
+    sys.call_method1("settrace", (global_trace.bind(py),))?;
+    Ok(())
+}
+
+fn legacy_monitoring_events() -> MonitoringEvents {
+    fn bit(n: i32) -> i32 {
+        1 << n
+    }
+
+    MonitoringEvents {
+        BRANCH: EventId(bit(0)),
+        CALL: EventId(bit(1)),
+        C_RAISE: EventId(bit(2)),
+        C_RETURN: EventId(bit(3)),
+        EXCEPTION_HANDLED: EventId(bit(4)),
+        INSTRUCTION: EventId(bit(5)),
+        JUMP: EventId(bit(6)),
+        LINE: EventId(bit(7)),
+        PY_RESUME: EventId(bit(8)),
+        PY_RETURN: EventId(bit(9)),
+        PY_START: EventId(bit(10)),
+        PY_THROW: EventId(bit(11)),
+        PY_UNWIND: EventId(bit(12)),
+        PY_YIELD: EventId(bit(13)),
+        RAISE: EventId(bit(14)),
+        RERAISE: EventId(bit(15)),
+    }
 }
 
 /// Remove the installed tracer if any.
@@ -366,63 +465,68 @@ pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
     let mut guard = GLOBAL.lock().unwrap();
     if let Some(mut global) = guard.take() {
         // Give the tracer a chance to finish underlying writers before
-        // unregistering callbacks.
+        // unregistering callbacks or removing tracing hooks.
         let _ = global.tracer.finish(py);
-        let events = monitoring_events(py)?;
-        if global.mask.contains(&events.CALL) {
-            register_callback(py, &global.tool, &events.CALL, None)?;
-        }
-        if global.mask.contains(&events.LINE) {
-            register_callback(py, &global.tool, &events.LINE, None)?;
-        }
-        if global.mask.contains(&events.INSTRUCTION) {
-            register_callback(py, &global.tool, &events.INSTRUCTION, None)?;
-        }
-        if global.mask.contains(&events.JUMP) {
-            register_callback(py, &global.tool, &events.JUMP, None)?;
-        }
-        if global.mask.contains(&events.BRANCH) {
-            register_callback(py, &global.tool, &events.BRANCH, None)?;
-        }
-        if global.mask.contains(&events.PY_START) {
-            register_callback(py, &global.tool, &events.PY_START, None)?;
-        }
-        if global.mask.contains(&events.PY_RESUME) {
-            register_callback(py, &global.tool, &events.PY_RESUME, None)?;
-        }
-        if global.mask.contains(&events.PY_RETURN) {
-            register_callback(py, &global.tool, &events.PY_RETURN, None)?;
-        }
-        if global.mask.contains(&events.PY_YIELD) {
-            register_callback(py, &global.tool, &events.PY_YIELD, None)?;
-        }
-        if global.mask.contains(&events.PY_THROW) {
-            register_callback(py, &global.tool, &events.PY_THROW, None)?;
-        }
-        if global.mask.contains(&events.PY_UNWIND) {
-            register_callback(py, &global.tool, &events.PY_UNWIND, None)?;
-        }
-        if global.mask.contains(&events.RAISE) {
-            register_callback(py, &global.tool, &events.RAISE, None)?;
-        }
-        if global.mask.contains(&events.RERAISE) {
-            register_callback(py, &global.tool, &events.RERAISE, None)?;
-        }
-        if global.mask.contains(&events.EXCEPTION_HANDLED) {
-            register_callback(py, &global.tool, &events.EXCEPTION_HANDLED, None)?;
-        }
-        // if global.mask.contains(&events.STOP_ITERATION) {
-        //     register_callback(py, &global.tool, &events.STOP_ITERATION, None)?;
-        // }
-        if global.mask.contains(&events.C_RETURN) {
-            register_callback(py, &global.tool, &events.C_RETURN, None)?;
-        }
-        if global.mask.contains(&events.C_RAISE) {
-            register_callback(py, &global.tool, &events.C_RAISE, None)?;
-        }
+        match &global.backend {
+            Backend::Monitoring { tool, .. } => {
+                let events = monitoring_events(py)?;
+                if global.mask.contains(&events.CALL) {
+                    register_callback(py, tool, &events.CALL, None)?;
+                }
+                if global.mask.contains(&events.LINE) {
+                    register_callback(py, tool, &events.LINE, None)?;
+                }
+                if global.mask.contains(&events.INSTRUCTION) {
+                    register_callback(py, tool, &events.INSTRUCTION, None)?;
+                }
+                if global.mask.contains(&events.JUMP) {
+                    register_callback(py, tool, &events.JUMP, None)?;
+                }
+                if global.mask.contains(&events.BRANCH) {
+                    register_callback(py, tool, &events.BRANCH, None)?;
+                }
+                if global.mask.contains(&events.PY_START) {
+                    register_callback(py, tool, &events.PY_START, None)?;
+                }
+                if global.mask.contains(&events.PY_RESUME) {
+                    register_callback(py, tool, &events.PY_RESUME, None)?;
+                }
+                if global.mask.contains(&events.PY_RETURN) {
+                    register_callback(py, tool, &events.PY_RETURN, None)?;
+                }
+                if global.mask.contains(&events.PY_YIELD) {
+                    register_callback(py, tool, &events.PY_YIELD, None)?;
+                }
+                if global.mask.contains(&events.PY_THROW) {
+                    register_callback(py, tool, &events.PY_THROW, None)?;
+                }
+                if global.mask.contains(&events.PY_UNWIND) {
+                    register_callback(py, tool, &events.PY_UNWIND, None)?;
+                }
+                if global.mask.contains(&events.RAISE) {
+                    register_callback(py, tool, &events.RAISE, None)?;
+                }
+                if global.mask.contains(&events.RERAISE) {
+                    register_callback(py, tool, &events.RERAISE, None)?;
+                }
+                if global.mask.contains(&events.EXCEPTION_HANDLED) {
+                    register_callback(py, tool, &events.EXCEPTION_HANDLED, None)?;
+                }
+                if global.mask.contains(&events.C_RETURN) {
+                    register_callback(py, tool, &events.C_RETURN, None)?;
+                }
+                if global.mask.contains(&events.C_RAISE) {
+                    register_callback(py, tool, &events.C_RAISE, None)?;
+                }
 
-        set_events(py, &global.tool, NO_EVENTS)?;
-        free_tool_id(py, &global.tool)?;
+                set_events(py, tool, NO_EVENTS)?;
+                free_tool_id(py, tool)?;
+            }
+            Backend::Legacy(_) => {
+                let sys = py.import("sys")?;
+                sys.call_method1("settrace", (py.None(),))?;
+            }
+        }
     }
     Ok(())
 }
@@ -431,8 +535,259 @@ pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
 pub fn flush_installed_tracer(py: Python<'_>) -> PyResult<()> {
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         global.tracer.flush(py)?;
+        if let Backend::Legacy(state) = &mut global.backend {
+            state.disabled_codes.clear();
+        }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LegacyDirective {
+    Continue,
+    StopTracing,
+}
+
+fn apply_legacy_result(
+    state: &mut LegacyState,
+    code_id: usize,
+    result: CallbackResult,
+) -> PyResult<bool> {
+    match result? {
+        CallbackOutcome::Continue => Ok(true),
+        CallbackOutcome::DisableLocation => {
+            state.disabled_codes.insert(code_id);
+            Ok(false)
+        }
+    }
+}
+
+fn handle_legacy_event(
+    py: Python<'_>,
+    frame: &Bound<'_, PyAny>,
+    event: &str,
+    arg: Option<&Bound<'_, PyAny>>,
+) -> PyResult<LegacyDirective> {
+    let mut guard = GLOBAL.lock().unwrap();
+    let Some(global) = guard.as_mut() else {
+        return Ok(LegacyDirective::StopTracing);
+    };
+    let Backend::Legacy(state) = &mut global.backend else {
+        return Ok(LegacyDirective::StopTracing);
+    };
+
+    let code_obj = frame.getattr("f_code")?;
+    let code_obj = code_obj.downcast::<PyCode>()?;
+    let wrapper = global.registry.get_or_insert(py, &code_obj);
+    let code_id = wrapper.id();
+
+    if state.disabled_codes.contains(&code_id) {
+        return Ok(LegacyDirective::StopTracing);
+    }
+
+    let offset: i32 = frame.getattr("f_lasti")?.extract()?;
+
+    match event {
+        "call" => {
+            let mut keep_tracing = true;
+            if global.mask.contains(&state.events.CALL) {
+                let callable_obj = frame.getattr("f_code")?.to_object(py);
+                let callable_bound = callable_obj.bind(py);
+                keep_tracing &= apply_legacy_result(
+                    state,
+                    code_id,
+                    global
+                        .tracer
+                        .on_call(py, &wrapper, offset, &callable_bound, None),
+                )?;
+            }
+            if keep_tracing && global.mask.contains(&state.events.PY_START) {
+                keep_tracing &= apply_legacy_result(
+                    state,
+                    code_id,
+                    global.tracer.on_py_start(py, &wrapper, offset),
+                )?;
+            }
+            Ok(if keep_tracing {
+                LegacyDirective::Continue
+            } else {
+                LegacyDirective::StopTracing
+            })
+        }
+        "line" => {
+            if !global.mask.contains(&state.events.LINE) {
+                return Ok(LegacyDirective::Continue);
+            }
+            let lineno = frame.getattr("f_lineno")?.extract()?;
+            let keep_tracing =
+                apply_legacy_result(state, code_id, global.tracer.on_line(py, &wrapper, lineno))?;
+            Ok(if keep_tracing {
+                LegacyDirective::Continue
+            } else {
+                LegacyDirective::StopTracing
+            })
+        }
+        "return" => {
+            if !global.mask.contains(&state.events.PY_RETURN)
+                && !global.mask.contains(&state.events.PY_YIELD)
+            {
+                return Ok(LegacyDirective::Continue);
+            }
+
+            let retval_obj = arg
+                .map(|value| value.to_object(py))
+                .unwrap_or_else(|| py.None());
+            let retval_bound = retval_obj.bind(py);
+
+            const CO_GENERATOR: u32 = 0x20;
+            const CO_COROUTINE: u32 = 0x80;
+            const CO_ASYNC_GENERATOR: u32 = 0x200;
+            let flags: u32 = code_obj.getattr("co_flags")?.extract()?;
+            let is_generator_like =
+                (flags & (CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR)) != 0;
+
+            let mut keep_tracing = true;
+            if is_generator_like && global.mask.contains(&state.events.PY_YIELD) {
+                keep_tracing &= apply_legacy_result(
+                    state,
+                    code_id,
+                    global
+                        .tracer
+                        .on_py_yield(py, &wrapper, offset, &retval_bound),
+                )?;
+            }
+
+            if keep_tracing && global.mask.contains(&state.events.PY_RETURN) {
+                keep_tracing &= apply_legacy_result(
+                    state,
+                    code_id,
+                    global
+                        .tracer
+                        .on_py_return(py, &wrapper, offset, &retval_bound),
+                )?;
+            }
+
+            Ok(if keep_tracing {
+                LegacyDirective::Continue
+            } else {
+                LegacyDirective::StopTracing
+            })
+        }
+        "exception" => {
+            if !global.mask.contains(&state.events.RAISE) {
+                return Ok(LegacyDirective::Continue);
+            }
+            if let Some(exc_info) = arg {
+                let exc_obj = if let Ok(tuple) = exc_info.downcast::<PyTuple>() {
+                    if tuple.len() >= 2 {
+                        tuple.get_item(1).to_object(py)
+                    } else {
+                        exc_info.to_object(py)
+                    }
+                } else {
+                    exc_info.to_object(py)
+                };
+                let exc_bound = exc_obj.bind(py);
+                let keep_tracing = apply_legacy_result(
+                    state,
+                    code_id,
+                    global.tracer.on_raise(py, &wrapper, offset, &exc_bound),
+                )?;
+                return Ok(if keep_tracing {
+                    LegacyDirective::Continue
+                } else {
+                    LegacyDirective::StopTracing
+                });
+            }
+            Ok(LegacyDirective::Continue)
+        }
+        "c_return" => {
+            if !global.mask.contains(&state.events.C_RETURN) {
+                return Ok(LegacyDirective::Continue);
+            }
+            if let Some(callable) = arg {
+                let callable_obj = callable.to_object(py);
+                let callable_bound = callable_obj.bind(py);
+                let keep_tracing = apply_legacy_result(
+                    state,
+                    code_id,
+                    global
+                        .tracer
+                        .on_c_return(py, &wrapper, offset, &callable_bound, None),
+                )?;
+                return Ok(if keep_tracing {
+                    LegacyDirective::Continue
+                } else {
+                    LegacyDirective::StopTracing
+                });
+            }
+            Ok(LegacyDirective::Continue)
+        }
+        "c_exception" => {
+            if !global.mask.contains(&state.events.C_RAISE) {
+                return Ok(LegacyDirective::Continue);
+            }
+            if let Some(callable) = arg {
+                let callable_obj = callable.to_object(py);
+                let callable_bound = callable_obj.bind(py);
+                let keep_tracing = apply_legacy_result(
+                    state,
+                    code_id,
+                    global
+                        .tracer
+                        .on_c_raise(py, &wrapper, offset, &callable_bound, None),
+                )?;
+                return Ok(if keep_tracing {
+                    LegacyDirective::Continue
+                } else {
+                    LegacyDirective::StopTracing
+                });
+            }
+            Ok(LegacyDirective::Continue)
+        }
+        _ => Ok(LegacyDirective::Continue),
+    }
+}
+
+fn legacy_trace_impl(
+    py: Python<'_>,
+    frame: Bound<'_, PyAny>,
+    event: &str,
+    arg: Option<Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let directive = handle_legacy_event(py, &frame, event, arg.as_ref())?;
+    match directive {
+        LegacyDirective::StopTracing => Ok(py.None()),
+        LegacyDirective::Continue => {
+            let guard = GLOBAL.lock().unwrap();
+            if let Some(global) = guard.as_ref() {
+                if let Backend::Legacy(state) = &global.backend {
+                    return Ok(state.local_trace.clone_ref(py));
+                }
+            }
+            Ok(py.None())
+        }
+    }
+}
+
+#[pyfunction]
+fn legacy_global_trace(
+    py: Python<'_>,
+    frame: Bound<'_, PyAny>,
+    event: &str,
+    arg: Option<Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    legacy_trace_impl(py, frame, event, arg)
+}
+
+#[pyfunction]
+fn legacy_local_trace(
+    py: Python<'_>,
+    frame: Bound<'_, PyAny>,
+    event: &str,
+    arg: Option<Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    legacy_trace_impl(py, frame, event, arg)
 }
 
 #[pyfunction]
@@ -448,7 +803,7 @@ fn callback_call(
         let result = global
             .tracer
             .on_call(py, &wrapper, offset, &callable, arg0.as_ref());
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -458,7 +813,7 @@ fn callback_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResu
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
         let result = global.tracer.on_line(py, &wrapper, lineno);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -474,7 +829,7 @@ fn callback_instruction(
         let result = global
             .tracer
             .on_instruction(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -491,7 +846,7 @@ fn callback_jump(
         let result = global
             .tracer
             .on_jump(py, &wrapper, instruction_offset, destination_offset);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -508,7 +863,7 @@ fn callback_branch(
         let result = global
             .tracer
             .on_branch(py, &wrapper, instruction_offset, destination_offset);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -522,7 +877,7 @@ fn callback_py_start(
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
         let result = global.tracer.on_py_start(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -536,7 +891,7 @@ fn callback_py_resume(
     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
         let wrapper = global.registry.get_or_insert(py, &code);
         let result = global.tracer.on_py_resume(py, &wrapper, instruction_offset);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -553,7 +908,7 @@ fn callback_py_return(
         let result = global
             .tracer
             .on_py_return(py, &wrapper, instruction_offset, &retval);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -570,7 +925,7 @@ fn callback_py_yield(
         let result = global
             .tracer
             .on_py_yield(py, &wrapper, instruction_offset, &retval);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -587,7 +942,7 @@ fn callback_py_throw(
         let result = global
             .tracer
             .on_py_throw(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -604,7 +959,7 @@ fn callback_py_unwind(
         let result = global
             .tracer
             .on_py_unwind(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -621,7 +976,7 @@ fn callback_raise(
         let result = global
             .tracer
             .on_raise(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -638,7 +993,7 @@ fn callback_reraise(
         let result = global
             .tracer
             .on_reraise(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
@@ -656,7 +1011,7 @@ fn callback_exception_handled(
             global
                 .tracer
                 .on_exception_handled(py, &wrapper, instruction_offset, &exception);
-        return global.handle_callback(py, result);
+        return global.handle_monitoring_callback(py, result);
     }
     Ok(py.None())
 }
