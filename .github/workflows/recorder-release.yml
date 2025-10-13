@@ -46,21 +46,30 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             build-sdist: true
-            publish-args: --release --sdist --interpreter python3.12 python3.13
+            publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
+            target: ""
           - name: linux-aarch64
             os: ubuntu-latest
             build-sdist: false
-            publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu
+            publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
             manylinux: 2014
-          - name: macos-universal2
+            target: ""
+          - name: macos-x86_64
             os: macos-13
             build-sdist: false
-            publish-args: --release --universal2
+            publish-args: --release --out dist --interpreter python3.12 python3.13
+            target: x86_64
+          - name: macos-aarch64
+            os: macos-14
+            build-sdist: false
+            publish-args: --release --out dist --interpreter python3.12 python3.13
+            target: aarch64
           - name: windows-amd64
             os: windows-latest
             build-sdist: false
-            publish-args: --release
+            publish-args: --release --out dist
+            target: ""
     steps:
       - uses: actions/checkout@v4
       - name: Check recorder version parity
@@ -113,6 +122,7 @@ jobs:
           command: build
           args: ${{ matrix.publish-args }}
           manylinux: ${{ matrix.manylinux }}
+          sccache: true
           before-script-linux: |
             set -eux
             if command -v yum >/dev/null 2>&1; then
@@ -131,15 +141,13 @@ jobs:
           working-directory: codetracer-python-recorder
 
       - name: Install Python 3.12 (macOS)
-        if: startsWith(matrix.name, 'macos')
-        id: mac_py312
+        if: startsWith(matrix.name, 'macos-')
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install Python 3.13 (macOS)
-        if: startsWith(matrix.name, 'macos')
-        id: mac_py313
+        if: startsWith(matrix.name, 'macos-')
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -161,20 +169,12 @@ jobs:
           architecture: 'x64'
 
       - name: Install Cap'n Proto (macOS)
-        if: startsWith(matrix.name, 'macos')
+        if: startsWith(matrix.name, 'macos-')
         run: brew install capnp
 
       - name: Install Cap'n Proto (Windows)
         if: matrix.name == 'windows-amd64'
         run: choco install -y capnproto
-
-      - name: Install maturin (macOS)
-        if: startsWith(matrix.name, 'macos')
-        shell: bash
-        run: |
-          PYTHON=$(python3 -c "import sys; print(sys.executable)")
-          "$PYTHON" -m pip install --upgrade pip
-          "$PYTHON" -m pip install "maturin>=1.5,<2"
 
       - name: Install maturin (Windows)
         if: matrix.name == 'windows-amd64'
@@ -183,34 +183,35 @@ jobs:
           & "$env:PYTHON" -m pip install --upgrade pip
           & "$env:PYTHON" -m pip install "maturin>=1.5,<2"
 
-      - name: Build artefacts (macOS universal2)
-        if: startsWith(matrix.name, 'macos')
-        env:
-          PYTHON312: ${{ steps.mac_py312.outputs.python-path }}
-          PYTHON313: ${{ steps.mac_py313.outputs.python-path }}
-        working-directory: ${{ env.CRATE_DIR }}
-        run: maturin build ${{ matrix.publish-args }} --interpreter "$PYTHON312" "$PYTHON313"
+      - name: Build artefacts (macOS targets)
+        if: startsWith(matrix.name, 'macos-')
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: ${{ matrix.publish-args }}
+          target: ${{ matrix.target }}
+          working-directory: ${{ env.CRATE_DIR }}
 
       - name: Build cp312 wheel (Windows)
         if: matrix.name == 'windows-amd64'
         env:
           PYTHON: ${{ steps.win_py312.outputs.python-path }}
         working-directory: ${{ env.CRATE_DIR }}
-        run: maturin build --release --interpreter "$env:PYTHON\python.exe"
+        run: maturin build --release --out dist --interpreter "$env:PYTHON\python.exe"
 
       - name: Build cp313 wheel (Windows)
         if: matrix.name == 'windows-amd64'
         env:
           PYTHON: ${{ steps.win_py313.outputs.python-path }}
         working-directory: ${{ env.CRATE_DIR }}
-        run: maturin build --release --interpreter "$env:PYTHON\python.exe"
+        run: maturin build --release --out dist --interpreter "$env:PYTHON\python.exe"
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.name }}
           path: |
-            codetracer-python-recorder/target/wheels/*
+            codetracer-python-recorder/dist/*
           if-no-files-found: error
 
   publish-testpypi:
@@ -257,6 +258,10 @@ jobs:
     environment:
       name: pypi-production
       url: https://pypi.org/project/codetracer-python-recorder/
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -268,6 +273,10 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*'
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
