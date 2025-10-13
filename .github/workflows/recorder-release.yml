@@ -180,8 +180,8 @@ jobs:
         if: matrix.name == 'windows-amd64'
         shell: pwsh
         run: |
-          & "$env:PYTHON" -m pip install --upgrade pip
-          & "$env:PYTHON" -m pip install "maturin>=1.5,<2"
+          & "${{ steps.win_py312.outputs.python-path }}" -m pip install --upgrade pip
+          & "${{ steps.win_py312.outputs.python-path }}" -m pip install "maturin>=1.5,<2"
 
       - name: Build artefacts (macOS targets)
         if: startsWith(matrix.name, 'macos-')
