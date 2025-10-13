@@ -234,7 +234,8 @@ jobs:
       - name: Inspect artefacts
         run: ls -R dist
       - name: Install maturin
-        run: python3 -m pip install --upgrade pip maturin>=1.5,<2
+        run: |
+          python3 -m pip install --upgrade pip "maturin>=1.5,<2"
       - name: Python smoke install (Linux wheel)
         run: |
           python3 scripts/check_recorder_version.py
