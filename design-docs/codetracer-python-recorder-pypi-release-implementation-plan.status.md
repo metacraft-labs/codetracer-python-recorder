@@ -17,5 +17,11 @@
 - ✅ Integrated artefact collection plus a TestPyPI smoke install that exercises the CLI before invoking Trusted Publishing-friendly uploads.
 - ✅ Added a guarded PyPI promotion job that reuses the staged artefacts and requires environment approval prior to publishing.
 
+## Workstream 4 – Operational readiness & documentation
+- ✅ Created `codetracer-python-recorder/CHANGELOG.md` and wired the release checklist to keep it current.
+- ✅ Expanded the release checklist with explicit tagging commands and cross-platform post-release validation steps.
+- ✅ Added a GitHub issue template (`.github/ISSUE_TEMPLATE/recorder-release.yml`) to coordinate future releases using the documented checklist.
+- ✅ Documented operational procedures and Trusted Publishing details in `design-docs/codetracer-python-recorder-release-operations.md`.
+
 ## Next Tasks
 - First tagged release should monitor the new workflow end-to-end and capture any follow-up improvements in the release tracker issue.

@@ -1,0 +1,52 @@
+name: Recorder Release Tracker
+description: Plan, execute, and verify a codetracer-python-recorder release
+title: "Release: codetracer-python-recorder vX.Y.Z"
+labels: ["release", "codetracer-python-recorder"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Use this issue to coordinate a release of `codetracer-python-recorder`.
+        Follow the release checklist in `design-docs/codetracer-python-recorder-pypi-release-checklist.md`
+        and record progress below.
+  - type: input
+    id: version
+    attributes:
+      label: Target version
+      description: The version you plan to publish (e.g., 0.2.0)
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: planning
+    attributes:
+      label: Pre-release planning notes
+      description: Capture any blockers, feature highlights, or coordination tasks.
+      placeholder: >
+        - Pending PRs
+        - Docs to update
+        - Coordination with downstream teams
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: >
+        Tick each item as you complete the steps in the release checklist.
+        Reference links or PRs next to each item where useful.
+      options:
+        - label: Changelog updated and version bumped (pyproject.toml / Cargo.toml)
+        - label: Local validation complete (`just test`, `just smoke-wheel`)
+        - label: Annotated tag pushed (`recorder-vX.Y.Z`)
+        - label: TestPyPI workflow run passed and smoke install verified
+        - label: PyPI promotion approved and workflow completed
+        - label: Post-release validation on Linux, macOS, Windows (3.12 / 3.13)
+        - label: Release notes published and stakeholders notified
+  - type: textarea
+    id: retrospective
+    attributes:
+      label: Post-release notes
+      description: >
+        Document any follow-up work, incidents, or improvements spotted during the release.
+      placeholder: >
+        - Follow-up issue: ...
+        - Automation improvement: ...
