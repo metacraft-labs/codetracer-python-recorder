@@ -197,14 +197,14 @@ jobs:
         env:
           PYTHON: ${{ steps.win_py312.outputs.python-path }}
         working-directory: ${{ env.CRATE_DIR }}
-        run: maturin build --release --out dist --interpreter "$env:PYTHON\python.exe"
+        run: maturin build --release --out dist --interpreter "$env:PYTHON"
 
       - name: Build cp313 wheel (Windows)
         if: matrix.name == 'windows-amd64'
         env:
           PYTHON: ${{ steps.win_py313.outputs.python-path }}
         working-directory: ${{ env.CRATE_DIR }}
-        run: maturin build --release --out dist --interpreter "$env:PYTHON\python.exe"
+        run: maturin build --release --out dist --interpreter "$env:PYTHON"
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
