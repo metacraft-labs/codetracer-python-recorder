@@ -73,7 +73,27 @@ jobs:
         shell: bash
         run: |
           PYTHON=$(command -v python3 || command -v python)
-          VERSION=$("$PYTHON" -c "import importlib, pathlib; tomllib = importlib.import_module('tomllib'); data = tomllib.loads(pathlib.Path('codetracer-python-recorder/pyproject.toml').read_text()); print(data['project']['version'])")
+          VERSION=$("$PYTHON" - <<'PY'
+          from pathlib import Path
+
+          version = None
+          in_project = False
+          for line in Path("codetracer-python-recorder/pyproject.toml").read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("["):
+              in_project = stripped == "[project]"
+              continue
+            if in_project and stripped.startswith("version"):
+              _, _, value = stripped.partition("=")
+              version = value.strip().strip('"')
+              break
+
+          if not version:
+            raise SystemExit("Unable to find [project].version in pyproject.toml")
+
+          print(version)
+          PY
+          )
           echo "package_version=${VERSION}" >> "$GITHUB_OUTPUT"
       - name: Assert tag matches version
         if: startsWith(github.ref, 'refs/tags/')
@@ -92,7 +112,21 @@ jobs:
           command: build
           args: ${{ matrix.publish-args }}
           manylinux: ${{ matrix.manylinux }}
-          before-script-linux: yum install -y capnproto
+          before-script-linux: |
+            set -eux
+            if command -v yum >/dev/null 2>&1; then
+              yum install -y capnproto
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y capnproto
+            elif command -v microdnf >/dev/null 2>&1; then
+              microdnf install -y capnproto
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y capnproto
+            else
+              echo "Unable to install capnproto: no supported package manager found" >&2
+              exit 1
+            fi
           working-directory: codetracer-python-recorder
 
       - name: Install Python 3.12 (macOS)
