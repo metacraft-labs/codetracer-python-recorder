@@ -12,6 +12,10 @@
 - ✅ Expanded the Python API tests to cover end-to-end tracing via `start`/`stop` (`test_start_emits_trace_files`).
 - ✅ Verified `just py-test` passes with the new coverage.
 
+## Workstream 3 – Cross-platform build & publish automation
+- ✅ Added `.github/workflows/recorder-release.yml` with a platform matrix (manylinux x86_64/aarch64, macOS universal2, Windows amd64) and a Linux verification gate reusing our existing test suite.
+- ✅ Integrated artefact collection plus a TestPyPI smoke install that exercises the CLI before invoking Trusted Publishing-friendly uploads.
+- ✅ Added a guarded PyPI promotion job that reuses the staged artefacts and requires environment approval prior to publishing.
+
 ## Next Tasks
-- Kick off Workstream 3: design the cross-platform release workflow (`recorder-release.yml`) and wire in TestPyPI publishing.
-- Add release-pipeline steps to invoke the new smoke install target once the workflow skeleton exists.
+- First tagged release should monitor the new workflow end-to-end and capture any follow-up improvements in the release tracker issue.
