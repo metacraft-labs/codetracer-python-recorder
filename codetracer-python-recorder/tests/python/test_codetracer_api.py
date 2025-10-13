@@ -33,6 +33,22 @@ class TracingApiTests(unittest.TestCase):
                 self.assertIsInstance(session, codetracer.TraceSession)
             self.assertFalse(codetracer.is_tracing())
 
+    def test_start_emits_trace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_dir = Path(tmpdir)
+            codetracer.start(trace_dir)
+            # Execute a small workload to ensure callbacks fire.
+            def _workload() -> int:
+                return sum(range(5))
+
+            self.assertEqual(_workload(), 10)
+            codetracer.stop()
+
+            metadata = trace_dir / "trace_metadata.json"
+            paths = trace_dir / "trace_paths.json"
+            self.assertTrue(metadata.exists(), "expected trace_metadata.json to be created")
+            self.assertTrue(paths.exists(), "expected trace_paths.json to be created")
+
     def test_environment_auto_start(self) -> None:
         script = "import codetracer_python_recorder as codetracer, sys; sys.stdout.write(str(codetracer.is_tracing()))"
         with tempfile.TemporaryDirectory() as tmpdir:

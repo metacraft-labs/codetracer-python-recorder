@@ -67,13 +67,13 @@ coverage-python:
 
 # Build the module in release mode
 build:
-    just venv \
-    uv run --directory codetracer-python-recorder maturin build --release
+    just venv
+    uv run --directory codetracer-python-recorder maturin build --release --sdist
 
 # Build wheels for all target Python versions with maturin
 build-all:
     just venv
-    uv run --directory codetracer-python-recorder maturin build --release --interpreter {{PY_VERSIONS}}
+    uv run --directory codetracer-python-recorder maturin build --release --sdist --interpreter {{PY_VERSIONS}}
 
 # Smoke the built Rust wheels across versions using uv
 test-all:
@@ -82,3 +82,18 @@ test-all:
         file="${file[0]}"; \
         uv run -p "python3.$v" --with "${file}" --with pytest -- pytest -q; \
     done
+
+# Install a freshly built artifact and run a CLI smoke test
+smoke-wheel artifact="wheel" interpreter=".venv/bin/python":
+    just build
+    VENV_DIR="$(mktemp -d)"; \
+    trap 'rm -rf "$VENV_DIR"' EXIT; \
+    "{{interpreter}}" -m venv "$VENV_DIR"; \
+    VENV_PY="$VENV_DIR/bin/python"; \
+    if [ ! -x "$VENV_PY" ]; then \
+        VENV_PY="$VENV_DIR/Scripts/python.exe"; \
+    fi; \
+    "$VENV_PY" -m pip install --upgrade pip; \
+    FILE="$("$VENV_PY" scripts/select_recorder_artifact.py --wheel-dir codetracer-python-recorder/target/wheels --mode "{{artifact}}")"; \
+    "$VENV_PY" -m pip install "$FILE"; \
+    "$VENV_PY" -m codetracer_python_recorder --help >/dev/null
