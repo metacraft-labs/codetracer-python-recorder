@@ -92,6 +92,7 @@ jobs:
           command: build
           args: ${{ matrix.publish-args }}
           manylinux: ${{ matrix.manylinux }}
+          working-directory: codetracer-python-recorder
 
       - name: Install Python 3.12 (macOS)
         if: startsWith(matrix.name, 'macos')
