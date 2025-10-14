@@ -3,11 +3,13 @@
 mod activation;
 mod frame_inspector;
 mod logging;
+mod line_snapshots;
 mod output_paths;
 mod value_capture;
 mod value_encoder;
 
 pub use output_paths::TraceOutputPaths;
+pub use line_snapshots::{FrameId, LineSnapshotStore};
 
 use activation::ActivationController;
 use frame_inspector::capture_frame;
@@ -21,13 +23,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "integration-test")]
 use std::sync::OnceLock;
+use std::sync::Arc;
+use std::thread;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
 use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
+use runtime_tracing::{Line, PathId, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
@@ -66,6 +70,7 @@ pub struct RuntimeTracer {
     events_recorded: bool,
     encountered_failure: bool,
     trace_id: String,
+    line_snapshots: Arc<LineSnapshotStore>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,7 +233,14 @@ impl RuntimeTracer {
             events_recorded: false,
             encountered_failure: false,
             trace_id: Uuid::new_v4().to_string(),
+            line_snapshots: Arc::new(LineSnapshotStore::new()),
         }
+    }
+
+    /// Share the snapshot store with collaborators (IO capture, tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn line_snapshot_store(&self) -> Arc<LineSnapshotStore> {
+        Arc::clone(&self.line_snapshots)
     }
 
     /// Configure output files and write initial metadata records.
@@ -433,12 +445,24 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_line", Some(lineno));
 
+        let line_value = Line(lineno as i64);
+        let mut recorded_path: Option<(PathId, Line)> = None;
+
         if let Ok(filename) = code.filename(py) {
-            TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
+            let path = Path::new(filename);
+            let path_id = TraceWriter::ensure_path_id(&mut self.writer, path);
+            TraceWriter::register_step(&mut self.writer, path, line_value);
             self.mark_event();
+            recorded_path = Some((path_id, line_value));
         }
 
         let snapshot = capture_frame(py, code)?;
+
+        if let Some((path_id, line)) = recorded_path {
+            let frame_id = FrameId::from_raw(snapshot.frame_ptr() as usize as u64);
+            self.line_snapshots
+                .record(thread::current().id(), path_id, line, frame_id);
+        }
 
         let mut recorded: HashSet<String> = HashSet::new();
         record_visible_scope(py, &mut self.writer, &snapshot, &mut recorded);
@@ -537,6 +561,7 @@ impl Tracer for RuntimeTracer {
             }
             self.ignored_code_ids.clear();
             self.function_ids.clear();
+            self.line_snapshots.clear();
             return Ok(());
         }
 
@@ -545,6 +570,7 @@ impl Tracer for RuntimeTracer {
         self.finalise_writer().map_err(ffi::map_recorder_error)?;
         self.ignored_code_ids.clear();
         self.function_ids.clear();
+        self.line_snapshots.clear();
         Ok(())
     }
 }
@@ -556,10 +582,11 @@ mod tests {
     use crate::policy;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
-    use runtime_tracing::{FullValueRecord, TraceLowLevelEvent, ValueRecord};
+    use runtime_tracing::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
     use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::ffi::CString;
+    use std::thread;
 
     thread_local! {
         static ACTIVE_TRACER: Cell<*mut RuntimeTracer> = Cell::new(std::ptr::null_mut());
@@ -731,6 +758,53 @@ result = compute()\n"
             );
             assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
             assert!(!tracer.activation.is_active());
+        });
+    }
+
+    #[test]
+    fn line_snapshot_store_tracks_last_step() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let script_path = tmp.path().join("snapshot_script.py");
+            let script = format!("{PRELUDE}\n\nsnapshot()\n");
+            std::fs::write(&script_path, &script).expect("write script");
+
+            let mut tracer =
+                RuntimeTracer::new("snapshot_script.py", &[], TraceEventsFileFormat::Json, None);
+            let store = tracer.line_snapshot_store();
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute snapshot script");
+            }
+
+            let last_step: StepRecord = tracer
+                .writer
+                .events
+                .iter()
+                .rev()
+                .find_map(|event| match event {
+                    TraceLowLevelEvent::Step(step) => Some(step.clone()),
+                    _ => None,
+                })
+                .expect("expected one step event");
+
+            let thread_id = thread::current().id();
+            let snapshot = store
+                .snapshot_for_thread(thread_id)
+                .expect("snapshot should be recorded");
+
+            assert_eq!(snapshot.line(), last_step.line);
+            assert_eq!(snapshot.path_id(), last_step.path_id);
+            assert!(snapshot.captured_at().elapsed().as_secs_f64() >= 0.0);
         });
     }
 

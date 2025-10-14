@@ -40,6 +40,11 @@ impl<'py> FrameSnapshot<'py> {
     pub fn locals_is_globals(&self) -> bool {
         self.locals_is_globals
     }
+
+    /// Expose the raw frame pointer for correlation purposes.
+    pub fn frame_ptr(&self) -> *mut ffi::PyFrameObject {
+        self.frame_ptr
+    }
 }
 
 impl<'py> Drop for FrameSnapshot<'py> {
