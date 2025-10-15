@@ -4,6 +4,7 @@ mod activation;
 mod frame_inspector;
 mod logging;
 mod line_snapshots;
+mod io_lines;
 mod output_paths;
 mod value_capture;
 mod value_encoder;
