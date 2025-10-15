@@ -25,6 +25,7 @@ def test_parse_args_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert config.trace_dir == (tmp_path / "trace-out").resolve()
     assert config.format == formats.DEFAULT_FORMAT
     assert config.activation_path == script.resolve()
+    assert config.policy_overrides == {}
 
 
 def test_parse_args_accepts_custom_trace_dir(tmp_path: Path) -> None:
@@ -64,3 +65,34 @@ def test_parse_args_handles_activation_and_script_args(tmp_path: Path) -> None:
 
     assert config.activation_path == activation.resolve()
     assert config.script_args == ["--flag", "value"]
+    assert config.policy_overrides == {}
+
+
+def test_parse_args_collects_policy_overrides(tmp_path: Path) -> None:
+    script = tmp_path / "entry.py"
+    _write_script(script)
+    log_file = tmp_path / "logs" / "recorder.log"
+
+    config = _parse_args(
+        [
+            "--on-recorder-error",
+            "disable",
+            "--require-trace",
+            "--keep-partial-trace",
+            "--log-level",
+            "debug",
+            "--log-file",
+            str(log_file),
+            "--json-errors",
+            str(script),
+        ]
+    )
+
+    assert config.policy_overrides == {
+        "on_recorder_error": "disable",
+        "require_trace": True,
+        "keep_partial_trace": True,
+        "log_level": "debug",
+        "log_file": (tmp_path / "logs" / "recorder.log").resolve(),
+        "json_errors": True,
+    }

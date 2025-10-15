@@ -52,6 +52,13 @@ def test_cli_emits_trace_artifacts(tmp_path: Path) -> None:
         str(trace_dir),
         "--format",
         "json",
+        "--on-recorder-error",
+        "disable",
+        "--require-trace",
+        "--keep-partial-trace",
+        "--log-level",
+        "info",
+        "--json-errors",
     ]
     args.append(str(script))
 

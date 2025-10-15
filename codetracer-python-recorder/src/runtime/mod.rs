@@ -15,20 +15,43 @@ use logging::log_event;
 use value_capture::{capture_call_arguments, record_return_value, record_visible_scope};
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "integration-test")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "integration-test")]
+use std::sync::OnceLock;
 
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
+use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::code_object::CodeObjectWrapper;
+use crate::ffi;
+use crate::logging::{record_dropped_event, set_active_trace_id, with_error_code};
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
+use crate::policy::{policy_snapshot, RecorderPolicy};
 
-// Logging is handled via the `log` crate macros (e.g., log::debug!).
+use uuid::Uuid;
+
+struct TraceIdResetGuard;
+
+impl TraceIdResetGuard {
+    fn new() -> Self {
+        TraceIdResetGuard
+    }
+}
+
+impl Drop for TraceIdResetGuard {
+    fn drop(&mut self) {
+        set_active_trace_id(None);
+    }
+}
 
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
@@ -39,12 +62,143 @@ pub struct RuntimeTracer {
     program_path: PathBuf,
     ignored_code_ids: HashSet<usize>,
     function_ids: HashMap<usize, runtime_tracing::FunctionId>,
+    output_paths: Option<TraceOutputPaths>,
+    events_recorded: bool,
+    encountered_failure: bool,
+    trace_id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShouldTrace {
     Trace,
     SkipAndDisable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureStage {
+    PyStart,
+    Line,
+    Finish,
+}
+
+impl FailureStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            FailureStage::PyStart => "py_start",
+            FailureStage::Line => "line",
+            FailureStage::Finish => "finish",
+        }
+    }
+}
+
+// Failure injection helpers are only compiled for integration tests.
+#[cfg_attr(not(feature = "integration-test"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureMode {
+    Stage(FailureStage),
+    SuppressEvents,
+    TargetArgs,
+    Panic,
+}
+
+#[cfg(feature = "integration-test")]
+static FAILURE_MODE: OnceLock<Option<FailureMode>> = OnceLock::new();
+#[cfg(feature = "integration-test")]
+static FAILURE_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "integration-test")]
+fn configured_failure_mode() -> Option<FailureMode> {
+    *FAILURE_MODE.get_or_init(|| {
+        let raw = std::env::var("CODETRACER_TEST_INJECT_FAILURE").ok();
+        if let Some(value) = raw.as_deref() {
+            log::debug!("[RuntimeTracer] test failure injection mode: {}", value);
+        }
+        raw.and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+            "py_start" | "py-start" => Some(FailureMode::Stage(FailureStage::PyStart)),
+            "line" => Some(FailureMode::Stage(FailureStage::Line)),
+            "finish" => Some(FailureMode::Stage(FailureStage::Finish)),
+            "suppress-events" | "suppress_events" | "suppress" => Some(FailureMode::SuppressEvents),
+            "target" | "target-args" | "target_args" => Some(FailureMode::TargetArgs),
+            "panic" | "panic-callback" | "panic_callback" => Some(FailureMode::Panic),
+            _ => None,
+        })
+    })
+}
+
+#[cfg(feature = "integration-test")]
+fn should_inject_failure(stage: FailureStage) -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::Stage(mode)) if mode == stage)
+        && mark_failure_triggered()
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn should_inject_failure(_stage: FailureStage) -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn should_inject_target_error() -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::TargetArgs))
+        && mark_failure_triggered()
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn should_inject_target_error() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn should_panic_in_callback() -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::Panic)) && mark_failure_triggered()
+}
+
+#[cfg(not(feature = "integration-test"))]
+#[allow(dead_code)]
+fn should_panic_in_callback() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn suppress_events() -> bool {
+    matches!(configured_failure_mode(), Some(FailureMode::SuppressEvents))
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn suppress_events() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn mark_failure_triggered() -> bool {
+    !FAILURE_TRIGGERED.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(not(feature = "integration-test"))]
+#[allow(dead_code)]
+fn mark_failure_triggered() -> bool {
+    false
+}
+
+#[cfg(feature = "integration-test")]
+fn injected_failure_err(stage: FailureStage) -> PyErr {
+    let err = bug!(
+        ErrorCode::TraceIncomplete,
+        "test-injected failure at {}",
+        stage.as_str()
+    )
+    .with_context("injection_stage", stage.as_str().to_string());
+    ffi::map_recorder_error(err)
+}
+
+#[cfg(not(feature = "integration-test"))]
+fn injected_failure_err(stage: FailureStage) -> PyErr {
+    let err = bug!(
+        ErrorCode::TraceIncomplete,
+        "failure injection requested at {} without fail-injection feature",
+        stage.as_str()
+    )
+    .with_context("injection_stage", stage.as_str().to_string());
+    ffi::map_recorder_error(err)
 }
 
 fn is_real_filename(filename: &str) -> bool {
@@ -70,6 +224,10 @@ impl RuntimeTracer {
             program_path,
             ignored_code_ids: HashSet::new(),
             function_ids: HashMap::new(),
+            output_paths: None,
+            events_recorded: false,
+            encountered_failure: false,
+            trace_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -79,7 +237,65 @@ impl RuntimeTracer {
         log::debug!("{}", start_path.display());
         outputs
             .configure_writer(&mut self.writer, start_path, start_line)
-            .map_err(to_py_err)
+            .map_err(ffi::map_recorder_error)?;
+        self.output_paths = Some(outputs.clone());
+        self.events_recorded = false;
+        self.encountered_failure = false;
+        set_active_trace_id(Some(self.trace_id.clone()));
+        Ok(())
+    }
+
+    fn mark_event(&mut self) {
+        if suppress_events() {
+            log::debug!("[RuntimeTracer] skipping event mark due to test injection");
+            return;
+        }
+        self.events_recorded = true;
+    }
+
+    fn mark_failure(&mut self) {
+        self.encountered_failure = true;
+    }
+
+    fn cleanup_partial_outputs(&self) -> RecorderResult<()> {
+        if let Some(outputs) = &self.output_paths {
+            for path in [outputs.events(), outputs.metadata(), outputs.paths()] {
+                if path.exists() {
+                    fs::remove_file(path).map_err(|err| {
+                        enverr!(ErrorCode::Io, "failed to remove partial trace file")
+                            .with_context("path", path.display().to_string())
+                            .with_context("io", err.to_string())
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn require_trace_or_fail(&self, policy: &RecorderPolicy) -> RecorderResult<()> {
+        if policy.require_trace && !self.events_recorded {
+            return Err(usage!(
+                ErrorCode::TraceMissing,
+                "recorder policy requires a trace but no events were recorded"
+            ));
+        }
+        Ok(())
+    }
+
+    fn finalise_writer(&mut self) -> RecorderResult<()> {
+        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to finalise trace metadata")
+                .with_context("source", err.to_string())
+        })?;
+        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to finalise trace paths")
+                .with_context("source", err.to_string())
+        })?;
+        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to finalise trace events")
+                .with_context("source", err.to_string())
+        })?;
+        Ok(())
     }
 
     fn ensure_function_id(
@@ -109,20 +325,25 @@ impl RuntimeTracer {
         if self.ignored_code_ids.contains(&code_id) {
             return ShouldTrace::SkipAndDisable;
         }
-        let filename = code
-            .filename(py)
-            .expect("RuntimeTracer::should_trace_code failed to resolve filename");
+        let filename = match code.filename(py) {
+            Ok(name) => name,
+            Err(err) => {
+                with_error_code(ErrorCode::Io, || {
+                    log::error!("failed to resolve code filename: {err}");
+                });
+                record_dropped_event("filename_lookup_failed");
+                self.ignored_code_ids.insert(code_id);
+                return ShouldTrace::SkipAndDisable;
+            }
+        };
         if is_real_filename(filename) {
             ShouldTrace::Trace
         } else {
             self.ignored_code_ids.insert(code_id);
+            record_dropped_event("synthetic_filename");
             ShouldTrace::SkipAndDisable
         }
     }
-}
-
-fn to_py_err(e: Box<dyn std::error::Error>) -> pyo3::PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
 }
 
 impl Tracer for RuntimeTracer {
@@ -148,17 +369,40 @@ impl Tracer for RuntimeTracer {
             return Ok(CallbackOutcome::Continue);
         }
 
+        if should_inject_failure(FailureStage::PyStart) {
+            return Err(injected_failure_err(FailureStage::PyStart));
+        }
+
+        if should_inject_target_error() {
+            return Err(ffi::map_recorder_error(
+                target!(
+                    ErrorCode::TraceIncomplete,
+                    "test-injected target error from capture_call_arguments"
+                )
+                .with_context("injection_stage", "capture_call_arguments"),
+            ));
+        }
+
         log_event(py, code, "on_py_start", None);
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
             match capture_call_arguments(py, &mut self.writer, code) {
                 Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
                 Err(err) => {
-                    let message = format!("on_py_start: failed to capture args: {}", err);
-                    log::error!("{message}");
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(message));
+                    let details = err.to_string();
+                    with_error_code(ErrorCode::FrameIntrospectionFailed, || {
+                        log::error!("on_py_start: failed to capture args: {details}");
+                    });
+                    return Err(ffi::map_recorder_error(
+                        enverr!(
+                            ErrorCode::FrameIntrospectionFailed,
+                            "failed to capture call arguments"
+                        )
+                        .with_context("details", details),
+                    ));
                 }
             }
+            self.mark_event();
         }
 
         Ok(CallbackOutcome::Continue)
@@ -176,10 +420,22 @@ impl Tracer for RuntimeTracer {
             return Ok(CallbackOutcome::Continue);
         }
 
+        if should_inject_failure(FailureStage::Line) {
+            return Err(injected_failure_err(FailureStage::Line));
+        }
+
+        #[cfg(feature = "integration-test")]
+        {
+            if should_panic_in_callback() {
+                panic!("test-injected panic in on_line");
+            }
+        }
+
         log_event(py, code, "on_line", Some(lineno));
 
         if let Ok(filename) = code.filename(py) {
             TraceWriter::register_step(&mut self.writer, Path::new(filename), Line(lineno as i64));
+            self.mark_event();
         }
 
         let snapshot = capture_frame(py, code)?;
@@ -211,11 +467,17 @@ impl Tracer for RuntimeTracer {
         log_event(py, code, "on_py_return", None);
 
         record_return_value(py, &mut self.writer, retval);
+        self.mark_event();
         if self.activation.handle_return_event(code.id()) {
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
 
         Ok(CallbackOutcome::Continue)
+    }
+
+    fn notify_failure(&mut self, _py: Python<'_>) -> PyResult<()> {
+        self.mark_failure();
+        Ok(())
     }
 
     fn flush(&mut self, _py: Python<'_>) -> PyResult<()> {
@@ -224,7 +486,12 @@ impl Tracer for RuntimeTracer {
         // For non-streaming formats we can update the events file.
         match self.format {
             TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
-                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
+                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
+                    ffi::map_recorder_error(
+                        enverr!(ErrorCode::Io, "failed to finalise trace events")
+                            .with_context("source", err.to_string()),
+                    )
+                })?;
             }
             TraceEventsFileFormat::Binary => {
                 // Streaming writer: no partial flush to avoid closing the stream.
@@ -237,9 +504,45 @@ impl Tracer for RuntimeTracer {
     fn finish(&mut self, _py: Python<'_>) -> PyResult<()> {
         // Trace event entry
         log::debug!("[RuntimeTracer] finish");
-        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(to_py_err)?;
-        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(to_py_err)?;
-        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(to_py_err)?;
+
+        if should_inject_failure(FailureStage::Finish) {
+            return Err(injected_failure_err(FailureStage::Finish));
+        }
+
+        set_active_trace_id(Some(self.trace_id.clone()));
+        let _reset = TraceIdResetGuard::new();
+        let policy = policy_snapshot();
+
+        if self.encountered_failure {
+            if policy.keep_partial_trace {
+                if let Err(err) = self.finalise_writer() {
+                    with_error_code(ErrorCode::TraceIncomplete, || {
+                        log::warn!(
+                            "failed to finalise partial trace after disable: {}",
+                            err.message()
+                        );
+                    });
+                }
+                if let Some(outputs) = &self.output_paths {
+                    with_error_code(ErrorCode::TraceIncomplete, || {
+                        log::warn!(
+                            "recorder detached after failure; keeping partial trace at {}",
+                            outputs.events().display()
+                        );
+                    });
+                }
+            } else {
+                self.cleanup_partial_outputs()
+                    .map_err(ffi::map_recorder_error)?;
+            }
+            self.ignored_code_ids.clear();
+            self.function_ids.clear();
+            return Ok(());
+        }
+
+        self.require_trace_or_fail(&policy)
+            .map_err(ffi::map_recorder_error)?;
+        self.finalise_writer().map_err(ffi::map_recorder_error)?;
         self.ignored_code_ids.clear();
         self.function_ids.clear();
         Ok(())
@@ -250,6 +553,7 @@ impl Tracer for RuntimeTracer {
 mod tests {
     use super::*;
     use crate::monitoring::CallbackOutcome;
+    use crate::policy;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, TraceLowLevelEvent, ValueRecord};
@@ -280,6 +584,18 @@ mod tests {
 
     fn last_outcome() -> Option<CallbackOutcome> {
         LAST_OUTCOME.with(|cell| cell.get())
+    }
+
+    fn reset_policy(_py: Python<'_>) {
+        policy::configure_policy_py(
+            Some("abort"),
+            Some(false),
+            Some(false),
+            None,
+            None,
+            Some(false),
+        )
+        .expect("reset recorder policy");
     }
 
     #[test]
@@ -420,24 +736,26 @@ result = compute()\n"
 
     #[pyfunction]
     fn capture_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
-        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
-            let ptr = cell.get();
-            if ptr.is_null() {
-                panic!("No active RuntimeTracer for capture_line");
-            }
-            unsafe {
-                let tracer = &mut *ptr;
-                let wrapper = CodeObjectWrapper::new(py, &code);
-                match tracer.on_line(py, &wrapper, lineno) {
-                    Ok(outcome) => {
-                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
+        ffi::wrap_pyfunction("test_capture_line", || {
+            ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+                let ptr = cell.get();
+                if ptr.is_null() {
+                    panic!("No active RuntimeTracer for capture_line");
                 }
-            }
-        })?;
-        Ok(())
+                unsafe {
+                    let tracer = &mut *ptr;
+                    let wrapper = CodeObjectWrapper::new(py, &code);
+                    match tracer.on_line(py, &wrapper, lineno) {
+                        Ok(outcome) => {
+                            LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            })?;
+            Ok(())
+        })
     }
 
     #[pyfunction]
@@ -446,24 +764,26 @@ result = compute()\n"
         code: Bound<'_, PyCode>,
         value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        ACTIVE_TRACER.with(|cell| -> PyResult<()> {
-            let ptr = cell.get();
-            if ptr.is_null() {
-                panic!("No active RuntimeTracer for capture_return_event");
-            }
-            unsafe {
-                let tracer = &mut *ptr;
-                let wrapper = CodeObjectWrapper::new(py, &code);
-                match tracer.on_py_return(py, &wrapper, 0, &value) {
-                    Ok(outcome) => {
-                        LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
+        ffi::wrap_pyfunction("test_capture_return_event", || {
+            ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+                let ptr = cell.get();
+                if ptr.is_null() {
+                    panic!("No active RuntimeTracer for capture_return_event");
                 }
-            }
-        })?;
-        Ok(())
+                unsafe {
+                    let tracer = &mut *ptr;
+                    let wrapper = CodeObjectWrapper::new(py, &code);
+                    match tracer.on_py_return(py, &wrapper, 0, &value) {
+                        Ok(outcome) => {
+                            LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            })?;
+            Ok(())
+        })
     }
 
     const PRELUDE: &str = r#"
@@ -1036,5 +1356,120 @@ snapshot()
         let len_snapshot = find_snapshot_with_vars(&snapshots, &["n"]);
         assert_var(len_snapshot, "n", SimpleValue::Int(3));
         assert_no_variable(&snapshots, "len");
+    }
+
+    #[test]
+    fn finish_enforces_require_trace_policy() {
+        Python::with_gil(|py| {
+            policy::configure_policy_py(
+                Some("abort"),
+                Some(true),
+                Some(false),
+                None,
+                None,
+                Some(false),
+            )
+            .expect("enable require_trace policy");
+
+            let script_dir = tempfile::tempdir().expect("script dir");
+            let program_path = script_dir.path().join("program.py");
+            std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+
+            let err = tracer
+                .finish(py)
+                .expect_err("finish should error when require_trace true");
+            let message = err.to_string();
+            assert!(
+                message.contains("ERR_TRACE_MISSING"),
+                "expected trace missing error, got {message}"
+            );
+
+            reset_policy(py);
+        });
+    }
+
+    #[test]
+    fn finish_removes_partial_outputs_when_policy_forbids_keep() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+
+            let script_dir = tempfile::tempdir().expect("script dir");
+            let program_path = script_dir.path().join("program.py");
+            std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            tracer.mark_failure();
+
+            tracer.finish(py).expect("finish after failure");
+
+            assert!(!outputs.events().exists(), "expected events file removed");
+            assert!(
+                !outputs.metadata().exists(),
+                "expected metadata file removed"
+            );
+            assert!(!outputs.paths().exists(), "expected paths file removed");
+        });
+    }
+
+    #[test]
+    fn finish_keeps_partial_outputs_when_policy_allows() {
+        Python::with_gil(|py| {
+            policy::configure_policy_py(
+                Some("abort"),
+                Some(false),
+                Some(true),
+                None,
+                None,
+                Some(false),
+            )
+            .expect("enable keep_partial policy");
+
+            let script_dir = tempfile::tempdir().expect("script dir");
+            let program_path = script_dir.path().join("program.py");
+            std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            tracer.mark_failure();
+
+            tracer.finish(py).expect("finish after failure");
+
+            assert!(outputs.events().exists(), "expected events file retained");
+            assert!(
+                outputs.metadata().exists(),
+                "expected metadata file retained"
+            );
+            assert!(outputs.paths().exists(), "expected paths file retained");
+
+            reset_policy(py);
+        });
     }
 }

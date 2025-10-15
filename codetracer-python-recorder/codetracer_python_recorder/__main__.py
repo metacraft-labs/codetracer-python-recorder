@@ -1,4 +1,4 @@
-"""Thin wrapper for running the recorder CLI via ``python -m``."""
+"""Entry point for ``python -m codetracer_python_recorder``."""
 from __future__ import annotations
 
 from .cli import main

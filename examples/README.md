@@ -2,7 +2,7 @@ Examples for exercising the Rust‑backed recorder during development.
 
 Run any script via the module CLI so tracing is consistently enabled:
 
-  python -m codetracer_python_recorder --codetracer-format=json examples/<script>.py
+  python -m codetracer_python_recorder --format=json examples/<script>.py
 
 Scripts
 
@@ -17,4 +17,3 @@ Scripts
 - kwargs_nested.py: Nested kwargs structure to validate structured encoding.
 
 All scripts are deterministic and print minimal output.
-
