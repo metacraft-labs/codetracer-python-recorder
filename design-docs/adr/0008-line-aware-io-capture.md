@@ -19,7 +19,7 @@
 - The solution must restore the original streams even if tracing crashes or the user stops tracing inside a `finally` block.
 
 ## Decision
-1. Introduce `runtime::io_lines` with one public type, `IoStreamProxies`. It owns the original `{stdout, stderr, stdin}` objects and exposes `install(py)` / `uninstall(py)` helpers.
+1. Introduce `runtime::io_capture` with one public type, `IoStreamProxies`. It owns the original `{stdout, stderr, stdin}` objects and exposes `install(py)` / `uninstall(py)` helpers.
 2. Provide three PyO3 classes: `LineAwareStdout`, `LineAwareStderr`, and `LineAwareStdin`. They proxy every method we rely on (`write`, `writelines`, `flush`, `read`, `readline`, `readinto`, iteration).
 3. Each proxy calls back into Rust. The callback grabs the per-thread `LineSnapshot` maintained by the monitoring layer. When the snapshot is missing we record `None` and mark the IO chunk as "detached".
 4. The callback forwards the payload to the original stream right away so the console stays live. We record the chunk in an `IoEventSink` right after the forward call while we still hold the GIL.

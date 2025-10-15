@@ -10,7 +10,7 @@ This plan replaces the old pipe-based capture plan. Sentences stay short for eas
 - Exit: recorder still passes `just test`, tracing lifecycle unaffected.
 
 ## Stage 1 – Build IO proxy classes
-- Create `runtime::io_lines` module with the PyO3 proxy structs (`LineAwareStdout`, `LineAwareStderr`, `LineAwareStdin`).
+- Create `runtime::io_capture::proxies` module with the PyO3 proxy structs (`LineAwareStdout`, `LineAwareStderr`, `LineAwareStdin`).
 - Each proxy holds the original stream, a weak pointer to the shared `IoEventSink`, and a reentrancy guard.
 - Implement the Python surface: `write`, `writelines`, `flush` for output; `read`, `readline`, `readinto`, `__iter__`, `__next__` for input. Methods delegate to the original stream.
 - Capture payloads before returning. Store them together with the current thread id.
