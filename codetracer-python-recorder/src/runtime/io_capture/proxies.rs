@@ -93,6 +93,9 @@ impl OutputProxy {
             thread_id: current_thread_id(),
             timestamp: now(),
             frame_id: None,
+            path_id: None,
+            line: None,
+            path: None,
         };
         self.sink.record(py, event);
     }
@@ -325,6 +328,9 @@ impl LineAwareStdin {
             thread_id: current_thread_id(),
             timestamp: now(),
             frame_id: None,
+            path_id: None,
+            line: None,
+            path: None,
         };
         self.sink.record(py, event);
     }
@@ -442,9 +448,6 @@ impl LineAwareStdin {
     }
 
     fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
-        self.original
-            .bind(py)
-            .getattr(name)
-            .map(|obj| obj.unbind())
+        self.original.bind(py).getattr(name).map(|obj| obj.unbind())
     }
 }

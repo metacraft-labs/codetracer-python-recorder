@@ -6,7 +6,6 @@ use std::sync::Arc;
 #[cfg_attr(not(test), allow(dead_code))]
 /// Controller that installs the proxies and restores the original streams.
 pub struct IoStreamProxies {
-    _sink: Arc<dyn ProxySink>,
     _stdout_proxy: Py<LineAwareStdout>,
     _stderr_proxy: Py<LineAwareStderr>,
     _stdin_proxy: Py<LineAwareStdin>,
@@ -24,19 +23,24 @@ impl IoStreamProxies {
         let stderr_original = sys.getattr("stderr")?.unbind();
         let stdin_original = sys.getattr("stdin")?.unbind();
 
-        let stdout_proxy =
-            Py::new(py, LineAwareStdout::new(stdout_original.clone_ref(py), sink.clone()))?;
-        let stderr_proxy =
-            Py::new(py, LineAwareStderr::new(stderr_original.clone_ref(py), sink.clone()))?;
-        let stdin_proxy =
-            Py::new(py, LineAwareStdin::new(stdin_original.clone_ref(py), sink.clone()))?;
+        let stdout_proxy = Py::new(
+            py,
+            LineAwareStdout::new(stdout_original.clone_ref(py), sink.clone()),
+        )?;
+        let stderr_proxy = Py::new(
+            py,
+            LineAwareStderr::new(stderr_original.clone_ref(py), sink.clone()),
+        )?;
+        let stdin_proxy = Py::new(
+            py,
+            LineAwareStdin::new(stdin_original.clone_ref(py), sink.clone()),
+        )?;
 
         sys.setattr("stdout", stdout_proxy.clone_ref(py))?;
         sys.setattr("stderr", stderr_proxy.clone_ref(py))?;
         sys.setattr("stdin", stdin_proxy.clone_ref(py))?;
 
         Ok(Self {
-            _sink: sink,
             _stdout_proxy: stdout_proxy,
             _stderr_proxy: stderr_proxy,
             _stdin_proxy: stdin_proxy,
@@ -58,7 +62,6 @@ impl IoStreamProxies {
         self.installed = false;
         Ok(())
     }
-
 }
 
 impl Drop for IoStreamProxies {

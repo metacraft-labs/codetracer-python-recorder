@@ -11,6 +11,7 @@ use recorder_errors::{usage, ErrorCode};
 use crate::ffi;
 use crate::logging::init_rust_logging_with_default;
 use crate::monitoring::{flush_installed_tracer, install_tracer, uninstall_tracer};
+use crate::policy::policy_snapshot;
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
 use bootstrap::TraceSessionBootstrap;
 
@@ -43,6 +44,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
             .map_err(ffi::map_recorder_error)?;
 
             let outputs = TraceOutputPaths::new(bootstrap.trace_directory(), bootstrap.format());
+            let policy = policy_snapshot();
 
             let mut tracer = RuntimeTracer::new(
                 bootstrap.program(),
@@ -51,6 +53,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
                 bootstrap.activation_path(),
             );
             tracer.begin(&outputs, 1)?;
+            tracer.install_io_capture(py, &policy)?;
 
             // Install callbacks
             install_tracer(py, Box::new(tracer))?;

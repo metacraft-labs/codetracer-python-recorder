@@ -1,5 +1,6 @@
 use crate::runtime::line_snapshots::FrameId;
 use pyo3::Python;
+use runtime_tracing::{Line, PathId};
 use std::fmt;
 use std::thread::ThreadId;
 use std::time::Instant;
@@ -43,6 +44,9 @@ pub struct ProxyEvent {
     pub thread_id: ThreadId,
     pub timestamp: Instant,
     pub frame_id: Option<FrameId>,
+    pub path_id: Option<PathId>,
+    pub line: Option<Line>,
+    pub path: Option<String>,
 }
 
 /// Sink for proxy events. Later stages swap in a real writer-backed implementation.

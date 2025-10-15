@@ -15,11 +15,11 @@
 - ✅ **Stage 0 – Prepare runtime hooks:** Added `LineSnapshotStore` with per-thread records (`path_id`, `line`, `frame_id`, timestamp), wired it into `RuntimeTracer::on_line`, exposed a read-only handle, and covered the store with unit plus integration tests. Cleanup paths clear the store on tracer finish.
 - ✅ **Stage 1 – Build IO proxy classes:** Brought `runtime::io_capture::proxies` into the build, ported the proxy implementations to the PyO3 0.25 Bound/IntoPyObject APIs, and restored the unit tests that verify stdout/stderr passthrough, stdin reads, and the reentrancy guard. `just test` now exercises the proxies end-to-end.
 - ✅ **Stage 2 – Implement IoEventSink and batching:** Added the `IoChunk` model plus a `IoEventSink` batching layer that groups stdout/stderr writes per thread, flushes on newline, explicit `flush()`, step boundaries, and 5 ms gaps, and emits stdin reads immediately. Updated the proxies to surface flush events and introduced focused unit tests that cover batching, timer splits, step flushes, and stdin capture. `just test` runs the sink tests alongside the existing proxy coverage.
-- ⏳ **Stage 3 – Wire proxies into lifecycle:** Not started.
+- ✅ **Stage 3 – Wire proxies into lifecycle:** `RuntimeTracer::install_io_capture` now instantiates the sink, installs the proxies behind the policy flag, and drains/flushed buffered chunks at step and finish boundaries. `IoChunk` records path IDs, frame IDs, and thread IDs sourced from the `LineSnapshotStore`, with a Python stack fallback filling metadata when monitoring snapshots are not yet available. Metadata emitted by `RecordEvent` now includes `path_id`, `line`, and `frame_id` for stdout/stderr chunks, and the Stage 3 integration test passes end-to-end.
 - ⏳ **Stage 4 – Optional FD mirror:** Not started.
 - ⏳ **Stage 5 – Hardening and docs:** Not started.
 
 ## Next Steps
-1. Integrate `IoEventSink` with the runtime lifecycle (Stage 3): add policy wiring, install the sink during `start_tracing`, and ensure teardown restores the original streams.
-2. Thread the snapshot store into the sink so chunks carry the active frame and flush before step hooks fire from the monitoring callbacks.
-3. Guard recorder logging (`ScopedMuteIoCapture`) once the sink is active to prevent recursive capture and begin shaping the trace event conversions.
+1. Stage 4: explore an optional OS-level file descriptor mirror so native writes bypassing Python buffers can still be captured when the policy enables it.
+2. Stage 5 hardening: tighten logging guards (`ScopedMuteIoCapture`), expand integration coverage (policy disabled paths, multi-threaded writers), and document configuration knobs for IO capture.
+3. Evaluate performance impact of the Python stack fallback and gate it behind monitoring snapshots once `sys.monitoring` integration fully drives the snapshot store.

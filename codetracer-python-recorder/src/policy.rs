@@ -20,6 +20,8 @@ pub const ENV_LOG_LEVEL: &str = "CODETRACER_LOG_LEVEL";
 pub const ENV_LOG_FILE: &str = "CODETRACER_LOG_FILE";
 /// Environment variable enabling JSON error trailers on stderr.
 pub const ENV_JSON_ERRORS: &str = "CODETRACER_JSON_ERRORS";
+/// Environment variable toggling IO capture strategies.
+pub const ENV_CAPTURE_IO: &str = "CODETRACER_CAPTURE_IO";
 
 static POLICY: OnceCell<RwLock<RecorderPolicy>> = OnceCell::new();
 
@@ -61,6 +63,21 @@ impl FromStr for OnRecorderError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IoCapturePolicy {
+    pub line_proxies: bool,
+    pub fd_fallback: bool,
+}
+
+impl Default for IoCapturePolicy {
+    fn default() -> Self {
+        Self {
+            line_proxies: true,
+            fd_fallback: false,
+        }
+    }
+}
+
 /// Recorder-wide runtime configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecorderPolicy {
@@ -70,6 +87,7 @@ pub struct RecorderPolicy {
     pub log_level: Option<String>,
     pub log_file: Option<PathBuf>,
     pub json_errors: bool,
+    pub io_capture: IoCapturePolicy,
 }
 
 impl Default for RecorderPolicy {
@@ -81,6 +99,7 @@ impl Default for RecorderPolicy {
             log_level: None,
             log_file: None,
             json_errors: false,
+            io_capture: IoCapturePolicy::default(),
         }
     }
 }
@@ -111,6 +130,16 @@ impl RecorderPolicy {
         if let Some(json_errors) = update.json_errors {
             self.json_errors = json_errors;
         }
+        if let Some(line_proxies) = update.io_capture_line_proxies {
+            self.io_capture.line_proxies = line_proxies;
+            if !self.io_capture.line_proxies {
+                self.io_capture.fd_fallback = false;
+            }
+        }
+        if let Some(fd_fallback) = update.io_capture_fd_fallback {
+            // fd fallback requires proxies to be on.
+            self.io_capture.fd_fallback = fd_fallback && self.io_capture.line_proxies;
+        }
     }
 }
 
@@ -130,6 +159,8 @@ struct PolicyUpdate {
     log_level: Option<String>,
     log_file: Option<PolicyPath>,
     json_errors: Option<bool>,
+    io_capture_line_proxies: Option<bool>,
+    io_capture_fd_fallback: Option<bool>,
 }
 
 /// Snapshot the current policy.
@@ -178,6 +209,12 @@ pub fn configure_policy_from_env() -> RecorderResult<()> {
         update.json_errors = Some(parse_bool(&value)?);
     }
 
+    if let Ok(value) = env::var(ENV_CAPTURE_IO) {
+        let (line_proxies, fd_fallback) = parse_capture_io(&value)?;
+        update.io_capture_line_proxies = Some(line_proxies);
+        update.io_capture_fd_fallback = Some(fd_fallback);
+    }
+
     apply_policy_update(update);
     Ok(())
 }
@@ -194,6 +231,54 @@ fn parse_bool(value: &str) -> RecorderResult<bool> {
     }
 }
 
+fn parse_capture_io(value: &str) -> RecorderResult<(bool, bool)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        let default = IoCapturePolicy::default();
+        return Ok((default.line_proxies, default.fd_fallback));
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "0" | "off" | "false" | "disable" | "disabled" | "none"
+    ) {
+        return Ok((false, false));
+    }
+    if matches!(lower.as_str(), "1" | "on" | "true" | "enable" | "enabled") {
+        return Ok((true, false));
+    }
+
+    let mut line_proxies = false;
+    let mut fd_fallback = false;
+    for token in lower.split(',') {
+        match token.trim() {
+            "" => {}
+            "proxies" | "proxy" => line_proxies = true,
+            "fd" | "mirror" | "fallback" => {
+                line_proxies = true;
+                fd_fallback = true;
+            }
+            other => {
+                return Err(usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "invalid CODETRACER_CAPTURE_IO value '{}'",
+                    other
+                ));
+            }
+        }
+    }
+
+    if !line_proxies && !fd_fallback {
+        return Err(usage!(
+            ErrorCode::InvalidPolicyValue,
+            "CODETRACER_CAPTURE_IO must enable at least 'proxies' or 'fd'"
+        ));
+    }
+
+    Ok((line_proxies, fd_fallback))
+}
+
 // === PyO3 helpers ===
 
 use pyo3::prelude::*;
@@ -202,7 +287,7 @@ use pyo3::types::PyDict;
 use crate::ffi;
 
 #[pyfunction(name = "configure_policy")]
-#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None))]
+#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None, io_capture_line_proxies=None, io_capture_fd_fallback=None))]
 pub fn configure_policy_py(
     on_recorder_error: Option<&str>,
     require_trace: Option<bool>,
@@ -210,6 +295,8 @@ pub fn configure_policy_py(
     log_level: Option<&str>,
     log_file: Option<&str>,
     json_errors: Option<bool>,
+    io_capture_line_proxies: Option<bool>,
+    io_capture_fd_fallback: Option<bool>,
 ) -> PyResult<()> {
     let mut update = PolicyUpdate::default();
 
@@ -245,6 +332,14 @@ pub fn configure_policy_py(
         update.json_errors = Some(value);
     }
 
+    if let Some(value) = io_capture_line_proxies {
+        update.io_capture_line_proxies = Some(value);
+    }
+
+    if let Some(value) = io_capture_fd_fallback {
+        update.io_capture_fd_fallback = Some(value);
+    }
+
     apply_policy_update(update);
     Ok(())
 }
@@ -278,6 +373,11 @@ pub fn py_policy_snapshot(py: Python<'_>) -> PyResult<PyObject> {
         dict.set_item("log_file", py.None())?;
     }
     dict.set_item("json_errors", snapshot.json_errors)?;
+
+    let io_dict = PyDict::new(py);
+    io_dict.set_item("line_proxies", snapshot.io_capture.line_proxies)?;
+    io_dict.set_item("fd_fallback", snapshot.io_capture.fd_fallback)?;
+    dict.set_item("io_capture", io_dict)?;
     Ok(dict.into())
 }
 
@@ -301,6 +401,8 @@ mod tests {
         assert!(!snap.json_errors);
         assert!(snap.log_level.is_none());
         assert!(snap.log_file.is_none());
+        assert!(snap.io_capture.line_proxies);
+        assert!(!snap.io_capture.fd_fallback);
     }
 
     #[test]
@@ -313,6 +415,8 @@ mod tests {
         update.log_level = Some("debug".to_string());
         update.log_file = Some(PolicyPath::Value(PathBuf::from("/tmp/log.txt")));
         update.json_errors = Some(true);
+        update.io_capture_line_proxies = Some(true);
+        update.io_capture_fd_fallback = Some(true);
 
         apply_policy_update(update);
 
@@ -323,6 +427,8 @@ mod tests {
         assert_eq!(snap.log_level.as_deref(), Some("debug"));
         assert_eq!(snap.log_file.as_deref(), Some(Path::new("/tmp/log.txt")));
         assert!(snap.json_errors);
+        assert!(snap.io_capture.line_proxies);
+        assert!(snap.io_capture.fd_fallback);
         reset_policy();
     }
 
@@ -336,6 +442,7 @@ mod tests {
         env::set_var(ENV_LOG_LEVEL, "info");
         env::set_var(ENV_LOG_FILE, "/tmp/out.log");
         env::set_var(ENV_JSON_ERRORS, "yes");
+        env::set_var(ENV_CAPTURE_IO, "proxies,fd");
 
         configure_policy_from_env().expect("configure from env");
 
@@ -348,6 +455,8 @@ mod tests {
         assert_eq!(snap.log_level.as_deref(), Some("info"));
         assert_eq!(snap.log_file.as_deref(), Some(Path::new("/tmp/out.log")));
         assert!(snap.json_errors);
+        assert!(snap.io_capture.line_proxies);
+        assert!(snap.io_capture.fd_fallback);
         reset_policy();
     }
 
@@ -358,6 +467,19 @@ mod tests {
         env::set_var(ENV_REQUIRE_TRACE, "sometimes");
 
         let err = configure_policy_from_env().expect_err("invalid bool should error");
+        assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
+
+        drop(env_guard);
+        reset_policy();
+    }
+
+    #[test]
+    fn configure_policy_from_env_rejects_invalid_capture_io() {
+        reset_policy();
+        let env_guard = env_lock();
+        env::set_var(ENV_CAPTURE_IO, "invalid-token");
+
+        let err = configure_policy_from_env().expect_err("invalid capture io should error");
         assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
 
         drop(env_guard);
@@ -379,6 +501,7 @@ mod tests {
                 ENV_LOG_LEVEL,
                 ENV_LOG_FILE,
                 ENV_JSON_ERRORS,
+                ENV_CAPTURE_IO,
             ] {
                 env::remove_var(key);
             }

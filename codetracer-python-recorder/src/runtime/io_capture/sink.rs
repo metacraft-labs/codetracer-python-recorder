@@ -1,7 +1,10 @@
 use crate::runtime::io_capture::events::{IoOperation, IoStream, ProxyEvent, ProxySink};
-use crate::runtime::line_snapshots::FrameId;
+use crate::runtime::io_capture::mute::is_io_capture_muted;
+use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use bitflags::bitflags;
+use pyo3::types::PyAnyMethods;
 use pyo3::Python;
+use runtime_tracing::{Line, PathId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
@@ -33,6 +36,9 @@ pub struct IoChunk {
     pub thread_id: ThreadId,
     pub timestamp: Instant,
     pub frame_id: Option<FrameId>,
+    pub path_id: Option<PathId>,
+    pub line: Option<Line>,
+    pub path: Option<String>,
     pub flags: IoChunkFlags,
 }
 
@@ -47,6 +53,7 @@ const MAX_BATCH_AGE: Duration = Duration::from_millis(5);
 /// Batching sink that groups proxy events into line-aware IO chunks.
 pub struct IoEventSink {
     consumer: Arc<dyn IoChunkConsumer>,
+    snapshots: Arc<LineSnapshotStore>,
     state: Mutex<IoSinkState>,
     time_source: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
@@ -64,20 +71,25 @@ struct StreamBuffer {
     payload: Vec<u8>,
     last_timestamp: Option<Instant>,
     frame_id: Option<FrameId>,
+    path_id: Option<PathId>,
+    line: Option<Line>,
+    path: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl IoEventSink {
-    pub fn new(consumer: Arc<dyn IoChunkConsumer>) -> Self {
-        Self::with_time_source(consumer, Arc::new(Instant::now))
+    pub fn new(consumer: Arc<dyn IoChunkConsumer>, snapshots: Arc<LineSnapshotStore>) -> Self {
+        Self::with_time_source(consumer, snapshots, Arc::new(Instant::now))
     }
 
     fn with_time_source(
         consumer: Arc<dyn IoChunkConsumer>,
+        snapshots: Arc<LineSnapshotStore>,
         time_source: Arc<dyn Fn() -> Instant + Send + Sync>,
     ) -> Self {
         Self {
             consumer,
+            snapshots,
             state: Mutex::new(IoSinkState::default()),
             time_source,
         }
@@ -91,11 +103,29 @@ impl IoEventSink {
         let timestamp = self.now();
         let mut state = self.state.lock().expect("lock poisoned");
         if let Some(buffers) = state.threads.get_mut(&thread_id) {
-            buffers.flush_all(thread_id, timestamp, IoChunkFlags::STEP_BOUNDARY, &*self.consumer);
+            buffers.flush_all(
+                thread_id,
+                timestamp,
+                IoChunkFlags::STEP_BOUNDARY,
+                &*self.consumer,
+            );
         }
     }
 
-    fn handle_output(&self, event: ProxyEvent) {
+    pub fn flush_all(&self) {
+        let timestamp = self.now();
+        let mut state = self.state.lock().expect("lock poisoned");
+        for (thread_id, buffers) in state.threads.iter_mut() {
+            buffers.flush_all(
+                *thread_id,
+                timestamp,
+                IoChunkFlags::STEP_BOUNDARY,
+                &*self.consumer,
+            );
+        }
+    }
+
+    fn handle_output(&self, mut event: ProxyEvent) {
         let mut state = self.state.lock().expect("lock poisoned");
         let buffers = state
             .threads
@@ -119,7 +149,14 @@ impl IoEventSink {
                 if event.payload.is_empty() {
                     return;
                 }
-                buffer.append(&event.payload, event.frame_id, event.timestamp);
+                buffer.append(
+                    &event.payload,
+                    event.frame_id,
+                    event.path_id,
+                    event.line,
+                    event.path.take(),
+                    event.timestamp,
+                );
                 buffer.flush_complete_lines(
                     event.thread_id,
                     event.stream,
@@ -150,14 +187,94 @@ impl IoEventSink {
             thread_id: event.thread_id,
             timestamp: event.timestamp,
             frame_id: event.frame_id,
+            path_id: event.path_id,
+            line: event.line,
+            path: event.path,
             flags: IoChunkFlags::INPUT_CHUNK,
         };
         self.consumer.consume(chunk);
     }
+
+    fn populate_from_stack(&self, py: Python<'_>, event: &mut ProxyEvent) {
+        if event.line.is_some() && (event.path_id.is_some() || event.path.is_some()) {
+            return;
+        }
+
+        let frame_result = (|| {
+            let sys = py.import("sys")?;
+            sys.getattr("_getframe")
+        })();
+
+        let getframe = match frame_result {
+            Ok(obj) => obj,
+            Err(_) => return,
+        };
+
+        for depth in [2_i32, 1, 0] {
+            let frame_obj = match getframe.call1((depth,)) {
+                Ok(frame) => frame,
+                Err(_) => continue,
+            };
+
+            let frame = frame_obj;
+
+            if event.line.is_none() {
+                if let Ok(lineno) = frame
+                    .getattr("f_lineno")
+                    .and_then(|obj| obj.extract::<i32>())
+                {
+                    event.line = Some(Line(lineno as i64));
+                }
+            }
+
+            if event.path.is_none() {
+                if let Ok(code) = frame.getattr("f_code") {
+                    if let Ok(filename) = code
+                        .getattr("co_filename")
+                        .and_then(|obj| obj.extract::<String>())
+                    {
+                        event.path = Some(filename);
+                    }
+                }
+            }
+
+            if event.frame_id.is_none() {
+                let raw = frame.as_ptr() as usize as u64;
+                event.frame_id = Some(FrameId::from_raw(raw));
+            }
+
+            if event.line.is_some() && (event.path_id.is_some() || event.path.is_some()) {
+                break;
+            }
+        }
+    }
 }
 
 impl ProxySink for IoEventSink {
-    fn record(&self, _py: Python<'_>, event: ProxyEvent) {
+    fn record(&self, py: Python<'_>, event: ProxyEvent) {
+        if is_io_capture_muted() {
+            return;
+        }
+
+        let mut event = event;
+        if event.frame_id.is_none() || event.path_id.is_none() || event.line.is_none() {
+            if let Some(snapshot) = self.snapshots.snapshot_for_thread(event.thread_id) {
+                if event.frame_id.is_none() {
+                    event.frame_id = Some(snapshot.frame_id());
+                }
+                if event.path_id.is_none() {
+                    event.path_id = Some(snapshot.path_id());
+                }
+                if event.line.is_none() {
+                    event.line = Some(snapshot.line());
+                }
+            }
+        }
+
+        if event.line.is_none() || (event.path_id.is_none() && event.path.is_none()) {
+            self.populate_from_stack(py, &mut event);
+        }
+
         match event.stream {
             IoStream::Stdout | IoStream::Stderr => self.handle_output(event),
             IoStream::Stdin => self.handle_input(event),
@@ -210,12 +327,32 @@ impl StreamBuffer {
             payload: Vec::new(),
             last_timestamp: None,
             frame_id: None,
+            path_id: None,
+            line: None,
+            path: None,
         }
     }
 
-    fn append(&mut self, payload: &[u8], frame_id: Option<FrameId>, timestamp: Instant) {
+    fn append(
+        &mut self,
+        payload: &[u8],
+        frame_id: Option<FrameId>,
+        path_id: Option<PathId>,
+        line: Option<Line>,
+        path: Option<String>,
+        timestamp: Instant,
+    ) {
         if let Some(id) = frame_id {
             self.frame_id = Some(id);
+        }
+        if let Some(id) = path_id {
+            self.path_id = Some(id);
+        }
+        if let Some(line) = line {
+            self.line = Some(line);
+        }
+        if let Some(path) = path {
+            self.path = Some(path);
         }
         self.payload.extend_from_slice(payload);
         self.last_timestamp = Some(timestamp);
@@ -243,9 +380,15 @@ impl StreamBuffer {
                 thread_id,
                 timestamp,
                 frame_id: self.frame_id,
+                path_id: self.path_id,
+                line: self.line,
+                path: self.path.take(),
                 flags,
             };
             self.frame_id = None;
+            self.path_id = None;
+            self.line = None;
+            self.path = None;
             self.last_timestamp = Some(timestamp);
             consumer.consume(chunk);
         }
@@ -266,11 +409,17 @@ impl StreamBuffer {
                 thread_id,
                 timestamp,
                 frame_id: self.frame_id,
+                path_id: self.path_id,
+                line: self.line,
+                path: self.path.clone(),
                 flags: IoChunkFlags::NEWLINE_TERMINATED,
             };
             consumer.consume(chunk);
             if self.payload.is_empty() {
                 self.frame_id = None;
+                self.path_id = None;
+                self.line = None;
+                self.path = None;
             }
             self.last_timestamp = Some(timestamp);
         }
@@ -293,6 +442,7 @@ impl StreamBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::line_snapshots::LineSnapshotStore;
     use std::sync::Mutex;
     use std::thread;
 
@@ -318,6 +468,8 @@ mod tests {
         stream: IoStream,
         payload: &[u8],
         timestamp: Instant,
+        path_id: PathId,
+        line: Line,
     ) -> ProxyEvent {
         ProxyEvent {
             stream,
@@ -326,18 +478,32 @@ mod tests {
             thread_id,
             timestamp,
             frame_id: Some(FrameId::from_raw(42)),
+            path_id: Some(path_id),
+            line: Some(line),
+            path: Some(format!("/tmp/test{}_{}.py", path_id.0, line.0)),
         }
     }
 
     #[test]
     fn sink_batches_until_newline_flushes() {
         Python::with_gil(|py| {
-            let collector = Arc::new(ChunkRecorder::default());
-            let sink = IoEventSink::new(collector.clone());
+            let collector: Arc<ChunkRecorder> = Arc::new(ChunkRecorder::default());
+            let snapshots = Arc::new(LineSnapshotStore::new());
+            let sink = IoEventSink::new(collector.clone(), snapshots);
             let thread_id = thread::current().id();
             let base = Instant::now();
 
-            sink.record(py, make_write_event(thread_id, IoStream::Stdout, b"hello", base));
+            sink.record(
+                py,
+                make_write_event(
+                    thread_id,
+                    IoStream::Stdout,
+                    b"hello",
+                    base,
+                    PathId(1),
+                    Line(10),
+                ),
+            );
             assert!(collector.chunks().is_empty());
 
             sink.record(
@@ -347,34 +513,44 @@ mod tests {
                     IoStream::Stdout,
                     b" world\ntrailing",
                     base + Duration::from_millis(1),
+                    PathId(1),
+                    Line(10),
                 ),
             );
 
             let chunks = collector.chunks();
             assert_eq!(chunks.len(), 1);
             assert_eq!(chunks[0].payload, b"hello world\n");
-            assert!(chunks[0]
-                .flags
-                .contains(IoChunkFlags::NEWLINE_TERMINATED));
+            assert!(chunks[0].flags.contains(IoChunkFlags::NEWLINE_TERMINATED));
             assert_eq!(chunks[0].frame_id, Some(FrameId::from_raw(42)));
+            assert_eq!(chunks[0].path_id, Some(PathId(1)));
+            assert_eq!(chunks[0].line, Some(Line(10)));
+            assert_eq!(chunks[0].path.as_deref(), Some("/tmp/test1_10.py"));
 
             sink.flush_before_step(thread_id);
             let chunks = collector.chunks();
             assert_eq!(chunks.len(), 2);
             assert_eq!(chunks[1].payload, b"trailing");
             assert!(chunks[1].flags.contains(IoChunkFlags::STEP_BOUNDARY));
+            assert_eq!(chunks[1].path_id, Some(PathId(1)));
+            assert_eq!(chunks[1].line, Some(Line(10)));
+            assert_eq!(chunks[1].path.as_deref(), Some("/tmp/test1_10.py"));
         });
     }
 
     #[test]
     fn sink_flushes_on_time_gap() {
         Python::with_gil(|py| {
-            let collector = Arc::new(ChunkRecorder::default());
-            let sink = IoEventSink::new(collector.clone());
+            let collector: Arc<ChunkRecorder> = Arc::new(ChunkRecorder::default());
+            let snapshots = Arc::new(LineSnapshotStore::new());
+            let sink = IoEventSink::new(collector.clone(), snapshots);
             let thread_id = thread::current().id();
             let base = Instant::now();
 
-            sink.record(py, make_write_event(thread_id, IoStream::Stdout, b"a", base));
+            sink.record(
+                py,
+                make_write_event(thread_id, IoStream::Stdout, b"a", base, PathId(2), Line(20)),
+            );
             sink.record(
                 py,
                 make_write_event(
@@ -382,6 +558,8 @@ mod tests {
                     IoStream::Stdout,
                     b"b",
                     base + Duration::from_millis(10),
+                    PathId(2),
+                    Line(20),
                 ),
             );
 
@@ -389,23 +567,40 @@ mod tests {
             assert_eq!(chunks.len(), 1);
             assert_eq!(chunks[0].payload, b"a");
             assert!(chunks[0].flags.contains(IoChunkFlags::TIME_SPLIT));
+            assert_eq!(chunks[0].path_id, Some(PathId(2)));
+            assert_eq!(chunks[0].line, Some(Line(20)));
+            assert_eq!(chunks[0].path.as_deref(), Some("/tmp/test2_20.py"));
 
             sink.flush_before_step(thread_id);
             let chunks = collector.chunks();
             assert_eq!(chunks.len(), 2);
             assert_eq!(chunks[1].payload, b"b");
+            assert_eq!(chunks[1].path_id, Some(PathId(2)));
+            assert_eq!(chunks[1].line, Some(Line(20)));
+            assert_eq!(chunks[1].path.as_deref(), Some("/tmp/test2_20.py"));
         });
     }
 
     #[test]
     fn sink_flushes_on_explicit_flush() {
         Python::with_gil(|py| {
-            let collector = Arc::new(ChunkRecorder::default());
-            let sink = IoEventSink::new(collector.clone());
+            let collector: Arc<ChunkRecorder> = Arc::new(ChunkRecorder::default());
+            let snapshots = Arc::new(LineSnapshotStore::new());
+            let sink = IoEventSink::new(collector.clone(), snapshots);
             let thread_id = thread::current().id();
             let base = Instant::now();
 
-            sink.record(py, make_write_event(thread_id, IoStream::Stderr, b"log", base));
+            sink.record(
+                py,
+                make_write_event(
+                    thread_id,
+                    IoStream::Stderr,
+                    b"log",
+                    base,
+                    PathId(5),
+                    Line(50),
+                ),
+            );
 
             sink.record(
                 py,
@@ -416,6 +611,9 @@ mod tests {
                     thread_id,
                     timestamp: base + Duration::from_millis(1),
                     frame_id: Some(FrameId::from_raw(7)),
+                    path_id: Some(PathId(5)),
+                    line: Some(Line(50)),
+                    path: Some("/tmp/stderr.py".to_string()),
                 },
             );
 
@@ -423,14 +621,18 @@ mod tests {
             assert_eq!(chunks.len(), 1);
             assert_eq!(chunks[0].payload, b"log");
             assert!(chunks[0].flags.contains(IoChunkFlags::EXPLICIT_FLUSH));
+            assert_eq!(chunks[0].path_id, Some(PathId(5)));
+            assert_eq!(chunks[0].line, Some(Line(50)));
+            assert_eq!(chunks[0].path.as_deref(), Some("/tmp/test5_50.py"));
         });
     }
 
     #[test]
     fn sink_records_stdin_directly() {
         Python::with_gil(|py| {
-            let collector = Arc::new(ChunkRecorder::default());
-            let sink = IoEventSink::new(collector.clone());
+            let collector: Arc<ChunkRecorder> = Arc::new(ChunkRecorder::default());
+            let snapshots = Arc::new(LineSnapshotStore::new());
+            let sink = IoEventSink::new(collector.clone(), snapshots);
             let thread_id = thread::current().id();
             let base = Instant::now();
 
@@ -443,6 +645,9 @@ mod tests {
                     thread_id,
                     timestamp: base,
                     frame_id: Some(FrameId::from_raw(99)),
+                    path_id: Some(PathId(3)),
+                    line: Some(Line(30)),
+                    path: Some("/tmp/stdin.py".to_string()),
                 },
             );
 
@@ -451,6 +656,44 @@ mod tests {
             assert_eq!(chunks[0].payload, b"input\n");
             assert!(chunks[0].flags.contains(IoChunkFlags::INPUT_CHUNK));
             assert_eq!(chunks[0].frame_id, Some(FrameId::from_raw(99)));
+            assert_eq!(chunks[0].path_id, Some(PathId(3)));
+            assert_eq!(chunks[0].line, Some(Line(30)));
+            assert_eq!(chunks[0].path.as_deref(), Some("/tmp/stdin.py"));
+        });
+    }
+
+    #[test]
+    fn sink_populates_metadata_from_snapshots() {
+        Python::with_gil(|py| {
+            let collector: Arc<ChunkRecorder> = Arc::new(ChunkRecorder::default());
+            let snapshots = Arc::new(LineSnapshotStore::new());
+            let sink = IoEventSink::new(collector.clone(), Arc::clone(&snapshots));
+            let thread_id = thread::current().id();
+            let base = Instant::now();
+
+            snapshots.record(thread_id, PathId(9), Line(90), FrameId::from_raw(900));
+
+            sink.record(
+                py,
+                ProxyEvent {
+                    stream: IoStream::Stdout,
+                    operation: IoOperation::Write,
+                    payload: b"auto\n".to_vec(),
+                    thread_id,
+                    timestamp: base,
+                    frame_id: None,
+                    path_id: None,
+                    line: None,
+                    path: None,
+                },
+            );
+
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0].payload, b"auto\n");
+            assert_eq!(chunks[0].frame_id, Some(FrameId::from_raw(900)));
+            assert_eq!(chunks[0].path_id, Some(PathId(9)));
+            assert_eq!(chunks[0].line, Some(Line(90)));
         });
     }
 }
