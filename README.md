@@ -48,6 +48,14 @@ All subclasses carry the same attributes, so existing handlers can migrate by ca
 
 Pass `--codetracer-json-errors` (or set the policy via `configure_policy(json_errors=True)`) to stream a one-line JSON trailer on stderr. The payload includes `run_id`, `trace_id`, `error_code`, `error_kind`, `message`, and the `context` map so downstream tooling can log failures without scraping text.
 
+### IO capture configuration
+
+Line-aware stdout/stderr capture proxies are now enabled by default. Control them through the policy layer:
+
+- CLI: `python -m codetracer_python_recorder --io-capture=off script.py` disables capture, while `--io-capture=proxies+fd` also mirrors raw file-descriptor writes.
+- Python: `configure_policy(io_capture_line_proxies=False)` toggles proxies, and `configure_policy(io_capture_fd_fallback=True)` enables the FD fallback.
+- Environment: set `CODETRACER_CAPTURE_IO=off`, `proxies`, or `proxies,fd` to match the CLI and Python helpers.
+
 ### Migration checklist for downstream tools
 
 - Catch `RecorderError` (or a subclass) instead of `RuntimeError`.

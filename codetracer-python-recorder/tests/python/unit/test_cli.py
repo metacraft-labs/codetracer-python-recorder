@@ -96,3 +96,39 @@ def test_parse_args_collects_policy_overrides(tmp_path: Path) -> None:
         "log_file": (tmp_path / "logs" / "recorder.log").resolve(),
         "json_errors": True,
     }
+
+
+def test_parse_args_controls_io_capture(tmp_path: Path) -> None:
+    script = tmp_path / "entry.py"
+    _write_script(script)
+
+    config = _parse_args(
+        [
+            "--io-capture",
+            "off",
+            str(script),
+        ]
+    )
+
+    assert config.policy_overrides == {
+        "io_capture_line_proxies": False,
+        "io_capture_fd_fallback": False,
+    }
+
+
+def test_parse_args_enables_io_capture_fd_mirroring(tmp_path: Path) -> None:
+    script = tmp_path / "entry.py"
+    _write_script(script)
+
+    config = _parse_args(
+        [
+            "--io-capture",
+            "proxies+fd",
+            str(script),
+        ]
+    )
+
+    assert config.policy_overrides == {
+        "io_capture_line_proxies": True,
+        "io_capture_fd_fallback": True,
+    }

@@ -13,7 +13,9 @@ Scripts
 - generators_async.py: A generator, async function, and async generator.
 - context_and_closures.py: A context manager and a nested closure.
 - threading.py: Two threads invoking traced functions and joining.
-- imports_side_effects.py: Module‑level side effects vs main guard.
+- imports_side_effects.py: Module-level side effects vs main guard.
 - kwargs_nested.py: Nested kwargs structure to validate structured encoding.
+- io_capture.py: Mix of print/write/os.write to validate IO capture proxies.
+- stdin_capture.py: Reads piped stdin via input(), readline(), read().
 
 All scripts are deterministic and print minimal output.
