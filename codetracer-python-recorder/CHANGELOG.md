@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 ### Added
+- Introduced a line-aware IO capture pipeline that records stdout/stderr chunks with `{path_id, line, frame_id}` attribution via the shared `LineSnapshotStore` and multi-threaded `IoEventSink`.
+- Added `LineAwareStdout`, `LineAwareStderr`, and `LineAwareStdin` proxies that forward to the original streams while batching writes on newline, explicit `flush()`, 5 ms idle gaps, and step boundaries.
+- Added policy, CLI, and environment toggles for IO capture (`--io-capture`, `configure_policy(io_capture_line_proxies=..., io_capture_fd_fallback=...)`, `CODETRACER_CAPTURE_IO`) alongside the `ScopedMuteIoCapture` guard that suppresses recursive recorder logging.
+- Added an optional FD mirror fallback that duplicates `stdout`/`stderr`, diffs native writes against the proxy ledger, emits `mirror`-flagged `IoChunk`s, and restores descriptors on teardown.
+- Documented IO capture behaviour in the README with ADR 0008 context, manual smoke instructions, and troubleshooting steps for replaced `sys.stdout` / `sys.stderr`.
 - Documented the error-handling policy in the README, including the `RecorderError` hierarchy, policy hooks, JSON error trailers, exit codes, and sample handlers for structured failures.
 - Added an onboarding guide at `docs/onboarding/error-handling.md` with migration steps for downstream tools.
 - Added contributor guidance for assertions: prefer `bug!` / `ensure_internal!` over `panic!` / `.unwrap()`, and pair `debug_assert!` with classified errors.

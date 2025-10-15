@@ -20,6 +20,7 @@
 - 🔄 **Stage 5 – Hardening and docs:** Kickoff 2025-10-15. Focus areas: add teardown timeouts for the FD mirror threads, expand README coverage (include ADR 0008 link plus troubleshooting steps for replaced `sys.stdout`), and capture manual/CI verification notes.
   - ✅ Added FD mirror shutdown timeout with a polling helper to detach stuck reader threads plus unit coverage.
   - ✅ Documented README guidance (ADR link, mirror flag notes, troubleshooting for replaced `sys.stdout`) and recorded the manual smoke command.
+  - ✅ Logged the full IO capture feature set and hardening updates in `codetracer-python-recorder/CHANGELOG.md`.
   - ✅ Verification: `just dev test` (Linux) passes with new mirror timeout tests; Windows CI regression run still queued.
 
 ## Next Steps
