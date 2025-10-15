@@ -22,9 +22,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "integration-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 #[cfg(feature = "integration-test")]
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 
 use pyo3::prelude::*;
@@ -44,8 +44,7 @@ use crate::monitoring::{
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
 use crate::runtime::io_capture::{
-    FdMirrorController, IoChunk, IoChunkConsumer, IoChunkFlags, IoEventSink, IoStream,
-    IoStreamProxies, MirrorLedgers, ProxySink, ScopedMuteIoCapture,
+    IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
 };
 use serde::Serialize;
 use serde_json;
@@ -63,76 +62,6 @@ impl TraceIdResetGuard {
 impl Drop for TraceIdResetGuard {
     fn drop(&mut self) {
         set_active_trace_id(None);
-    }
-}
-
-struct IoChunkBuffer {
-    queue: Mutex<Vec<IoChunk>>,
-}
-
-impl IoChunkBuffer {
-    fn new() -> Self {
-        Self {
-            queue: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn drain(&self) -> Vec<IoChunk> {
-        let mut guard = self.queue.lock().expect("io chunk buffer poisoned");
-        std::mem::take(&mut *guard)
-    }
-}
-
-impl IoChunkConsumer for IoChunkBuffer {
-    fn consume(&self, chunk: IoChunk) {
-        let mut guard = self.queue.lock().expect("io chunk buffer poisoned");
-        guard.push(chunk);
-    }
-}
-
-struct IoCaptureController {
-    sink: Arc<IoEventSink>,
-    buffer: Arc<IoChunkBuffer>,
-    proxies: Option<IoStreamProxies>,
-    fd_mirror: Option<FdMirrorController>,
-}
-
-impl IoCaptureController {
-    fn new(
-        sink: Arc<IoEventSink>,
-        buffer: Arc<IoChunkBuffer>,
-        proxies: IoStreamProxies,
-        fd_mirror: Option<FdMirrorController>,
-    ) -> Self {
-        Self {
-            sink,
-            buffer,
-            proxies: Some(proxies),
-            fd_mirror,
-        }
-    }
-
-    fn flush_before_step(&self, thread_id: ThreadId) {
-        self.sink.flush_before_step(thread_id);
-    }
-
-    fn flush_all(&self) {
-        self.sink.flush_all();
-    }
-
-    fn drain_chunks(&self) -> Vec<IoChunk> {
-        self.buffer.drain()
-    }
-
-    fn uninstall(&mut self, py: Python<'_>) {
-        if let Some(mut mirror) = self.fd_mirror.take() {
-            mirror.shutdown();
-        }
-        if let Some(mut proxies) = self.proxies.take() {
-            if let Err(err) = proxies.uninstall(py) {
-                err.print(py);
-            }
-        }
     }
 }
 
@@ -173,7 +102,7 @@ pub struct RuntimeTracer {
     encountered_failure: bool,
     trace_id: String,
     line_snapshots: Arc<LineSnapshotStore>,
-    io_capture: Option<IoCaptureController>,
+    io_capture: Option<IoCapturePipeline>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -348,63 +277,32 @@ impl RuntimeTracer {
     }
 
     pub fn install_io_capture(&mut self, py: Python<'_>, policy: &RecorderPolicy) -> PyResult<()> {
-        if !policy.io_capture.line_proxies {
-            self.io_capture = None;
-            return Ok(());
-        }
-        let buffer = Arc::new(IoChunkBuffer::new());
-        let consumer: Arc<dyn IoChunkConsumer> = buffer.clone();
-        let mirror_ledgers = if policy.io_capture.fd_fallback {
-            let ledgers = MirrorLedgers::new_enabled();
-            if ledgers.is_enabled() {
-                Some(ledgers)
-            } else {
-                None
-            }
-        } else {
-            None
+        let settings = IoCaptureSettings {
+            line_proxies: policy.io_capture.line_proxies,
+            fd_mirror: policy.io_capture.fd_fallback,
         };
-        if policy.io_capture.fd_fallback && mirror_ledgers.is_none() {
-            log::warn!("fd_fallback requested but not supported on this platform");
-        }
-        let sink = Arc::new(IoEventSink::new(
-            consumer.clone(),
-            Arc::clone(&self.line_snapshots),
-        ));
-        let sink_for_proxies: Arc<dyn ProxySink> = sink.clone();
-        let proxies = IoStreamProxies::install(py, sink_for_proxies, mirror_ledgers.clone())?;
-        let fd_mirror = if let Some(ledgers) = mirror_ledgers {
-            match FdMirrorController::new(ledgers.clone(), consumer.clone()) {
-                Ok(controller) => Some(controller),
-                Err(err) => {
-                    log::warn!("failed to enable FD mirror fallback: {err}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        self.io_capture = Some(IoCaptureController::new(sink, buffer, proxies, fd_mirror));
+        let pipeline = IoCapturePipeline::install(py, Arc::clone(&self.line_snapshots), settings)?;
+        self.io_capture = pipeline;
         Ok(())
     }
 
     fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if let Some(controller) = self.io_capture.as_ref() {
-            controller.flush_before_step(thread_id);
+        if let Some(pipeline) = self.io_capture.as_ref() {
+            pipeline.flush_before_step(thread_id);
         }
         self.drain_io_chunks();
     }
 
     fn flush_pending_io(&mut self) {
-        if let Some(controller) = self.io_capture.as_ref() {
-            controller.flush_all();
+        if let Some(pipeline) = self.io_capture.as_ref() {
+            pipeline.flush_all();
         }
         self.drain_io_chunks();
     }
 
     fn drain_io_chunks(&mut self) {
-        if let Some(controller) = self.io_capture.as_ref() {
-            let chunks = controller.drain_chunks();
+        if let Some(pipeline) = self.io_capture.as_ref() {
+            let chunks = pipeline.drain_chunks();
             for chunk in chunks {
                 self.record_io_chunk(chunk);
             }
@@ -487,14 +385,14 @@ impl RuntimeTracer {
     }
 
     fn teardown_io_capture(&mut self, py: Python<'_>) {
-        if let Some(mut controller) = self.io_capture.take() {
-            controller.flush_all();
-            let chunks = controller.drain_chunks();
+        if let Some(mut pipeline) = self.io_capture.take() {
+            pipeline.flush_all();
+            let chunks = pipeline.drain_chunks();
             for chunk in chunks {
                 self.record_io_chunk(chunk);
             }
-            controller.uninstall(py);
-            let trailing = controller.drain_chunks();
+            pipeline.uninstall(py);
+            let trailing = pipeline.drain_chunks();
             for chunk in trailing {
                 self.record_io_chunk(chunk);
             }

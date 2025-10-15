@@ -2,6 +2,7 @@ pub mod events;
 pub mod fd_mirror;
 pub mod install;
 pub mod mute;
+pub mod pipeline;
 pub mod proxies;
 pub mod sink;
 
@@ -13,6 +14,8 @@ pub use fd_mirror::{FdMirrorController, MirrorLedgers};
 pub use install::IoStreamProxies;
 #[allow(unused_imports)]
 pub use mute::{is_io_capture_muted, ScopedMuteIoCapture};
+#[allow(unused_imports)]
+pub use pipeline::{IoCapturePipeline, IoCaptureSettings};
 #[allow(unused_imports)]
 pub use proxies::{LineAwareStderr, LineAwareStdin, LineAwareStdout};
 #[allow(unused_imports)]
