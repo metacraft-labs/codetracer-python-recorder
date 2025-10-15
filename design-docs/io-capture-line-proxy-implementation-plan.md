@@ -21,7 +21,7 @@ This plan replaces the old pipe-based capture plan. Sentences stay short for eas
 - Add `IoChunk` struct holding `{stream, payload, thread_id, snapshot, timestamp, flags}`.
 - `IoEventSink` groups writes by thread and stream. Batches flush when we hit newline, explicit flush, a Step boundary, or a 5 ms timer. Use `parking_lot::Mutex` and a `once_cell::sync::Lazy` timer wheel to keep locking simple.
 - Provide `flush_before_step(thread_id)` API. The monitoring callbacks call it right before they emit a Step event, then record the Step, then update the snapshot store. This enforces the `Step -> IO -> next Step` ordering.
-- Convert chunks into runtime trace events right after batching. Reuse existing encoders.
+- Convert chunks into runtime trace events right after batching. Feed raw payload bytes into `runtime_tracing` so consumers do not need to undo an extra base64 layer.
 - Integrate with the recorder error macros for faults (`usage!`, `ioerr!`).
 - Tests: unit tests for batching rules, timer flush, newline handling, guard on recursion, and the Step ordering API.
 - Exit: sink drops zero events during stress tests that flood stdout with short writes.

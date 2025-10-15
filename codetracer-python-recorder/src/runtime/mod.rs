@@ -47,9 +47,6 @@ use crate::runtime::io_capture::{
     IoChunk, IoChunkConsumer, IoChunkFlags, IoEventSink, IoStream, IoStreamProxies, ProxySink,
     ScopedMuteIoCapture,
 };
-
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use serde::Serialize;
 use serde_json;
 
@@ -389,7 +386,7 @@ impl RuntimeTracer {
         };
 
         let metadata = self.build_io_metadata(&chunk);
-        let content = BASE64.encode(&chunk.payload);
+        let content = String::from_utf8_lossy(&chunk.payload).into_owned();
 
         TraceWriter::add_event(
             &mut self.writer,
@@ -814,8 +811,6 @@ mod tests {
     use super::*;
     use crate::monitoring::CallbackOutcome;
     use crate::policy;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use base64::Engine;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
@@ -1112,8 +1107,7 @@ result = compute()\n"
                 .filter_map(|event| match event {
                     TraceLowLevelEvent::Event(record) => {
                         let metadata: IoMetadata = serde_json::from_str(&record.metadata).ok()?;
-                        let payload = BASE64.decode(&record.content).ok()?;
-                        Some((metadata, payload))
+                        Some((metadata, record.content.as_bytes().to_vec()))
                     }
                     _ => None,
                 })
