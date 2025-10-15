@@ -54,7 +54,7 @@ Line-aware stdout/stderr capture proxies are now enabled by default. Control the
 
 - CLI: `python -m codetracer_python_recorder --io-capture=off script.py` disables capture, while `--io-capture=proxies+fd` also mirrors raw file-descriptor writes.
 - Python: `configure_policy(io_capture_line_proxies=False)` toggles proxies, and `configure_policy(io_capture_fd_fallback=True)` enables the FD fallback.
-- Environment: set `CODETRACER_CAPTURE_IO=off`, `proxies`, or `proxies,fd` to match the CLI and Python helpers.
+- Environment: set `CODETRACER_CAPTURE_IO=off`, `proxies`, or `proxies+fd` (`,` is also accepted) to match the CLI and Python helpers.
 
 ### Migration checklist for downstream tools
 

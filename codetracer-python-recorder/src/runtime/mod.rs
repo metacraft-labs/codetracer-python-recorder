@@ -44,8 +44,8 @@ use crate::monitoring::{
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
 use crate::runtime::io_capture::{
-    IoChunk, IoChunkConsumer, IoChunkFlags, IoEventSink, IoStream, IoStreamProxies, ProxySink,
-    ScopedMuteIoCapture,
+    FdMirrorController, IoChunk, IoChunkConsumer, IoChunkFlags, IoEventSink, IoStream,
+    IoStreamProxies, MirrorLedgers, ProxySink, ScopedMuteIoCapture,
 };
 use serde::Serialize;
 use serde_json;
@@ -94,14 +94,21 @@ struct IoCaptureController {
     sink: Arc<IoEventSink>,
     buffer: Arc<IoChunkBuffer>,
     proxies: Option<IoStreamProxies>,
+    fd_mirror: Option<FdMirrorController>,
 }
 
 impl IoCaptureController {
-    fn new(sink: Arc<IoEventSink>, buffer: Arc<IoChunkBuffer>, proxies: IoStreamProxies) -> Self {
+    fn new(
+        sink: Arc<IoEventSink>,
+        buffer: Arc<IoChunkBuffer>,
+        proxies: IoStreamProxies,
+        fd_mirror: Option<FdMirrorController>,
+    ) -> Self {
         Self {
             sink,
             buffer,
             proxies: Some(proxies),
+            fd_mirror,
         }
     }
 
@@ -118,6 +125,9 @@ impl IoCaptureController {
     }
 
     fn uninstall(&mut self, py: Python<'_>) {
+        if let Some(mut mirror) = self.fd_mirror.take() {
+            mirror.shutdown();
+        }
         if let Some(mut proxies) = self.proxies.take() {
             if let Err(err) = proxies.uninstall(py) {
                 err.print(py);
@@ -142,6 +152,9 @@ fn io_flag_labels(flags: IoChunkFlags) -> Vec<&'static str> {
     }
     if flags.contains(IoChunkFlags::INPUT_CHUNK) {
         labels.push("input");
+    }
+    if flags.contains(IoChunkFlags::FD_MIRROR) {
+        labels.push("mirror");
     }
     labels
 }
@@ -341,10 +354,37 @@ impl RuntimeTracer {
         }
         let buffer = Arc::new(IoChunkBuffer::new());
         let consumer: Arc<dyn IoChunkConsumer> = buffer.clone();
-        let sink = Arc::new(IoEventSink::new(consumer, Arc::clone(&self.line_snapshots)));
+        let mirror_ledgers = if policy.io_capture.fd_fallback {
+            let ledgers = MirrorLedgers::new_enabled();
+            if ledgers.is_enabled() {
+                Some(ledgers)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if policy.io_capture.fd_fallback && mirror_ledgers.is_none() {
+            log::warn!("fd_fallback requested but not supported on this platform");
+        }
+        let sink = Arc::new(IoEventSink::new(
+            consumer.clone(),
+            Arc::clone(&self.line_snapshots),
+        ));
         let sink_for_proxies: Arc<dyn ProxySink> = sink.clone();
-        let proxies = IoStreamProxies::install(py, sink_for_proxies)?;
-        self.io_capture = Some(IoCaptureController::new(sink, buffer, proxies));
+        let proxies = IoStreamProxies::install(py, sink_for_proxies, mirror_ledgers.clone())?;
+        let fd_mirror = if let Some(ledgers) = mirror_ledgers {
+            match FdMirrorController::new(ledgers.clone(), consumer.clone()) {
+                Ok(controller) => Some(controller),
+                Err(err) => {
+                    log::warn!("failed to enable FD mirror fallback: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        self.io_capture = Some(IoCaptureController::new(sink, buffer, proxies, fd_mirror));
         Ok(())
     }
 
@@ -454,6 +494,10 @@ impl RuntimeTracer {
                 self.record_io_chunk(chunk);
             }
             controller.uninstall(py);
+            let trailing = controller.drain_chunks();
+            for chunk in trailing {
+                self.record_io_chunk(chunk);
+            }
         }
     }
 
@@ -1132,6 +1176,201 @@ result = compute()\n"
                 .iter()
                 .filter(|(meta, _)| meta.stream == "stdout")
                 .any(|(meta, _)| meta.flags.iter().any(|flag| flag == "newline")));
+
+            reset_policy(py);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fd_mirror_captures_os_write_payloads() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            policy::configure_policy_py(
+                Some("abort"),
+                Some(false),
+                Some(false),
+                None,
+                None,
+                Some(false),
+                Some(true),
+                Some(true),
+            )
+            .expect("enable io capture with fd fallback");
+
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let script_path = tmp.path().join("fd_mirror.py");
+            std::fs::write(
+                &script_path,
+                format!(
+                    "{PRELUDE}\nimport os\nprint('proxy line')\nos.write(1, b'fd stdout\\n')\nos.write(2, b'fd stderr\\n')\n"
+                ),
+            )
+            .expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            tracer
+                .install_io_capture(py, &policy::policy_snapshot())
+                .expect("install io capture");
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute fd script");
+            }
+
+            tracer.finish(py).expect("finish tracer");
+
+            let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
+                .writer
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    TraceLowLevelEvent::Event(record) => {
+                        let metadata: IoMetadata = serde_json::from_str(&record.metadata).ok()?;
+                        Some((metadata, record.content.as_bytes().to_vec()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            let stdout_mirror = io_events.iter().find(|(meta, _)| {
+                meta.stream == "stdout" && meta.flags.iter().any(|flag| flag == "mirror")
+            });
+            assert!(
+                stdout_mirror.is_some(),
+                "expected mirror event for stdout: {:?}",
+                io_events
+            );
+            let stdout_payload = &stdout_mirror.unwrap().1;
+            assert!(
+                String::from_utf8_lossy(stdout_payload).contains("fd stdout"),
+                "mirror stdout payload missing expected text"
+            );
+
+            let stderr_mirror = io_events.iter().find(|(meta, _)| {
+                meta.stream == "stderr" && meta.flags.iter().any(|flag| flag == "mirror")
+            });
+            assert!(
+                stderr_mirror.is_some(),
+                "expected mirror event for stderr: {:?}",
+                io_events
+            );
+            let stderr_payload = &stderr_mirror.unwrap().1;
+            assert!(
+                String::from_utf8_lossy(stderr_payload).contains("fd stderr"),
+                "mirror stderr payload missing expected text"
+            );
+
+            assert!(io_events.iter().any(|(meta, payload)| {
+                meta.stream == "stdout"
+                    && !meta.flags.iter().any(|flag| flag == "mirror")
+                    && String::from_utf8_lossy(payload).contains("proxy line")
+            }));
+
+            reset_policy(py);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fd_mirror_disabled_does_not_capture_os_write() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            policy::configure_policy_py(
+                Some("abort"),
+                Some(false),
+                Some(false),
+                None,
+                None,
+                Some(false),
+                Some(true),
+                Some(false),
+            )
+            .expect("enable proxies without fd fallback");
+
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let script_path = tmp.path().join("fd_disabled.py");
+            std::fs::write(
+                &script_path,
+                format!(
+                    "{PRELUDE}\nimport os\nprint('proxy line')\nos.write(1, b'fd stdout\\n')\nos.write(2, b'fd stderr\\n')\n"
+                ),
+            )
+            .expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+            );
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            tracer
+                .install_io_capture(py, &policy::policy_snapshot())
+                .expect("install io capture");
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute fd script");
+            }
+
+            tracer.finish(py).expect("finish tracer");
+
+            let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
+                .writer
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    TraceLowLevelEvent::Event(record) => {
+                        let metadata: IoMetadata = serde_json::from_str(&record.metadata).ok()?;
+                        Some((metadata, record.content.as_bytes().to_vec()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            assert!(
+                !io_events
+                    .iter()
+                    .any(|(meta, _)| meta.flags.iter().any(|flag| flag == "mirror")),
+                "mirror events should not be present when fallback disabled"
+            );
+
+            assert!(
+                !io_events.iter().any(|(_, payload)| {
+                    String::from_utf8_lossy(payload).contains("fd stdout")
+                        || String::from_utf8_lossy(payload).contains("fd stderr")
+                }),
+                "native os.write payload unexpectedly captured without fallback"
+            );
+
+            assert!(io_events.iter().any(|(meta, payload)| {
+                meta.stream == "stdout" && String::from_utf8_lossy(payload).contains("proxy line")
+            }));
 
             reset_policy(py);
         });

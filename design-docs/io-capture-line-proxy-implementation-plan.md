@@ -39,7 +39,7 @@ This plan replaces the old pipe-based capture plan. Sentences stay short for eas
 - Maintain a per-stream ledger: a FIFO byte buffer plus the next sequence id. Proxy callbacks append `{sequence, bytes}` entries while holding a short lock. The sequence uses an atomic counter so we can spot skipped entries during debugging.
 - Each mirror read walks a streaming diff: scan the chunk left-to-right, skip unmatched native bytes, and peel ledger entries whenever their bytes appear (even when native writes come first). Handle partial matches at chunk boundaries so long entries carry across reads. Whatever bytes remain become the mirror-only payload. This keeps capture lossless even when native writers interleave unexpectedly.
 - Document why ordering holds in the common case: CPython keeps the GIL during `write`, so proxy order matches FD write order. Native writers run once the proxy releases the GIL, so their bytes appear after any proxy prefixes.
-- The reader tags leftover events as `source = FdMirror` and uses the latest snapshot per thread for attribution.
+- The reader tags leftover events as `source = FdMirror` and uses the latest snapshot per thread for attribution. Mark those chunks with a `mirror` flag in the event metadata so downstream tooling can distinguish fallback output.
 - Tie the mirror to `policy.io_capture.fd_fallback`. Default off. Skip on platforms where dup is unsupported.
 - Tests: stress test with `os.write(1, b"...")`, mixed proxy/mirror writes, mismatched sequences, and multiple Python threads. Ensure desync resets leave no duplicates and teardown restores descriptors.
 - Exit: mirror can be toggled at runtime without breaking the proxies.

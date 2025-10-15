@@ -1,4 +1,5 @@
 use crate::runtime::io_capture::events::ProxySink;
+use crate::runtime::io_capture::fd_mirror::MirrorLedgers;
 use crate::runtime::io_capture::proxies::{LineAwareStderr, LineAwareStdin, LineAwareStdout};
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -17,7 +18,11 @@ pub struct IoStreamProxies {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl IoStreamProxies {
-    pub fn install(py: Python<'_>, sink: Arc<dyn ProxySink>) -> PyResult<Self> {
+    pub fn install(
+        py: Python<'_>,
+        sink: Arc<dyn ProxySink>,
+        ledgers: Option<MirrorLedgers>,
+    ) -> PyResult<Self> {
         let sys = py.import("sys")?;
         let stdout_original = sys.getattr("stdout")?.unbind();
         let stderr_original = sys.getattr("stderr")?.unbind();
@@ -25,11 +30,11 @@ impl IoStreamProxies {
 
         let stdout_proxy = Py::new(
             py,
-            LineAwareStdout::new(stdout_original.clone_ref(py), sink.clone()),
+            LineAwareStdout::new(stdout_original.clone_ref(py), sink.clone(), ledgers.clone()),
         )?;
         let stderr_proxy = Py::new(
             py,
-            LineAwareStderr::new(stderr_original.clone_ref(py), sink.clone()),
+            LineAwareStderr::new(stderr_original.clone_ref(py), sink.clone(), ledgers.clone()),
         )?;
         let stdin_proxy = Py::new(
             py,
@@ -118,7 +123,7 @@ mod tests {
         sys.setattr("stderr", stderr_buf)?;
         sys.setattr("stdin", stdin_buf)?;
 
-        let mut proxies = IoStreamProxies::install(py, sink)?;
+        let mut proxies = IoStreamProxies::install(py, sink, None)?;
         let result = func(&mut proxies)?;
         proxies.uninstall(py)?;
         Ok(result)

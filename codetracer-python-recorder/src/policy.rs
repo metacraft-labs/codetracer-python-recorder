@@ -251,7 +251,7 @@ fn parse_capture_io(value: &str) -> RecorderResult<(bool, bool)> {
 
     let mut line_proxies = false;
     let mut fd_fallback = false;
-    for token in lower.split(',') {
+    for token in lower.split(|c| matches!(c, ',' | '+')) {
         match token.trim() {
             "" => {}
             "proxies" | "proxy" => line_proxies = true,
@@ -455,6 +455,22 @@ mod tests {
         assert_eq!(snap.log_level.as_deref(), Some("info"));
         assert_eq!(snap.log_file.as_deref(), Some(Path::new("/tmp/out.log")));
         assert!(snap.json_errors);
+        assert!(snap.io_capture.line_proxies);
+        assert!(snap.io_capture.fd_fallback);
+        reset_policy();
+    }
+
+    #[test]
+    fn configure_policy_from_env_accepts_plus_separator() {
+        reset_policy();
+        let env_guard = env_lock();
+        env::set_var(ENV_CAPTURE_IO, "proxies+fd");
+
+        configure_policy_from_env().expect("configure from env with plus separator");
+
+        drop(env_guard);
+
+        let snap = policy_snapshot();
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
         reset_policy();

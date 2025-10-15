@@ -24,6 +24,8 @@ bitflags! {
         const TIME_SPLIT = 0b0000_1000;
         /// The chunk represents stdin data flowing into the program.
         const INPUT_CHUNK = 0b0001_0000;
+        /// The chunk originated from the FD mirror fallback.
+        const FD_MIRROR = 0b0010_0000;
     }
 }
 

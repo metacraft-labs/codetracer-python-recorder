@@ -1,4 +1,5 @@
 use crate::runtime::io_capture::events::{IoOperation, IoStream, ProxyEvent, ProxySink};
+use crate::runtime::io_capture::fd_mirror::{LedgerTicket, MirrorLedgers};
 use pyo3::exceptions::PyStopIteration;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyList, PyTuple};
@@ -74,14 +75,21 @@ struct OutputProxy {
     original: PyObject,
     sink: Arc<dyn ProxySink>,
     stream: IoStream,
+    ledgers: Option<MirrorLedgers>,
 }
 
 impl OutputProxy {
-    fn new(original: PyObject, sink: Arc<dyn ProxySink>, stream: IoStream) -> Self {
+    fn new(
+        original: PyObject,
+        sink: Arc<dyn ProxySink>,
+        stream: IoStream,
+        ledgers: Option<MirrorLedgers>,
+    ) -> Self {
         Self {
             original,
             sink,
             stream,
+            ledgers,
         }
     }
 
@@ -100,6 +108,15 @@ impl OutputProxy {
         self.sink.record(py, event);
     }
 
+    fn begin_ledger_entry(&self, payload: &[u8]) -> Option<LedgerTicket> {
+        if payload.is_empty() {
+            return None;
+        }
+        self.ledgers
+            .as_ref()
+            .and_then(|ledgers| ledgers.begin_proxy_write(self.stream, payload))
+    }
+
     fn call_method1<'py, A>(
         &self,
         py: Python<'py>,
@@ -112,6 +129,12 @@ impl OutputProxy {
         A: IntoPyObject<'py, Target = PyTuple>,
     {
         let entered = enter_reentrancy_guard();
+        let mut ticket: Option<LedgerTicket> = None;
+        if entered {
+            if let Some(bytes) = payload.as_ref() {
+                ticket = self.begin_ledger_entry(bytes);
+            }
+        }
         let result = self
             .original
             .call_method1(py, method, args)
@@ -119,6 +142,9 @@ impl OutputProxy {
         if entered {
             if let (Ok(_), Some(data)) = (&result, payload) {
                 self.record(py, operation, data);
+                if let Some(ticket) = ticket.take() {
+                    ticket.commit();
+                }
             }
         }
         exit_reentrancy_guard(entered);
@@ -141,9 +167,13 @@ pub struct LineAwareStdout {
 }
 
 impl LineAwareStdout {
-    pub fn new(original: PyObject, sink: Arc<dyn ProxySink>) -> Self {
+    pub fn new(
+        original: PyObject,
+        sink: Arc<dyn ProxySink>,
+        ledgers: Option<MirrorLedgers>,
+    ) -> Self {
         Self {
-            inner: OutputProxy::new(original, sink, IoStream::Stdout),
+            inner: OutputProxy::new(original, sink, IoStream::Stdout, ledgers),
         }
     }
 }
@@ -228,9 +258,13 @@ pub struct LineAwareStderr {
 }
 
 impl LineAwareStderr {
-    pub fn new(original: PyObject, sink: Arc<dyn ProxySink>) -> Self {
+    pub fn new(
+        original: PyObject,
+        sink: Arc<dyn ProxySink>,
+        ledgers: Option<MirrorLedgers>,
+    ) -> Self {
         Self {
-            inner: OutputProxy::new(original, sink, IoStream::Stderr),
+            inner: OutputProxy::new(original, sink, IoStream::Stderr, ledgers),
         }
     }
 }

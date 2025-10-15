@@ -76,6 +76,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "dashmap",
+ "libc",
  "log",
  "once_cell",
  "pyo3",
