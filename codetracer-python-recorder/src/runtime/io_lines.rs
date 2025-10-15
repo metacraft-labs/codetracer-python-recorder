@@ -1,14 +1,16 @@
 //! IO stream proxies that attribute Python stdio activity without breaking passthrough output.
 
 use crate::runtime::line_snapshots::FrameId;
+use bitflags::bitflags;
 use pyo3::exceptions::PyStopIteration;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyList, PyTuple};
 use pyo3::IntoPyObject;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Distinguishes the proxied streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +51,289 @@ pub struct ProxyEvent {
     pub thread_id: ThreadId,
     pub timestamp: Instant,
     pub frame_id: Option<FrameId>,
+}
+
+bitflags! {
+    /// Additional metadata describing why a chunk flushed.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct IoChunkFlags: u8 {
+        /// The buffer ended because a newline character was observed.
+        const NEWLINE_TERMINATED = 0b0000_0001;
+        /// The user triggered `flush()` on the underlying TextIOBase.
+        const EXPLICIT_FLUSH = 0b0000_0010;
+        /// The recorder forced a flush immediately before emitting a Step event.
+        const STEP_BOUNDARY = 0b0000_0100;
+        /// The buffer aged past the batching deadline.
+        const TIME_SPLIT = 0b0000_1000;
+        /// The chunk represents stdin data flowing into the program.
+        const INPUT_CHUNK = 0b0001_0000;
+    }
+}
+
+/// Normalised chunk emitted by the batching sink.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub struct IoChunk {
+    pub stream: IoStream,
+    pub payload: Vec<u8>,
+    pub thread_id: ThreadId,
+    pub timestamp: Instant,
+    pub frame_id: Option<FrameId>,
+    pub flags: IoChunkFlags,
+}
+
+/// Consumer invoked when the sink emits a chunk.
+pub trait IoChunkConsumer: Send + Sync + 'static {
+    fn consume(&self, chunk: IoChunk);
+}
+
+const MAX_BATCH_AGE: Duration = Duration::from_millis(5);
+
+#[cfg_attr(not(test), allow(dead_code))]
+/// Batching sink that groups proxy events into line-aware IO chunks.
+pub struct IoEventSink {
+    consumer: Arc<dyn IoChunkConsumer>,
+    state: Mutex<IoSinkState>,
+    time_source: Arc<dyn Fn() -> Instant + Send + Sync>,
+}
+
+struct IoSinkState {
+    threads: HashMap<ThreadId, ThreadBuffers>,
+}
+
+struct ThreadBuffers {
+    stdout: StreamBuffer,
+    stderr: StreamBuffer,
+}
+
+struct StreamBuffer {
+    payload: Vec<u8>,
+    last_timestamp: Option<Instant>,
+    frame_id: Option<FrameId>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl IoEventSink {
+    pub fn new(consumer: Arc<dyn IoChunkConsumer>) -> Self {
+        Self::with_time_source(consumer, Arc::new(Instant::now))
+    }
+
+    fn with_time_source(
+        consumer: Arc<dyn IoChunkConsumer>,
+        time_source: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            consumer,
+            state: Mutex::new(IoSinkState::default()),
+            time_source,
+        }
+    }
+
+    fn now(&self) -> Instant {
+        (self.time_source)()
+    }
+
+    pub fn flush_before_step(&self, thread_id: ThreadId) {
+        let timestamp = self.now();
+        let mut state = self.state.lock().expect("lock poisoned");
+        if let Some(buffers) = state.threads.get_mut(&thread_id) {
+            buffers.flush_all(thread_id, timestamp, IoChunkFlags::STEP_BOUNDARY, &*self.consumer);
+        }
+    }
+
+    fn handle_output(&self, event: ProxyEvent) {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let buffers = state
+            .threads
+            .entry(event.thread_id)
+            .or_insert_with(ThreadBuffers::new);
+        let buffer = buffers.buffer_mut(event.stream);
+
+        if buffer.is_stale(event.timestamp) {
+            let flush_timestamp = buffer.last_timestamp.unwrap_or(event.timestamp);
+            buffer.emit(
+                event.thread_id,
+                event.stream,
+                flush_timestamp,
+                IoChunkFlags::TIME_SPLIT,
+                &*self.consumer,
+            );
+        }
+
+        match event.operation {
+            IoOperation::Write | IoOperation::Writelines => {
+                if event.payload.is_empty() {
+                    return;
+                }
+                buffer.append(&event.payload, event.frame_id, event.timestamp);
+                buffer.flush_complete_lines(
+                    event.thread_id,
+                    event.stream,
+                    event.timestamp,
+                    &*self.consumer,
+                );
+            }
+            IoOperation::Flush => {
+                buffer.emit(
+                    event.thread_id,
+                    event.stream,
+                    event.timestamp,
+                    IoChunkFlags::EXPLICIT_FLUSH,
+                    &*self.consumer,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_input(&self, event: ProxyEvent) {
+        if event.payload.is_empty() {
+            return;
+        }
+        let chunk = IoChunk {
+            stream: IoStream::Stdin,
+            payload: event.payload,
+            thread_id: event.thread_id,
+            timestamp: event.timestamp,
+            frame_id: event.frame_id,
+            flags: IoChunkFlags::INPUT_CHUNK,
+        };
+        self.consumer.consume(chunk);
+    }
+}
+
+impl ProxySink for IoEventSink {
+    fn record(&self, _py: Python<'_>, event: ProxyEvent) {
+        match event.stream {
+            IoStream::Stdout | IoStream::Stderr => self.handle_output(event),
+            IoStream::Stdin => self.handle_input(event),
+        }
+    }
+}
+
+impl Default for IoSinkState {
+    fn default() -> Self {
+        Self {
+            threads: HashMap::new(),
+        }
+    }
+}
+
+impl ThreadBuffers {
+    fn new() -> Self {
+        Self {
+            stdout: StreamBuffer::new(),
+            stderr: StreamBuffer::new(),
+        }
+    }
+
+    fn buffer_mut(&mut self, stream: IoStream) -> &mut StreamBuffer {
+        match stream {
+            IoStream::Stdout => &mut self.stdout,
+            IoStream::Stderr => &mut self.stderr,
+            IoStream::Stdin => panic!("stdin does not use output buffers"),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn flush_all(
+        &mut self,
+        thread_id: ThreadId,
+        timestamp: Instant,
+        flags: IoChunkFlags,
+        consumer: &dyn IoChunkConsumer,
+    ) {
+        for stream in [IoStream::Stdout, IoStream::Stderr] {
+            let buffer = self.buffer_mut(stream);
+            buffer.emit(thread_id, stream, timestamp, flags, consumer);
+        }
+    }
+}
+
+impl StreamBuffer {
+    fn new() -> Self {
+        Self {
+            payload: Vec::new(),
+            last_timestamp: None,
+            frame_id: None,
+        }
+    }
+
+    fn append(&mut self, payload: &[u8], frame_id: Option<FrameId>, timestamp: Instant) {
+        if let Some(id) = frame_id {
+            self.frame_id = Some(id);
+        }
+        self.payload.extend_from_slice(payload);
+        self.last_timestamp = Some(timestamp);
+    }
+
+    fn take_all(&mut self) -> Option<Vec<u8>> {
+        if self.payload.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.payload))
+    }
+
+    fn emit(
+        &mut self,
+        thread_id: ThreadId,
+        stream: IoStream,
+        timestamp: Instant,
+        flags: IoChunkFlags,
+        consumer: &dyn IoChunkConsumer,
+    ) {
+        if let Some(payload) = self.take_all() {
+            let chunk = IoChunk {
+                stream,
+                payload,
+                thread_id,
+                timestamp,
+                frame_id: self.frame_id,
+                flags,
+            };
+            self.frame_id = None;
+            self.last_timestamp = Some(timestamp);
+            consumer.consume(chunk);
+        }
+    }
+
+    fn flush_complete_lines(
+        &mut self,
+        thread_id: ThreadId,
+        stream: IoStream,
+        timestamp: Instant,
+        consumer: &dyn IoChunkConsumer,
+    ) {
+        while let Some(index) = self.payload.iter().position(|byte| *byte == b'\n') {
+            let prefix: Vec<u8> = self.payload.drain(..=index).collect();
+            let chunk = IoChunk {
+                stream,
+                payload: prefix,
+                thread_id,
+                timestamp,
+                frame_id: self.frame_id,
+                flags: IoChunkFlags::NEWLINE_TERMINATED,
+            };
+            consumer.consume(chunk);
+            if self.payload.is_empty() {
+                self.frame_id = None;
+            }
+            self.last_timestamp = Some(timestamp);
+        }
+    }
+
+    fn is_stale(&self, now: Instant) -> bool {
+        if self.payload.is_empty() {
+            return false;
+        }
+        match self.last_timestamp {
+            Some(last) => now
+                .checked_duration_since(last)
+                .map(|elapsed| elapsed >= MAX_BATCH_AGE)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
 }
 
 /// Sink for proxy events. Later stages swap in a real writer-backed implementation.
@@ -225,7 +510,7 @@ impl LineAwareStdout {
 
     fn flush(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.inner
-            .call_method1(py, "flush", (), None, IoOperation::Flush)
+            .call_method1(py, "flush", (), Some(Vec::new()), IoOperation::Flush)
     }
 
     fn fileno(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -312,7 +597,7 @@ impl LineAwareStderr {
 
     fn flush(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.inner
-            .call_method1(py, "flush", (), None, IoOperation::Flush)
+            .call_method1(py, "flush", (), Some(Vec::new()), IoOperation::Flush)
     }
 
     fn fileno(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -607,7 +892,167 @@ impl ProxySink for RecordingSink {
 mod tests {
     use super::*;
     use std::ffi::CString;
+    use std::thread;
     use std::sync::Arc;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct ChunkRecorder {
+        chunks: Mutex<Vec<IoChunk>>,
+    }
+
+    impl ChunkRecorder {
+        fn chunks(&self) -> Vec<IoChunk> {
+            self.chunks.lock().expect("lock poisoned").clone()
+        }
+    }
+
+    impl IoChunkConsumer for ChunkRecorder {
+        fn consume(&self, chunk: IoChunk) {
+            self.chunks.lock().expect("lock poisoned").push(chunk);
+        }
+    }
+
+    fn make_write_event(
+        thread_id: ThreadId,
+        stream: IoStream,
+        payload: &[u8],
+        timestamp: Instant,
+    ) -> ProxyEvent {
+        ProxyEvent {
+            stream,
+            operation: IoOperation::Write,
+            payload: payload.to_vec(),
+            thread_id,
+            timestamp,
+            frame_id: Some(FrameId::from_raw(42)),
+        }
+    }
+
+    #[test]
+    fn sink_batches_until_newline_flushes() {
+        Python::with_gil(|py| {
+            let collector = Arc::new(ChunkRecorder::default());
+            let sink = IoEventSink::new(collector.clone());
+            let thread_id = thread::current().id();
+            let base = Instant::now();
+
+            sink.record(py, make_write_event(thread_id, IoStream::Stdout, b"hello", base));
+            assert!(collector.chunks().is_empty());
+
+            sink.record(
+                py,
+                make_write_event(
+                    thread_id,
+                    IoStream::Stdout,
+                    b" world\ntrailing",
+                    base + Duration::from_millis(1),
+                ),
+            );
+
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0].payload, b"hello world\n");
+            assert!(chunks[0]
+                .flags
+                .contains(IoChunkFlags::NEWLINE_TERMINATED));
+            assert_eq!(chunks[0].frame_id, Some(FrameId::from_raw(42)));
+
+            sink.flush_before_step(thread_id);
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 2);
+            assert_eq!(chunks[1].payload, b"trailing");
+            assert!(chunks[1].flags.contains(IoChunkFlags::STEP_BOUNDARY));
+        });
+    }
+
+    #[test]
+    fn sink_flushes_on_time_gap() {
+        Python::with_gil(|py| {
+            let collector = Arc::new(ChunkRecorder::default());
+            let sink = IoEventSink::new(collector.clone());
+            let thread_id = thread::current().id();
+            let base = Instant::now();
+
+            sink.record(py, make_write_event(thread_id, IoStream::Stdout, b"a", base));
+            sink.record(
+                py,
+                make_write_event(
+                    thread_id,
+                    IoStream::Stdout,
+                    b"b",
+                    base + Duration::from_millis(10),
+                ),
+            );
+
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0].payload, b"a");
+            assert!(chunks[0].flags.contains(IoChunkFlags::TIME_SPLIT));
+
+            sink.flush_before_step(thread_id);
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 2);
+            assert_eq!(chunks[1].payload, b"b");
+        });
+    }
+
+    #[test]
+    fn sink_flushes_on_explicit_flush() {
+        Python::with_gil(|py| {
+            let collector = Arc::new(ChunkRecorder::default());
+            let sink = IoEventSink::new(collector.clone());
+            let thread_id = thread::current().id();
+            let base = Instant::now();
+
+            sink.record(py, make_write_event(thread_id, IoStream::Stderr, b"log", base));
+
+            sink.record(
+                py,
+                ProxyEvent {
+                    stream: IoStream::Stderr,
+                    operation: IoOperation::Flush,
+                    payload: Vec::new(),
+                    thread_id,
+                    timestamp: base + Duration::from_millis(1),
+                    frame_id: Some(FrameId::from_raw(7)),
+                },
+            );
+
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0].payload, b"log");
+            assert!(chunks[0].flags.contains(IoChunkFlags::EXPLICIT_FLUSH));
+        });
+    }
+
+    #[test]
+    fn sink_records_stdin_directly() {
+        Python::with_gil(|py| {
+            let collector = Arc::new(ChunkRecorder::default());
+            let sink = IoEventSink::new(collector.clone());
+            let thread_id = thread::current().id();
+            let base = Instant::now();
+
+            sink.record(
+                py,
+                ProxyEvent {
+                    stream: IoStream::Stdin,
+                    operation: IoOperation::ReadLine,
+                    payload: b"input\n".to_vec(),
+                    thread_id,
+                    timestamp: base,
+                    frame_id: Some(FrameId::from_raw(99)),
+                },
+            );
+
+            let chunks = collector.chunks();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0].payload, b"input\n");
+            assert!(chunks[0].flags.contains(IoChunkFlags::INPUT_CHUNK));
+            assert_eq!(chunks[0].frame_id, Some(FrameId::from_raw(99)));
+        });
+    }
 
     fn with_string_io<F, R>(py: Python<'_>, sink: Arc<dyn ProxySink>, func: F) -> PyResult<R>
     where
