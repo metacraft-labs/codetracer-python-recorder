@@ -50,11 +50,33 @@ Pass `--codetracer-json-errors` (or set the policy via `configure_policy(json_er
 
 ### IO capture configuration
 
-Line-aware stdout/stderr capture proxies are now enabled by default. Control them through the policy layer:
+Line-aware capture (see [ADR 0008](design-docs/adr/0008-line-aware-io-capture.md)) installs `LineAwareStdout`, `LineAwareStderr`, and `LineAwareStdin` proxies so every chunk carries `{path_id, line, frame_id}` metadata. The proxies forward writes immediately to keep TTY behaviour unchanged and the batching sink emits newline/flush/step-delimited chunks. When the FD mirror fallback observes bytes that bypassed the proxies, the resulting `IoChunk` carries the `mirror` flag so downstream tooling can highlight native writers separately. Recorder logs and telemetry use `ScopedMuteIoCapture` to avoid recursive capture.
+
+Control the feature through the policy layer:
 
 - CLI: `python -m codetracer_python_recorder --io-capture=off script.py` disables capture, while `--io-capture=proxies+fd` also mirrors raw file-descriptor writes.
 - Python: `configure_policy(io_capture_line_proxies=False)` toggles proxies, and `configure_policy(io_capture_fd_fallback=True)` enables the FD fallback.
 - Environment: set `CODETRACER_CAPTURE_IO=off`, `proxies`, or `proxies+fd` (`,` is also accepted) to match the CLI and Python helpers.
+
+Manual smoke check: `python -m codetracer_python_recorder examples/stdout_script.py` should report the proxied output while leaving the console live.
+
+#### Troubleshooting replaced stdout/stderr
+
+Third-party tooling occasionally replaces `sys.stdout` / `sys.stderr` after the proxies install. When that happens, IO metadata stops updating and the recorder falls back to passthrough behaviour. You can verify the binding at runtime:
+
+```python
+import sys
+from codetracer_python_recorder.runtime import LineAwareStdout, LineAwareStderr
+
+print(type(sys.stdout).__name__, isinstance(sys.stdout, LineAwareStdout))
+print(type(sys.stderr).__name__, isinstance(sys.stderr, LineAwareStderr))
+```
+
+Both `isinstance` checks should return `True`. If they do not:
+
+1. Re-run `configure_policy(io_capture_line_proxies=True)` (or restart tracing) to reinstall the proxies before the other tool mutates the streams.
+2. Fall back to FD mirroring by enabling `CODETRACER_CAPTURE_IO=proxies+fd` so native writes still reach the ledger-backed mirror.
+3. As a last resort, disable IO capture (`--io-capture=off`) and rely on console output while investigating the conflicting integration.
 
 ### Migration checklist for downstream tools
 

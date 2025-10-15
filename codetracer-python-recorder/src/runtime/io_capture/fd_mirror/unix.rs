@@ -7,7 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct FdMirrorError {
@@ -212,6 +212,9 @@ struct StreamMirror {
 }
 
 impl StreamMirror {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+    const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
     fn start(
         stream: IoStream,
         ledger: Arc<Ledger>,
@@ -289,11 +292,85 @@ impl StreamMirror {
             warn!("failed to restore fd {} after mirroring", self.target_fd);
         }
         if let Some(join) = self.join.take() {
-            if let Err(err) = join.join() {
-                warn!("mirror thread join failed: {err:?}");
+            if wait_for_join(&join, Self::SHUTDOWN_TIMEOUT, Self::SHUTDOWN_POLL_INTERVAL) {
+                if let Err(err) = join.join() {
+                    warn!("mirror thread join failed: {err:?}");
+                }
+            } else {
+                warn!(
+                    "mirror thread on fd {} did not stop within {:?}; detaching background reader",
+                    self.target_fd,
+                    Self::SHUTDOWN_TIMEOUT
+                );
+                drop(join);
             }
         }
         self.ledger.clear();
+    }
+}
+
+fn wait_for_join(
+    handle: &thread::JoinHandle<()>,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> bool {
+    if handle.is_finished() {
+        return true;
+    }
+    if timeout.is_zero() {
+        return false;
+    }
+    let mut remaining = timeout;
+    loop {
+        if handle.is_finished() {
+            return true;
+        }
+        let sleep_for = std::cmp::min(poll_interval, remaining);
+        thread::sleep(sleep_for);
+        if handle.is_finished() {
+            return true;
+        }
+        if remaining <= sleep_for {
+            return false;
+        }
+        remaining -= sleep_for;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_for_join_succeeds_for_completed_thread() {
+        let handle = thread::spawn(|| {});
+        assert!(wait_for_join(
+            &handle,
+            Duration::from_millis(100),
+            Duration::from_millis(5)
+        ));
+        handle.join().expect("thread join should succeed");
+    }
+
+    #[test]
+    fn wait_for_join_times_out_for_blocked_thread() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
+        let handle = thread::spawn(move || {
+            while !worker_shutdown.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        assert!(
+            !wait_for_join(&handle, Duration::from_millis(15), Duration::from_millis(5)),
+            "wait_for_join should time out on a stuck thread"
+        );
+
+        shutdown.store(true, Ordering::Relaxed);
+        handle
+            .join()
+            .expect("thread join should succeed after shutdown signal");
     }
 }
 
