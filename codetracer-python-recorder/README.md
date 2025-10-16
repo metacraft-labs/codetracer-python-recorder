@@ -30,7 +30,7 @@ python -m codetracer_python_recorder \
   --trace-dir ./trace-out \
   --format json \
   --activation-path app/main.py \
-  --with-diff \
+  --trace-filter config/trace-filter.toml \
   app/main.py --arg=value
 ```
 
@@ -40,9 +40,12 @@ python -m codetracer_python_recorder \
   integration with the DB backend importer.
 - `--activation-path` – optional gate that postpones tracing until the interpreter
   executes this file (defaults to the target script).
-- `--with-diff` / `--no-with-diff` – records the caller’s preference in
-  `trace_metadata.json`. The desktop Codetracer CLI is responsible for generating
-  diff artefacts; the recorder simply surfaces the flag.
+- `--trace-filter` – path to a filter file. Provide multiple times or use `//`
+  separators within a single argument to build a chain. When present, the recorder
+  prepends the project default `.codetracer/trace-filter.toml` (if found near the
+  target script) so later entries override the defaults. The
+  `CODETRACER_TRACE_FILTER` environment variable accepts the same syntax when using
+  the auto-start hook.
 
 All additional arguments are forwarded to the target script unchanged. The CLI
 reuses whichever interpreter launches it so wrappers such as `uv run`, `pipx`,
