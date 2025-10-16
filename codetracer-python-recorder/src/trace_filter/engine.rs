@@ -5,7 +5,7 @@
 
 use crate::code_object::CodeObjectWrapper;
 use crate::trace_filter::config::{
-    ExecDirective, FilterSource, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
+    ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
 };
 use crate::trace_filter::selector::{Selector, SelectorKind};
 use dashmap::DashMap;
@@ -51,6 +51,34 @@ impl ValueKind {
             ValueKind::Attr => SelectorKind::Attr,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ValueKind::Local => "local",
+            ValueKind::Global => "global",
+            ValueKind::Arg => "argument",
+            ValueKind::Return => "return",
+            ValueKind::Attr => "attribute",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            ValueKind::Local => 0,
+            ValueKind::Global => 1,
+            ValueKind::Arg => 2,
+            ValueKind::Return => 3,
+            ValueKind::Attr => 4,
+        }
+    }
+
+    pub const ALL: [ValueKind; 5] = [
+        ValueKind::Local,
+        ValueKind::Global,
+        ValueKind::Arg,
+        ValueKind::Return,
+        ValueKind::Attr,
+    ];
 }
 
 /// Value redaction strategy resolved for a scope.
@@ -245,6 +273,11 @@ impl TraceFilterEngine {
             matched_rule_source,
             matched_rule_reason,
         })
+    }
+
+    /// Return a summary of the filters that produced this engine.
+    pub fn summary(&self) -> FilterSummary {
+        self.config.summary()
     }
 }
 

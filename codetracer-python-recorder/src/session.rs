@@ -51,6 +51,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
                 bootstrap.args(),
                 bootstrap.format(),
                 bootstrap.activation_path(),
+                bootstrap.trace_filter(),
             );
             tracer.begin(&outputs, 1)?;
             tracer.install_io_capture(py, &policy)?;
