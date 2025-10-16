@@ -34,6 +34,8 @@ recorder-errors = { version = "0.1.0", path = "crates/recorder-errors" }
 libc = "0.2"
 globset = "0.4"
 regex = "1.11"
+toml = "0.8"
+sha2 = "0.10"
 
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }
