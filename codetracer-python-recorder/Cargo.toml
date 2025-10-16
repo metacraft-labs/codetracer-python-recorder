@@ -32,6 +32,8 @@ serde_json = "1.0"
 uuid = { version = "1.10", features = ["v4"] }
 recorder-errors = { version = "0.1.0", path = "crates/recorder-errors" }
 libc = "0.2"
+globset = "0.4"
+regex = "1.11"
 
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }

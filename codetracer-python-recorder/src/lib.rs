@@ -10,6 +10,7 @@ mod ffi;
 mod logging;
 pub mod monitoring;
 mod policy;
+pub mod trace_filter;
 mod runtime;
 mod session;
 
