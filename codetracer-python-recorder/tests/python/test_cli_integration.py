@@ -77,3 +77,66 @@ def test_cli_emits_trace_artifacts(tmp_path: Path) -> None:
     recorder_info = payload.get("recorder", {})
     assert recorder_info.get("name") == "codetracer_python_recorder"
     assert recorder_info.get("target_script") == str(script.resolve())
+
+
+def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
+    script = tmp_path / "program.py"
+    _write_script(script, "print('filter test')\n")
+
+    filters_dir = tmp_path / ".codetracer"
+    filters_dir.mkdir()
+    default_filter = filters_dir / "trace-filter.toml"
+    default_filter.write_text(
+        """
+        [meta]
+        name = "default"
+        version = 1
+
+        [scope]
+        default_exec = "trace"
+        default_value_action = "allow"
+        """,
+        encoding="utf-8",
+    )
+
+    override_filter = tmp_path / "override-filter.toml"
+    override_filter.write_text(
+        """
+        [meta]
+        name = "override"
+        version = 1
+
+        [scope]
+        default_exec = "trace"
+        default_value_action = "allow"
+
+        [[scope.rules]]
+        selector = "pkg:program"
+        exec = "skip"
+        value_default = "allow"
+        """,
+        encoding="utf-8",
+    )
+
+    trace_dir = tmp_path / "trace"
+    env = _prepare_env()
+    args = [
+        "--trace-dir",
+        str(trace_dir),
+        "--trace-filter",
+        str(override_filter),
+        str(script),
+    ]
+
+    result = _run_cli(args, cwd=tmp_path, env=env)
+    assert result.returncode == 0
+
+    metadata_file = trace_dir / "trace_metadata.json"
+    payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    trace_filter = payload.get("trace_filter", {})
+    filters = trace_filter.get("filters", [])
+    paths = [entry.get("path") for entry in filters if isinstance(entry, dict)]
+    assert paths == [
+        str(default_filter.resolve()),
+        str(override_filter.resolve()),
+    ]

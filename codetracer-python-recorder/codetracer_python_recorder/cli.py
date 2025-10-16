@@ -23,6 +23,7 @@ class RecorderCLIConfig:
     activation_path: Path
     script: Path
     script_args: list[str]
+    trace_filter: tuple[str, ...]
     policy_overrides: dict[str, object]
 
 
@@ -63,6 +64,14 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         help=(
             "Optional path used to gate tracing. When provided, tracing begins once the "
             "interpreter enters this file. Defaults to the target script."
+        ),
+    )
+    parser.add_argument(
+        "--trace-filter",
+        action="append",
+        help=(
+            "Path to a trace filter file. Provide multiple times to chain filters; "
+            "specify multiple paths within a single argument using '//' separators."
         ),
     )
     parser.add_argument(
@@ -174,6 +183,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         activation_path=activation_path,
         script=script_path,
         script_args=script_args,
+        trace_filter=tuple(known.trace_filter or ()),
         policy_overrides=policy,
     )
 
@@ -238,6 +248,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     trace_dir = config.trace_dir
     script_path = config.script
     script_args = config.script_args
+    filter_specs = list(config.trace_filter)
     policy_overrides = config.policy_overrides if config.policy_overrides else None
 
     old_argv = sys.argv
@@ -248,6 +259,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             trace_dir,
             format=config.format,
             start_on_enter=config.activation_path,
+            trace_filter=filter_specs or None,
             policy=policy_overrides,
         )
     except Exception as exc:

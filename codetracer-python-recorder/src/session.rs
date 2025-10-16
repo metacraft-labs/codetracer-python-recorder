@@ -19,8 +19,13 @@ use bootstrap::TraceSessionBootstrap;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Start tracing using sys.monitoring and runtime_tracing writer.
-#[pyfunction]
-pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) -> PyResult<()> {
+#[pyfunction(signature = (path, format, activation_path=None, trace_filter=None))]
+pub fn start_tracing(
+    path: &str,
+    format: &str,
+    activation_path: Option<&str>,
+    trace_filter: Option<Vec<String>>,
+) -> PyResult<()> {
     ffi::wrap_pyfunction("start_tracing", || {
         // Ensure logging is ready before any tracer logs might be emitted.
         // Default our crate to warnings-only so tests stay quiet unless explicitly enabled.
@@ -33,6 +38,8 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
         }
 
         let activation_path = activation_path.map(PathBuf::from);
+        let filter_paths: Option<Vec<PathBuf>> =
+            trace_filter.map(|items| items.into_iter().map(PathBuf::from).collect());
 
         Python::with_gil(|py| {
             let bootstrap = TraceSessionBootstrap::prepare(
@@ -40,6 +47,7 @@ pub fn start_tracing(path: &str, format: &str, activation_path: Option<&str>) ->
                 Path::new(path),
                 format,
                 activation_path.as_deref(),
+                filter_paths.as_ref().map(|paths| paths.as_slice()),
             )
             .map_err(ffi::map_recorder_error)?;
 

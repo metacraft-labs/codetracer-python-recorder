@@ -54,6 +54,7 @@ impl TraceSessionBootstrap {
         trace_directory: &Path,
         format: &str,
         activation_path: Option<&Path>,
+        explicit_trace_filters: Option<&[PathBuf]>,
     ) -> Result<Self> {
         ensure_trace_directory(trace_directory)?;
         let format = resolve_trace_format(format)?;
@@ -61,7 +62,7 @@ impl TraceSessionBootstrap {
             enverr!(ErrorCode::Io, "failed to collect program metadata")
                 .with_context("details", err.to_string())
         })?;
-        let trace_filter = load_default_trace_filter(&metadata.program)?;
+        let trace_filter = load_trace_filter(explicit_trace_filters, &metadata.program)?;
         Ok(Self {
             trace_directory: trace_directory.to_path_buf(),
             format,
@@ -158,14 +159,35 @@ pub fn collect_program_metadata(py: Python<'_>) -> PyResult<ProgramMetadata> {
     Ok(ProgramMetadata { program, args })
 }
 
-fn load_default_trace_filter(program: &str) -> Result<Option<Arc<TraceFilterEngine>>> {
+fn load_trace_filter(
+    explicit: Option<&[PathBuf]>,
+    program: &str,
+) -> Result<Option<Arc<TraceFilterEngine>>> {
+    let mut chain: Vec<PathBuf> = Vec::new();
+
+    if let Some(default) = discover_default_trace_filter(program)? {
+        chain.push(default);
+    }
+
+    if let Some(paths) = explicit {
+        chain.extend(paths.iter().cloned());
+    }
+
+    if chain.is_empty() {
+        return Ok(None);
+    }
+
+    let config = TraceFilterConfig::from_paths(&chain)?;
+    Ok(Some(Arc::new(TraceFilterEngine::new(config))))
+}
+
+fn discover_default_trace_filter(program: &str) -> Result<Option<PathBuf>> {
     let start_dir = resolve_program_directory(program)?;
     let mut current: Option<&Path> = Some(start_dir.as_path());
     while let Some(dir) = current {
         let candidate = dir.join(TRACE_FILTER_DIR).join(TRACE_FILTER_FILE);
         if matches!(fs::metadata(&candidate), Ok(metadata) if metadata.is_file()) {
-            let config = TraceFilterConfig::from_paths(&[candidate.clone()])?;
-            return Ok(Some(Arc::new(TraceFilterEngine::new(config))));
+            return Ok(Some(candidate));
         }
         current = dir.parent();
     }
@@ -308,6 +330,7 @@ mod tests {
                 trace_dir.as_path(),
                 "json",
                 Some(activation.as_path()),
+                None,
             );
             sys.setattr("argv", original.bind(py))
                 .expect("restore argv");
@@ -337,7 +360,7 @@ mod tests {
             sys.setattr("argv", argv).expect("set argv");
 
             let result =
-                TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None);
+                TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None, None);
             sys.setattr("argv", original.bind(py))
                 .expect("restore argv");
 
@@ -386,7 +409,7 @@ mod tests {
             sys.setattr("argv", argv).expect("set argv");
 
             let result =
-                TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None);
+                TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None, None);
             sys.setattr("argv", original.bind(py))
                 .expect("restore argv");
 
@@ -395,6 +418,85 @@ mod tests {
             let summary = engine.summary();
             assert_eq!(summary.entries.len(), 1);
             assert_eq!(summary.entries[0].path, filter_path);
+        });
+    }
+
+    #[test]
+    fn prepare_bootstrap_merges_explicit_trace_filters() {
+        Python::with_gil(|py| {
+            let project = tempdir().expect("project");
+            let project_root = project.path();
+            let trace_dir = project_root.join("out");
+
+            let app_dir = project_root.join("src");
+            std::fs::create_dir_all(&app_dir).expect("create src dir");
+            let script_path = app_dir.join("main.py");
+            std::fs::write(&script_path, "print('run')\n").expect("write script");
+
+            let filters_dir = project_root.join(TRACE_FILTER_DIR);
+            std::fs::create_dir(&filters_dir).expect("create filter dir");
+            let default_filter_path = filters_dir.join(TRACE_FILTER_FILE);
+            std::fs::write(
+                &default_filter_path,
+                r#"
+                [meta]
+                name = "default"
+                version = 1
+
+                [scope]
+                default_exec = "trace"
+                default_value_action = "allow"
+
+                [[scope.rules]]
+                selector = "pkg:src"
+                exec = "trace"
+                value_default = "allow"
+                "#,
+            )
+            .expect("write default filter");
+
+            let override_filter_path = project_root.join("override-filter.toml");
+            std::fs::write(
+                &override_filter_path,
+                r#"
+                [meta]
+                name = "override"
+                version = 1
+
+                [scope]
+                default_exec = "trace"
+                default_value_action = "allow"
+
+                [[scope.rules]]
+                selector = "pkg:src.special"
+                exec = "skip"
+                value_default = "deny"
+                "#,
+            )
+            .expect("write override filter");
+
+            let sys = py.import("sys").expect("import sys");
+            let original = sys.getattr("argv").expect("argv").unbind();
+            let argv = PyList::new(py, [script_path.to_str().expect("utf8 path")]).expect("argv");
+            sys.setattr("argv", argv).expect("set argv");
+
+            let explicit = vec![override_filter_path.clone()];
+            let result = TraceSessionBootstrap::prepare(
+                py,
+                trace_dir.as_path(),
+                "json",
+                None,
+                Some(explicit.as_slice()),
+            );
+            sys.setattr("argv", original.bind(py))
+                .expect("restore argv");
+
+            let bootstrap = result.expect("bootstrap");
+            let engine = bootstrap.trace_filter().expect("filter engine");
+            let summary = engine.summary();
+            assert_eq!(summary.entries.len(), 2);
+            assert_eq!(summary.entries[0].path, default_filter_path);
+            assert_eq!(summary.entries[1].path, override_filter_path);
         });
     }
 }
