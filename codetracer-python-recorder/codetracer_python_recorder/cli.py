@@ -97,6 +97,15 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         action="store_true",
         help="Emit JSON error trailers on stderr.",
     )
+    parser.add_argument(
+        "--io-capture",
+        choices=["off", "proxies", "proxies+fd"],
+        help=(
+            "Control stdout/stderr capture. Without this flag, line-aware proxies stay enabled. "
+            "'off' disables capture, 'proxies' forces proxies without FD mirroring, "
+            "'proxies+fd' also mirrors raw file-descriptor writes."
+        ),
+    )
 
     known, remainder = parser.parse_known_args(argv)
     pending: list[str] = list(remainder)
@@ -145,6 +154,19 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         policy["log_file"] = Path(known.log_file).expanduser().resolve()
     if known.json_errors:
         policy["json_errors"] = True
+    if known.io_capture:
+        match known.io_capture:
+            case "off":
+                policy["io_capture_line_proxies"] = False
+                policy["io_capture_fd_fallback"] = False
+            case "proxies":
+                policy["io_capture_line_proxies"] = True
+                policy["io_capture_fd_fallback"] = False
+            case "proxies+fd":
+                policy["io_capture_line_proxies"] = True
+                policy["io_capture_fd_fallback"] = True
+            case other:  # pragma: no cover - argparse choices block this
+                parser.error(f"unsupported io-capture mode '{other}'")
 
     return RecorderCLIConfig(
         trace_dir=trace_dir,
