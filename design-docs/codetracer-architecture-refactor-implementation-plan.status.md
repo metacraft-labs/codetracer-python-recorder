@@ -44,6 +44,10 @@
 - ✅ Milestone 2 scaffolding: created placeholder modules `policy::{model, env, ffi}` and `logging::{logger, metrics, trailer}`; top-level `policy.rs`/`logging.rs` still host existing logic pending extraction. `just test` validates the skeletal split compiles.
 - ✅ Milestone 2 Step 1: moved policy data structures and global helpers into `policy::model`, re-exported public APIs, updated tests, and reran Rust/Python suites (`cargo nextest`, `pytest`) successfully.
 - ✅ Milestone 2 Step 2: migrated environment parsing/consts into `policy::env`, cleaned `policy.rs` to consume the facade, and refreshed unit tests. `uv run cargo nextest` + `uv run python -m pytest` both pass.
+- ✅ Milestone 2 Step 3: relocated all PyO3 policy bindings into `policy::ffi`, updated the facade re-exports, and stretched unit coverage before re-running `just test`.
+  - `policy.rs` now only wires modules together while `policy::ffi` owns `configure_policy_py`, `py_configure_policy_from_env`, and `py_policy_snapshot` alongside focused tests (error translation, snapshot shape).
+  - `policy::ffi` imports model/env helpers via sibling modules and continues to use `crate::ffi::map_recorder_error`; `lib.rs` still registers these bindings via the facade exports so Python callers see no change.
+  - Simplified the PyO3 snapshot test to validate expected keys after verifying rust-side policy behaviour; broader value assertions remain covered by model/env tests.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -60,5 +64,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Proceed with Step 3: relocate PyO3 bindings into `policy::ffi`, update re-exports, and run tests.
-2. Once policy refactor is complete, commence logging module decomposition per plan (Milestone 2 Steps 4–5).
+1. Begin Milestone 2 Step 4: split `logging.rs` into `{logger, metrics, trailer}` modules, keeping the facade thin while preserving current exports.
+2. After the logging move, adjust any tests/imports impacted by the new module layout and rerun `just test`; then prepare for Milestone 3 bootstrap refactor.

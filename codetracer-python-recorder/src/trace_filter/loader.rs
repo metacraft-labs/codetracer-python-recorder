@@ -433,7 +433,11 @@ pub(crate) fn normalize_file_selector(
     Ok(pathbuf_to_posix(&normalized))
 }
 
-pub(crate) fn normalize_components(path: &Path, raw: &str, location: &str) -> RecorderResult<PathBuf> {
+pub(crate) fn normalize_components(
+    path: &Path,
+    raw: &str,
+    location: &str,
+) -> RecorderResult<PathBuf> {
     let mut normalised = PathBuf::new();
     for component in path.components() {
         match component {
@@ -550,8 +554,11 @@ pub struct RawValuePattern {
     pub reason: Option<String>,
 }
 
-const SCOPE_SELECTOR_KINDS: [SelectorKind; 3] =
-    [SelectorKind::Package, SelectorKind::File, SelectorKind::Object];
+const SCOPE_SELECTOR_KINDS: [SelectorKind; 3] = [
+    SelectorKind::Package,
+    SelectorKind::File,
+    SelectorKind::Object,
+];
 const VALUE_SELECTOR_KINDS: [SelectorKind; 5] = [
     SelectorKind::Local,
     SelectorKind::Global,
