@@ -53,6 +53,19 @@
   - `metrics.rs` encapsulates the `RecorderMetrics` trait, sink installation, and testing harness; `trailer.rs` manages JSON error toggles and payload emission via the logger's context snapshot.
   - Updated facade tests (`structured_log_records`, `json_error_trailers_emit_payload`, metrics capture) to rely on the new modules; `just test` verifies Rust + Python suites after the split.
 - ✅ Milestone 3 complete: `session/bootstrap` delegates to `filesystem`, `metadata`, and `filters` submodules, each with focused unit tests covering success and failure paths (e.g., unwritable directory, unsupported formats, missing filters). `TraceSessionBootstrap` now orchestrates these modules without additional helper functions, and `just test` (Rust + Python) confirms parity.
+- 🔄 Milestone 4 Kickoff: surveying `monitoring/mod.rs` and `monitoring/tracer.rs` to stage the split into `monitoring::{api, install, callbacks}`.
+  - `api.rs` now hosts the `Tracer` trait and shared type aliases, leaving `tracer.rs` to consume it via the facade.
+  - `install.rs` and `callbacks.rs` currently re-export legacy plumbing while we prepare to migrate install/registration logic and PyO3 wrappers in subsequent steps.
+- 🔄 Milestone 4 Step 1: mapped the callback surface in `monitoring/tracer.rs` and recorded invariants for the future `monitoring::callbacks` facade.
+  - Counted 16 CPython events we register/unregister today (with `STOP_ITERATION` still commented out) and noted the duplicated teardown/setup loops that the callback table must replace.
+  - Documented shared helpers (`catch_callback`, `call_tracer_with_code`, `handle_callback_result`, `handle_callback_error`) that must stay injectable so the refactored callbacks can reuse error handling without reintroducing globals.
+  - Captured tool-id and disable-sentinel ownership requirements to keep `monitoring::callbacks` stateless while `monitoring::install` coordinates interpreter resources.
+
+### Planned Extraction Order (Milestone 4)
+1. **Callback metadata table:** Introduce a declarative structure in `monitoring::callbacks` that captures CPython event identifiers, binding names, and tracer entrypoints so registration/unregistration can iterate instead of hand-writing each branch.
+2. **Callback relocation:** Move the `*_callback` PyO3 functions plus the `catch_callback` and `call_tracer_with_code` helpers into `monitoring::callbacks`, exposing a minimal API for registering callbacks against a tool id.
+3. **Install plumbing:** Shift `install_tracer`, `flush_installed_tracer`, and `uninstall_tracer` into `monitoring::install`, ensuring tool acquisition, event mask negotiation, and disable-sentinel handling route through the new callback table.
+4. **Tests and verification:** Update unit tests (including panic-to-pyerr coverage) to point at the new modules, add table-driven tests for registration completeness, and run `just test` to confirm the refactor preserves behaviour.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -69,5 +82,6 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Proceed to Milestone 4: begin the monitoring plumbing cleanup per the implementation roadmap.
-2. Watch for integration regressions in CLI/session flows now that bootstrap responsibilities are modularised; add follow-up tasks if any arise.
+1. Prototype the callback metadata table in `monitoring::callbacks` and validate it can reproduce the current registration/unregistration loops.
+2. Relocate the callback functions and installation plumbing to their new modules while keeping the facade exports stable.
+3. Extend the monitoring tests to cover the table-driven registration and run `just test` to validate the milestone.
