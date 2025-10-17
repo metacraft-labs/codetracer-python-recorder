@@ -56,10 +56,25 @@
 - 🔄 Milestone 4 Kickoff: surveying `monitoring/mod.rs` and `monitoring/tracer.rs` to stage the split into `monitoring::{api, install, callbacks}`.
   - `api.rs` now hosts the `Tracer` trait and shared type aliases, leaving `tracer.rs` to consume it via the facade.
   - `install.rs` and `callbacks.rs` currently re-export legacy plumbing while we prepare to migrate install/registration logic and PyO3 wrappers in subsequent steps.
-- 🔄 Milestone 4 Step 1: mapped the callback surface in `monitoring/tracer.rs` and recorded invariants for the future `monitoring::callbacks` facade.
-  - Counted 16 CPython events we register/unregister today (with `STOP_ITERATION` still commented out) and noted the duplicated teardown/setup loops that the callback table must replace.
-  - Documented shared helpers (`catch_callback`, `call_tracer_with_code`, `handle_callback_result`, `handle_callback_error`) that must stay injectable so the refactored callbacks can reuse error handling without reintroducing globals.
-  - Captured tool-id and disable-sentinel ownership requirements to keep `monitoring::callbacks` stateless while `monitoring::install` coordinates interpreter resources.
+- ✅ Milestone 4 Step 1: introduced a declarative `CALLBACK_SPECS` table and helper APIs in `monitoring::callbacks` to drive registration and teardown.
+  - `monitoring::callbacks` now exposes `register_enabled_callbacks`/`unregister_enabled_callbacks`, replacing the hand-written loops in `monitoring/tracer.rs`.
+  - Callback functions remain in `monitoring::tracer` for now but are exported as `pub(super)` so the next step can relocate them without changing call sites.
+  - Preserved the invariants from the kickoff audit (16 active events, shared error-handling helpers, tool ownership) and exercised them via the new table-driven helpers.
+- ✅ Milestone 4 Step 2: migrated the PyO3 callback shims and error-handling helpers into `monitoring::callbacks`, centralising the shared global state.
+  - `Global`/`GLOBAL` now live alongside the callback metadata, and `handle_callback_error` channels disable-on-error flows through the shared helpers.
+  - Rewired `CALLBACK_SPECS` to wrap in-module functions and removed the duplicated definitions from `monitoring/tracer.rs`.
+  - `monitoring::tracer` shrank to installer plumbing ahead of the dedicated install split.
+- ✅ Milestone 4 Step 3: lifted installation plumbing into `monitoring::install`, leaving `tracer.rs` as a compatibility facade.
+- ✅ Milestone 4 Step 4: ran `just test` (Rust nextest + Python pytest) after the module split to ensure behaviour parity.
+  - All suites passed (1 perf test skipped), confirming the new callbacks/install layout preserves runtime semantics.
+  - No additional formatting or lint adjustments required beyond `cargo fmt`.
+  - `monitoring::install` now owns `install_tracer`, `uninstall_tracer`, `flush_installed_tracer`, and the internal `uninstall_locked` helper, all backed by `callbacks::GLOBAL`.
+  - `monitoring::callbacks` delegates disable-on-error teardown to `install::uninstall_locked`, while `monitoring::tracer` simply re-exports the install APIs.
+  - Updated module imports keep the public facade unchanged (still exported via `monitoring::install`), paving the way for runtime tracer refactors in Milestone 5.
+- ✅ Milestone 4 Step 5: documentation pass to close out the milestone and queue the next phase.
+  - Summarised the refactor scope (status tracker + ADR 0011 update) and recorded the retrospective in `design-docs/codetracer-architecture-refactor-milestone-4-retrospective.md`.
+  - Repository remains test-clean; next work items roll into Milestone 5 prep.
+
 
 ### Planned Extraction Order (Milestone 4)
 1. **Callback metadata table:** Introduce a declarative structure in `monitoring::callbacks` that captures CPython event identifiers, binding names, and tracer entrypoints so registration/unregistration can iterate instead of hand-writing each branch.
@@ -82,6 +97,6 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Prototype the callback metadata table in `monitoring::callbacks` and validate it can reproduce the current registration/unregistration loops.
-2. Relocate the callback functions and installation plumbing to their new modules while keeping the facade exports stable.
-3. Extend the monitoring tests to cover the table-driven registration and run `just test` to validate the milestone.
+1. Draft the Milestone 4 retrospective/ADR update and circulate for feedback.
+2. Revisit the Milestone 5 runtime tracer plan with the monitoring split in mind; flag any prep tasks.
+3. Track stakeholder feedback and spin out follow-up issues if new risks surface.

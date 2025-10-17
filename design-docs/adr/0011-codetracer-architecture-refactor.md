@@ -1,6 +1,6 @@
 # ADR 0011: Codetracer Python Recorder Architecture Refactor
 
-- **Status:** Proposed
+- **Status:** Accepted _(incremental rollout in progress — Milestone 4 complete)_
 - **Date:** 2025-02-14
 - **Deciders:** codetracer recorder maintainers
 - **Consulted:** DX tooling crew, Runtime tracing stakeholders
@@ -68,4 +68,5 @@ We will modularise the recorder around cohesive responsibilities while preservin
 1. Land the modularisation in staged PRs following the implementation plan, keeping behavioural changes isolated per milestone.  
 2. Maintain compatibility with current Python APIs and crate exports; adjust import paths gradually with deprecation windows if needed.  
 3. Update architectural documentation and developer guides once core milestones complete.  
-4. Flip ADR status to **Accepted** after the implementation plan reaches testing sign-off and owners agree the new structure delivers the intended cohesion.
+4. **Status snapshot (2025‑03‑01):** Milestones 1–4 (trace filter, policy/logging, session bootstrap, monitoring plumbing) are complete and validated via `just test`. Runtime tracer modularisation (Milestone 5) and final integration cleanup remain in flight.  
+5. Confirm behaviour parity after Milestones 5–6, then revisit this ADR for sign-off and capture any follow-up tasks surfaced during the rollout.

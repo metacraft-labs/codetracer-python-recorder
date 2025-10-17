@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 pub mod api;
 pub mod callbacks;
 pub mod install;
-mod tracer;
+pub mod tracer;
 
 pub use api::Tracer;
 pub use install::{flush_installed_tracer, install_tracer, uninstall_tracer};
