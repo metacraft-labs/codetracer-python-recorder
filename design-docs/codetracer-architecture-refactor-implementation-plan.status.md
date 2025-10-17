@@ -48,6 +48,10 @@
   - `policy.rs` now only wires modules together while `policy::ffi` owns `configure_policy_py`, `py_configure_policy_from_env`, and `py_policy_snapshot` alongside focused tests (error translation, snapshot shape).
   - `policy::ffi` imports model/env helpers via sibling modules and continues to use `crate::ffi::map_recorder_error`; `lib.rs` still registers these bindings via the facade exports so Python callers see no change.
   - Simplified the PyO3 snapshot test to validate expected keys after verifying rust-side policy behaviour; broader value assertions remain covered by model/env tests.
+- ✅ Milestone 2 Step 4: extracted logging responsibilities into `logging::{logger, metrics, trailer}`, leaving `logging.rs` as a thin facade that re-exports public APIs.
+  - `logger.rs` owns the log installation, filter parsing, policy application, and error-code scoping; it exposes helpers (`with_error_code`, `log_recorder_error`, `set_active_trace_id`) for the rest of the crate.
+  - `metrics.rs` encapsulates the `RecorderMetrics` trait, sink installation, and testing harness; `trailer.rs` manages JSON error toggles and payload emission via the logger's context snapshot.
+  - Updated facade tests (`structured_log_records`, `json_error_trailers_emit_payload`, metrics capture) to rely on the new modules; `just test` verifies Rust + Python suites after the split.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -64,5 +68,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Begin Milestone 2 Step 4: split `logging.rs` into `{logger, metrics, trailer}` modules, keeping the facade thin while preserving current exports.
-2. After the logging move, adjust any tests/imports impacted by the new module layout and rerun `just test`; then prepare for Milestone 3 bootstrap refactor.
+1. Sweep for stray logging call sites or docs that reference the old monolith, updating imports as needed (Milestone 2 Step 5 hygiene).
+2. Start planning Milestone 3 (session bootstrap refactor) once logging consumers are stable and no additional adjustments are required.
