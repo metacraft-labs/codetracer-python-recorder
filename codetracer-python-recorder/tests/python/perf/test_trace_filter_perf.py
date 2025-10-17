@@ -59,6 +59,7 @@ class PerfResult:
     filter_names: list[str]
     scopes_skipped: int
     value_redactions: dict[str, int]
+    value_drops: dict[str, int]
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -67,6 +68,7 @@ class PerfResult:
             "filter_names": list(self.filter_names),
             "scopes_skipped": self.scopes_skipped,
             "value_redactions": dict(self.value_redactions),
+            "value_drops": dict(self.value_drops),
         }
         return payload
 
@@ -252,6 +254,12 @@ def run_scenario(workspace: PerfWorkspace, scenario: PerfScenario) -> PerfResult
         for key, value in value_redactions_obj.items()
         if isinstance(key, str)
     }
+    value_drops_obj = stats.get("value_drops") or {}
+    value_drops = {
+        key: int(value)
+        for key, value in value_drops_obj.items()
+        if isinstance(key, str)
+    }
 
     return PerfResult(
         label=scenario.label,
@@ -259,6 +267,7 @@ def run_scenario(workspace: PerfWorkspace, scenario: PerfScenario) -> PerfResult
         filter_names=filter_names,
         scopes_skipped=scopes_skipped,
         value_redactions=value_redactions,
+        value_drops=value_drops,
     )
 
 
@@ -418,7 +427,7 @@ def glob_config() -> str:
 
         [[scope.rules]]
         selector = "pkg:bench_pkg.services.api.*"
-        value_default = "deny"
+        value_default = "redact"
         reason = "Redact service locals except approved public fields"
         [[scope.rules.value_patterns]]
         selector = "local:glob:public_*"
@@ -428,16 +437,16 @@ def glob_config() -> str:
         action = "allow"
         [[scope.rules.value_patterns]]
         selector = "local:glob:secret_*"
-        action = "deny"
+        action = "redact"
         [[scope.rules.value_patterns]]
         selector = "local:glob:token_*"
-        action = "deny"
+        action = "redact"
         [[scope.rules.value_patterns]]
         selector = "local:glob:masked_*"
         action = "allow"
         [[scope.rules.value_patterns]]
         selector = "local:glob:password_*"
-        action = "deny"
+        action = "redact"
 
         [[scope.rules]]
         selector = "file:glob:bench_pkg/jobs/worker/module_*.py"
@@ -446,7 +455,7 @@ def glob_config() -> str:
 
         [[scope.rules]]
         selector = "pkg:bench_pkg.external.integration_*"
-        value_default = "deny"
+        value_default = "redact"
         [[scope.rules.value_patterns]]
         selector = "local:glob:metric_*"
         action = "allow"
@@ -471,17 +480,17 @@ def regex_config() -> str:
 
         [[scope.rules]]
         selector = 'pkg:regex:^bench_pkg\\.services\\.api\\.module_\\d+$'
-        value_default = "deny"
+        value_default = "redact"
         reason = "Regex match on service modules"
         [[scope.rules.value_patterns]]
         selector = 'local:regex:^(public|metric)_\\w+$'
         action = "allow"
         [[scope.rules.value_patterns]]
         selector = 'local:regex:^(secret|token)_\\w+$'
-        action = "deny"
+        action = "redact"
         [[scope.rules.value_patterns]]
         selector = 'local:regex:^(password|api|credit|session)_.*$'
-        action = "deny"
+        action = "redact"
 
         [[scope.rules]]
         selector = 'file:regex:^bench_pkg/jobs/worker/module_\\d+\\.py$'
@@ -490,7 +499,7 @@ def regex_config() -> str:
 
         [[scope.rules]]
         selector = 'obj:regex:^bench_pkg\\.external\\.integration_\\d+\\.integration_op_\\d+$'
-        value_default = "deny"
+        value_default = "redact"
         [[scope.rules.value_patterns]]
         selector = 'local:regex:^masked_.*$'
         action = "allow"

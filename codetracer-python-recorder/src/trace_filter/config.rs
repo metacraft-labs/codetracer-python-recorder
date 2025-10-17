@@ -33,14 +33,18 @@ impl ExecDirective {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueAction {
     Allow,
-    Deny,
+    Redact,
+    Drop,
 }
 
 impl ValueAction {
     fn parse(token: &str) -> Option<Self> {
         match token {
             "allow" => Some(ValueAction::Allow),
-            "deny" => Some(ValueAction::Deny),
+            "redact" => Some(ValueAction::Redact),
+            "drop" => Some(ValueAction::Drop),
+            // Backwards compatibility for deprecated `deny`.
+            "deny" => Some(ValueAction::Redact),
             _ => None,
         }
     }
@@ -814,7 +818,7 @@ mod tests {
 
             [scope]
             default_exec = "trace"
-            default_value_action = "deny"
+            default_value_action = "redact"
 
             [[scope.rules]]
             selector = "pkg:my_app.core.*"
@@ -849,11 +853,11 @@ mod tests {
             [[scope.rules]]
             selector = "file:literal:{literal}"
             exec = "inherit"
-            value_default = "deny"
+            value_default = "redact"
 
             [[scope.rules.value_patterns]]
             selector = "arg:password"
-            action = "deny"
+            action = "redact"
 
             [io]
             capture = true
@@ -866,7 +870,7 @@ mod tests {
         let config = TraceFilterConfig::from_paths(&[base_path.clone(), overrides_path.clone()])?;
 
         assert_eq!(config.default_exec(), ExecDirective::Trace);
-        assert_eq!(config.default_value_action(), ValueAction::Deny);
+        assert_eq!(config.default_value_action(), ValueAction::Redact);
         assert_eq!(config.io().capture, true);
         assert_eq!(
             config.io().streams,
@@ -876,7 +880,7 @@ mod tests {
         assert_eq!(config.rules().len(), 2);
         let file_rule = &config.rules()[1];
         assert!(matches!(file_rule.exec, None));
-        assert_eq!(file_rule.value_default, Some(ValueAction::Deny));
+        assert_eq!(file_rule.value_default, Some(ValueAction::Redact));
         assert_eq!(file_rule.value_patterns.len(), 1);
         assert_eq!(file_rule.value_patterns[0].selector.raw(), "arg:password");
         assert_eq!(
@@ -934,7 +938,7 @@ mod tests {
 
             [scope]
             default_exec = "trace"
-            default_value_action = "deny"
+            default_value_action = "redact"
             "#,
         );
 

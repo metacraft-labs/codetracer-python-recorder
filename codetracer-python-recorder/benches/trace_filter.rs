@@ -332,7 +332,7 @@ default_value_action = "allow"
 
 [[scope.rules]]
 selector = "pkg:bench_pkg.services.api.*"
-value_default = "deny"
+value_default = "redact"
 reason = "Redact service locals except approved public fields"
 [[scope.rules.value_patterns]]
 selector = "local:glob:public_*"
@@ -342,16 +342,16 @@ selector = "local:glob:metric_*"
 action = "allow"
 [[scope.rules.value_patterns]]
 selector = "local:glob:secret_*"
-action = "deny"
+action = "redact"
 [[scope.rules.value_patterns]]
 selector = "local:glob:token_*"
-action = "deny"
+action = "redact"
 [[scope.rules.value_patterns]]
 selector = "local:glob:masked_*"
 action = "allow"
 [[scope.rules.value_patterns]]
 selector = "local:glob:password_*"
-action = "deny"
+action = "redact"
 
 [[scope.rules]]
 selector = "file:glob:bench_pkg/jobs/worker/module_*.py"
@@ -360,7 +360,7 @@ reason = "Disable redundant worker instrumentation"
 
 [[scope.rules]]
 selector = "pkg:bench_pkg.external.integration_*"
-value_default = "deny"
+value_default = "redact"
 [[scope.rules.value_patterns]]
 selector = "local:glob:metric_*"
 action = "allow"
@@ -385,17 +385,17 @@ default_value_action = "allow"
 
 [[scope.rules]]
 selector = 'pkg:regex:^bench_pkg\.services\.api\.module_\d+$'
-value_default = "deny"
+value_default = "redact"
 reason = "Regex match on service modules"
 [[scope.rules.value_patterns]]
 selector = 'local:regex:^(public|metric)_\w+$'
 action = "allow"
 [[scope.rules.value_patterns]]
 selector = 'local:regex:^(secret|token)_\w+$'
-action = "deny"
+action = "redact"
 [[scope.rules.value_patterns]]
 selector = 'local:regex:^(password|api|credit|session)_.*$'
-action = "deny"
+action = "redact"
 
 [[scope.rules]]
 selector = 'file:regex:^bench_pkg/jobs/worker/module_\d+\.py$'
@@ -404,7 +404,7 @@ reason = "Regex skip for worker modules"
 
 [[scope.rules]]
 selector = 'obj:regex:^bench_pkg\.external\.integration_\d+\.integration_op_\d+$'
-value_default = "deny"
+value_default = "redact"
 [[scope.rules.value_patterns]]
 selector = 'local:regex:^masked_.*$'
 action = "allow"

@@ -159,7 +159,7 @@ Callers validate whether a parsed selector is legal in the current context (e.g.
 1. Initialize the execution policy to `scope.default_exec` (or the inherited value when composing filters).  
 2. Walk `scope.rules` from top to bottom. Each rule whose selector matches the current frame updates the execution policy (`trace` vs `skip`) and the active default for value capture. Later matching rules replace earlier decisions because the traversal never rewinds.  
 3. For value capture inside a scope, start from the applicable default (`scope.default_value_action`, overridden by the scope rule’s `value_default` when provided).  
-4. Apply each `value_patterns` entry in order. The first pattern whose selector matches the variable or payload sets the decision to `allow` (serialize) or `deny` (redact) and stops further evaluation for that value.  
+4. Apply each `value_patterns` entry in order. The first pattern whose selector matches the variable or payload sets the decision to `allow` (serialize), `redact` (replace with `<redacted>`), or `drop` (omit entirely) and stops further evaluation for that value.  
 5. If no pattern matches, fall back to the current default value action.  
 
 ## Sample Filters (TOML)
@@ -177,13 +177,13 @@ capture = false                # Disable IO capture until opted-in explicitly
 streams = ["stdout", "stderr"] # Streams to include if `capture` becomes true
 
 [scope]
-default_exec = "deny"               # Start from deny-all to avoid surprises
-default_value_action = "deny"       # Redact values unless allowed explicitly
+default_exec = "skip"               # Start from skip-all to avoid surprises
+default_value_action = "redact"     # Redact values unless allowed explicitly
 
 [[scope.rules]]
 selector = "pkg:my_app.core.*"      # Capture primary business logic
 exec = "trace"
-value_default = "deny"
+value_default = "redact"
 
 [[scope.rules.value_patterns]]
 selector = "local:literal:user"
@@ -195,7 +195,7 @@ action = "allow"
 
 [[scope.rules.value_patterns]]
 selector = "arg:password"
-action = "deny"
+action = "redact"
 
 [[scope.rules.value_patterns]]
 selector = "global:literal:FEATURE_FLAGS"
@@ -203,7 +203,7 @@ action = "allow"
 
 [[scope.rules.value_patterns]]
 selector = "attr:regex:(?i).*token"
-action = "deny"
+action = "redact"
 
 [[scope.rules]]
 selector = "file:my_app/services/**/*.py" # Allow select service modules by path
@@ -227,13 +227,13 @@ value_default = "inherit"
 
 [[scope.rules.value_patterns]]
 selector = "ret:literal:my_app.auth.login"
-action = "deny"
+action = "redact"
 reason = "Redact login return payloads"
 
 [[scope.rules]]
 selector = "obj:my_app.payments.capture_payment"
 exec = "trace"
-value_default = "deny"
+value_default = "redact"
 
 [[scope.rules.value_patterns]]
 selector = "local:literal:invoice"
@@ -253,7 +253,7 @@ action = "allow"
 
 [[scope.rules.value_patterns]]
 selector = "local:literal:card_number"
-action = "deny"
+action = "redact"
 ```
 
 ```toml

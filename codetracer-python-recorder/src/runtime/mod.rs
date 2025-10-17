@@ -16,7 +16,7 @@ use activation::ActivationController;
 use frame_inspector::capture_frame;
 use logging::log_event;
 use value_capture::{
-    capture_call_arguments, record_return_value, record_visible_scope, ValueRedactionStats,
+    capture_call_arguments, record_return_value, record_visible_scope, ValueFilterStats,
 };
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -137,7 +137,7 @@ impl FailureStage {
 #[derive(Debug, Default)]
 struct FilterStats {
     skipped_scopes: u64,
-    redactions: ValueRedactionStats,
+    values: ValueFilterStats,
 }
 
 impl FilterStats {
@@ -145,23 +145,32 @@ impl FilterStats {
         self.skipped_scopes += 1;
     }
 
-    fn redactions_mut(&mut self) -> &mut ValueRedactionStats {
-        &mut self.redactions
+    fn values_mut(&mut self) -> &mut ValueFilterStats {
+        &mut self.values
     }
 
     fn reset(&mut self) {
         self.skipped_scopes = 0;
-        self.redactions = ValueRedactionStats::default();
+        self.values = ValueFilterStats::default();
     }
 
     fn summary_json(&self) -> serde_json::Value {
         let mut redactions = serde_json::Map::new();
+        let mut drops = serde_json::Map::new();
         for kind in ValueKind::ALL {
-            redactions.insert(kind.label().to_string(), json!(self.redactions.count(kind)));
+            redactions.insert(
+                kind.label().to_string(),
+                json!(self.values.redacted_count(kind)),
+            );
+            drops.insert(
+                kind.label().to_string(),
+                json!(self.values.dropped_count(kind)),
+            );
         }
         json!({
             "scopes_skipped": self.skipped_scopes,
             "value_redactions": serde_json::Value::Object(redactions),
+            "value_drops": serde_json::Value::Object(drops),
         })
     }
 }
@@ -725,7 +734,7 @@ impl Tracer for RuntimeTracer {
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
             let mut telemetry_holder = if wants_telemetry {
-                Some(self.filter_stats.redactions_mut())
+                Some(self.filter_stats.values_mut())
             } else {
                 None
             };
@@ -805,7 +814,7 @@ impl Tracer for RuntimeTracer {
 
         let mut recorded: HashSet<String> = HashSet::new();
         let mut telemetry_holder = if wants_telemetry {
-            Some(self.filter_stats.redactions_mut())
+            Some(self.filter_stats.values_mut())
         } else {
             None
         };
@@ -850,7 +859,7 @@ impl Tracer for RuntimeTracer {
         let object_name = scope_resolution.as_ref().and_then(|res| res.object_name());
 
         let mut telemetry_holder = if wants_telemetry {
-            Some(self.filter_stats.redactions_mut())
+            Some(self.filter_stats.values_mut())
         } else {
             None
         };
@@ -1718,23 +1727,27 @@ def emit_return(value):
 
                 [[scope.rules.value_patterns]]
                 selector = "arg:password"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "local:password"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "local:secret"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "global:shared_secret"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "ret:literal:app.sec.sensitive"
-                action = "deny"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:internal"
+                action = "drop"
                 "#,
             );
             let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
@@ -1748,6 +1761,7 @@ shared_secret = "initial"
 
 def sensitive(password):
     secret = "token"
+    internal = "hidden"
     public = "visible"
     globals()['shared_secret'] = password
     snapshot()
@@ -1786,6 +1800,10 @@ sensitive("s3cr3t")
                     variable_names.push(name.clone());
                 }
             }
+            assert!(
+                !variable_names.iter().any(|name| name == "internal"),
+                "internal variable should not be recorded"
+            );
 
             let password_index = variable_names
                 .iter()
@@ -1832,6 +1850,7 @@ sensitive("s3cr3t")
                 "password",
                 SimpleValue::Raw("<redacted>".to_string()),
             );
+            assert_no_variable(&snapshots, "internal");
 
             let return_record = tracer
                 .writer
@@ -1879,23 +1898,27 @@ sensitive("s3cr3t")
 
                 [[scope.rules.value_patterns]]
                 selector = "arg:password"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "local:password"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "local:secret"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "global:shared_secret"
-                action = "deny"
+                action = "redact"
 
                 [[scope.rules.value_patterns]]
                 selector = "ret:literal:app.sec.sensitive"
-                action = "deny"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:internal"
+                action = "drop"
                 "#,
             );
             let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
@@ -1909,6 +1932,8 @@ shared_secret = "initial"
 
 def sensitive(password):
     secret = "token"
+    internal = "hidden"
+    public = "visible"
     globals()['shared_secret'] = password
     snapshot()
     emit_return(password)
@@ -1997,6 +2022,21 @@ sensitive("s3cr3t")
             );
             assert_eq!(
                 value_redactions.get("attribute").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            let value_drops = stats
+                .get("value_drops")
+                .and_then(|value| value.as_object())
+                .expect("value_drops object");
+            assert_eq!(
+                value_drops.get("argument").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            assert_eq!(value_drops.get("local").and_then(|v| v.as_u64()), Some(1));
+            assert_eq!(value_drops.get("global").and_then(|v| v.as_u64()), Some(0));
+            assert_eq!(value_drops.get("return").and_then(|v| v.as_u64()), Some(0));
+            assert_eq!(
+                value_drops.get("attribute").and_then(|v| v.as_u64()),
                 Some(0)
             );
         });

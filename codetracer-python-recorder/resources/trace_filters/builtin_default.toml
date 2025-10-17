@@ -1,7 +1,7 @@
 [meta]
 name = "builtin-default"
 version = 1
-description = "Skip CPython stdlib internals and redact common sensitive identifiers."
+description = "Skip CPython stdlib internals, redact sensitive identifiers, and drop nothing by default."
 labels = ["builtin", "default"]
 
 [scope]
@@ -39,25 +39,25 @@ value_default = "allow"
 
 [[scope.rules.value_patterns]]
 selector = 'local:regex:(?i).*(pass(word)?|passwd|pwd|secret|token|session|cookie|auth|credential|creds|bearer|ssn|credit|card|iban|cvv|cvc|pan|api[_-]?key|private[_-]?key|secret[_-]?key|ssh[_-]?key|jwt|refresh[_-]?token|access[_-]?token).*'
-action = "deny"
+action = "redact"
 reason = "Redact sensitive locals"
 
 [[scope.rules.value_patterns]]
 selector = 'global:regex:(?i).*(pass(word)?|passwd|pwd|secret|token|session|cookie|auth|credential|creds|bearer|ssn|credit|card|iban|cvv|cvc|pan|api[_-]?key|private[_-]?key|secret[_-]?key|ssh[_-]?key|jwt|refresh[_-]?token|access[_-]?token).*'
-action = "deny"
+action = "redact"
 reason = "Redact sensitive globals"
 
 [[scope.rules.value_patterns]]
 selector = 'arg:regex:(?i).*(pass(word)?|passwd|pwd|secret|token|session|cookie|auth|credential|creds|bearer|ssn|credit|card|iban|cvv|cvc|pan|api[_-]?key|private[_-]?key|secret[_-]?key|ssh[_-]?key|jwt|refresh[_-]?token|access[_-]?token).*'
-action = "deny"
+action = "redact"
 reason = "Redact sensitive arguments"
 
 [[scope.rules.value_patterns]]
 selector = 'ret:regex:(?i).*(pass(word)?|passwd|pwd|secret|token|session|cookie|auth|credential|creds|bearer|ssn|credit|card|iban|cvv|cvc|pan|api[_-]?key|private[_-]?key|secret[_-]?key|ssh[_-]?key|jwt|refresh[_-]?token|access[_-]?token).*'
-action = "deny"
+action = "redact"
 reason = "Redact sensitive return values"
 
 [[scope.rules.value_patterns]]
 selector = 'attr:regex:(?i).*(pass(word)?|passwd|pwd|secret|token|session|cookie|auth|credential|creds|bearer|ssn|credit|card|iban|cvv|cvc|pan|api[_-]?key|private[_-]?key|secret[_-]?key|ssh[_-]?key|jwt|refresh[_-]?token|access[_-]?token).*'
-action = "deny"
+action = "redact"
 reason = "Redact sensitive attributes"
