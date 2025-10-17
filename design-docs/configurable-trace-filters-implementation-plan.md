@@ -88,6 +88,7 @@ Related ADR: 0009 – Configurable Trace Filters for codetracer-python-recorder
 - Update `#[pyfunction] start_tracing` signature with `#[pyo3(signature = (path, format, activation_path=None, trace_filter=None))]`.
   - Parse `trace_filter` (string/path) into `FilterSpec`, split on `::`, resolve to absolute paths, and feed into loader. Map errors via `RecorderError`.
 - Extend `TraceSessionBootstrap` (or adjacent helper) to find the default `<project>/.codetracer/trace-filter.toml` by walking up from the script path when no explicit spec is provided.
+- Prepend a built-in default filter (shipped with the crate) that redacts common secrets and skips standard-library/asyncio frames before applying project/user filters.
 - Modify `session.start` and `.trace` to accept `trace_filter` keyword; wrap `pathlib.Path` inputs.
 - CLI:
   - Add `--trace-filter path` (repeatable). When multiple provided, respect CLI order; combine with default using `::`.

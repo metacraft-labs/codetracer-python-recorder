@@ -4,6 +4,7 @@
 - Implements user story **US0028 – Configurable Python trace filters** (see `design-docs/US0028 - Configurable Python trace filters.md`).
 - Trace filters let callers decide which modules execute under tracing and which values are redacted before the recorder writes events.
 - Each filter file is TOML. Files can be chained to layer product defaults with per-project overrides. The runtime records the active filter summary in `trace_metadata.json`.
+- The recorder always prepends a built-in **builtin-default** filter that (a) skips CPython standard-library frames (including `asyncio`/concurrency internals) while still allowing third-party packages under `site-packages` (except helper shims like `_virtualenv.py`) and (b) redacts common sensitive identifiers (passwords, tokens, API keys, etc.) across locals/globals/args/returns/attributes. Project filters and explicit overrides append after this baseline and can relax rules where needed.
 
 ## Filter Files
 - Filters live alongside the project (default: `.codetracer/trace-filter.toml`). Any other file can be supplied via CLI, environment variable, or Python API.
@@ -58,7 +59,7 @@
 - CLI: `--trace-filter path/to/filter.toml`. Provide multiple times or use `::` within one argument to append more files.
 - Environment: `CODETRACER_TRACE_FILTER=filters/prod.toml::filters/hotfix.toml`. Respected by the auto-start hook and the CLI.
 - Python API: `trace(..., trace_filter=[path1, path2])` or pass a `::`-delimited string. Paths are expanded to absolute locations and must exist.
-- The recorder loads filters in the order discovered: default file first, then CLI/env entries, then explicit Python API arguments. Later rules override earlier ones when selectors overlap.
+- The recorder loads filters in the order discovered: the built-in `builtin-default` filter first, then project defaults, CLI/env entries, and explicit Python API arguments. Later rules override earlier ones when selectors overlap.
 
 ## Runtime Metadata
 - `trace_metadata.json` now exposes a `trace_filter` object containing:

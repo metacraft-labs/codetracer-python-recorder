@@ -23,6 +23,7 @@
 - `codetracer-python-recorder/src/lib.rs`
 - `codetracer-python-recorder/benches/trace_filter.rs` *(WS6 microbench harness)*
 - `Justfile` *(WS6 bench automation)*
+- `codetracer-python-recorder/resources/trace_filters/builtin_default.toml` *(WS6 builtin defaults)*
 - Future stages: `codetracer-python-recorder/src/runtime/mod.rs`, Python surface files under `codetracer_python_recorder/`
 
 ## Stage Progress
@@ -31,7 +32,7 @@
 - ✅ **WS3 – Runtime Engine & Caching:** Implemented `trace_filter::engine` with `TraceFilterEngine::resolve` caching `ScopeResolution` entries per code id (DashMap), deriving module/object/file metadata, and compiling value policies with ordered pattern evaluation. Added `ValueKind` to align future runtime integration and unit tests proving caching, rule precedence (object > package/file), and relative path normalisation—all exercised via `just cargo-test`.
 - ✅ **WS4 – RuntimeTracer Integration:** `RuntimeTracer` now accepts an optional `Arc<TraceFilterEngine>`, caches `ScopeResolution` results per code id, and records `filter_scope_skip` when scopes are denied. Value capture helpers honour `ValuePolicy` with a reusable `<redacted>` sentinel, emit per-kind telemetry, and we persist the active filter summary plus skip/redaction counts into `trace_metadata.json`. Bootstrapping now discovers `.codetracer/trace-filter.toml`, instantiates `TraceFilterEngine`, and passes the shared `Arc` into `RuntimeTracer::new`; new `session::bootstrap` tests cover both presence/absence of the default filter and `just cargo-test` (nextest `--no-default-features`) confirms the flow end-to-end.
 - ✅ **WS5 – Python Surface, CLI, Metadata:** Session helpers normalise chained specs, auto-start honours `CODETRACER_TRACE_FILTER`, PyO3 merges explicit/default chains, CLI exposes `--trace-filter`, unit coverage exercises env auto-start filter chaining, and docs/CLI help now describe filter precedence and env wiring.
-- ✅ **WS6 – Hardening, Benchmarks & Documentation:** Completed selector error logging hardening, delivered Rust + Python benchmarking harnesses with `just bench` automation, refreshed the Nix dev shell (gnuplot) to keep Criterion plots available, and closed documentation gaps (README, onboarding guide). Follow-on benchmarking integration tasks are tracked under ADR 0010.
+- ✅ **WS6 – Hardening, Benchmarks & Documentation:** Completed selector error logging hardening, introduced a built-in default filter that redacts sensitive identifiers and skips stdlib/asyncio frames, delivered Rust + Python benchmarking harnesses with `just bench` automation, refreshed the Nix dev shell (gnuplot) to keep Criterion plots available, and closed documentation gaps (README, onboarding guide). Follow-on benchmarking integration tasks are tracked under ADR 0010.
 
 ## WS5 Progress Checklist
 1. ✅ Introduced Python-side helpers that normalise `trace_filter` inputs (strings, Paths, iterables) into absolute path chains, updated session API/context manager, and threaded env-driven auto-start.

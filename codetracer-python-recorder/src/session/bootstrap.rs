@@ -33,6 +33,9 @@ pub struct TraceSessionBootstrap {
 
 const TRACE_FILTER_DIR: &str = ".codetracer";
 const TRACE_FILTER_FILE: &str = "trace-filter.toml";
+const BUILTIN_FILTER_LABEL: &str = "builtin-default";
+const BUILTIN_TRACE_FILTER: &str =
+    include_str!("../../resources/trace_filters/builtin_default.toml");
 
 impl fmt::Debug for TraceSessionBootstrap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -173,11 +176,10 @@ fn load_trace_filter(
         chain.extend(paths.iter().cloned());
     }
 
-    if chain.is_empty() {
-        return Ok(None);
-    }
-
-    let config = TraceFilterConfig::from_paths(&chain)?;
+    let config = TraceFilterConfig::from_inline_and_paths(
+        &[(BUILTIN_FILTER_LABEL, BUILTIN_TRACE_FILTER)],
+        &chain,
+    )?;
     Ok(Some(Arc::new(TraceFilterEngine::new(config))))
 }
 
@@ -234,6 +236,7 @@ mod tests {
     use super::*;
     use pyo3::types::PyList;
     use recorder_errors::ErrorCode;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -347,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_bootstrap_ignores_missing_trace_filter() {
+    fn prepare_bootstrap_applies_builtin_trace_filter() {
         Python::with_gil(|py| {
             let tmp = tempdir().expect("tempdir");
             let trace_dir = tmp.path().join("out");
@@ -365,7 +368,13 @@ mod tests {
                 .expect("restore argv");
 
             let bootstrap = result.expect("bootstrap");
-            assert!(bootstrap.trace_filter().is_none());
+            let engine = bootstrap.trace_filter().expect("builtin filter");
+            let summary = engine.summary();
+            assert_eq!(summary.entries.len(), 1);
+            assert_eq!(
+                summary.entries[0].path,
+                PathBuf::from("<inline:builtin-default>")
+            );
         });
     }
 
@@ -416,8 +425,12 @@ mod tests {
             let bootstrap = result.expect("bootstrap");
             let engine = bootstrap.trace_filter().expect("filter engine");
             let summary = engine.summary();
-            assert_eq!(summary.entries.len(), 1);
-            assert_eq!(summary.entries[0].path, filter_path);
+            assert_eq!(summary.entries.len(), 2);
+            assert_eq!(
+                summary.entries[0].path,
+                PathBuf::from("<inline:builtin-default>")
+            );
+            assert_eq!(summary.entries[1].path, filter_path);
         });
     }
 
@@ -494,9 +507,13 @@ mod tests {
             let bootstrap = result.expect("bootstrap");
             let engine = bootstrap.trace_filter().expect("filter engine");
             let summary = engine.summary();
-            assert_eq!(summary.entries.len(), 2);
-            assert_eq!(summary.entries[0].path, default_filter_path);
-            assert_eq!(summary.entries[1].path, override_filter_path);
+            assert_eq!(summary.entries.len(), 3);
+            assert_eq!(
+                summary.entries[0].path,
+                PathBuf::from("<inline:builtin-default>")
+            );
+            assert_eq!(summary.entries[1].path, default_filter_path);
+            assert_eq!(summary.entries[2].path, override_filter_path);
         });
     }
 }

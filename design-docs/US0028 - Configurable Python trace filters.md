@@ -36,7 +36,7 @@ As a **Python team lead**, I want **a powerful configuration language to filter 
 - [ ] Scenario: Default filter protects secrets  
   - Given no filter file is provided  
   - When the recorder starts  
-  - Then a built-in best-effort secret redaction policy is applied and the user is notified how to supply a project-specific filter
+  - Then a built-in best-effort secret redaction policy is applied, standard-library/asyncio frames are skipped, and the user is notified how to supply a project-specific filter
 - [ ] Scenario: Validate configuration errors  
   - Given I supply an invalid rule (e.g., circular include)  
   - When I launch the recorder  

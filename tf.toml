@@ -1,0 +1,12 @@
+[meta]
+name = "test"
+version = 1
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+[[scope.rules]]
+selector = 'obj:regex:.*outer_func.*'
+exec = "skip"
+reason = "TESTING"

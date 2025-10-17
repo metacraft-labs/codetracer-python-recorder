@@ -65,6 +65,8 @@ class TraceSession:
   entries (mirroring the CLI). The env-driven chain is appended after any
   discovered project default `.codetracer/trace-filter.toml`, allowing overrides
   to refine or replace default rules.
+- Even when no env/CLI filters are provided, prepend the bundled `builtin-default`
+  filter so a baseline redaction/stdlib skip policy always applies.
 
 ## Usage Example
 ```py

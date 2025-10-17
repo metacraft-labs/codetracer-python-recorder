@@ -29,6 +29,7 @@ The solution has to load human-authored TOML, enforce schema validation, and add
    - Resolve `inherit` defaults while chaining multiple files (split on `::`). Later files append to the ordered rule list; `value_patterns` are likewise appended.
 2. **Expose filter loading at session bootstrap.**
    - Extend `TraceSessionBootstrap` to locate the default project filter (`<cwd>/.codetracer/trace-filter.toml` up the directory tree) and accept optional override specs from CLI, Python API, or env (`CODETRACER_TRACE_FILTER`).
+   - Prepend a bundled `builtin-default` filter that redacts common secrets and skips CPython standard-library/asyncio frames before applying project/user filters.
    - Parse each provided file once per `start_tracing` call. Propagate `RecorderError` on IO or schema failures with context about the offending selector.
 3. **Wire the engine into `RuntimeTracer`.**
    - Store `Arc<TraceFilterEngine>` plus a per-code cache of `ResolvedScope` decisions (`HashMap<usize, ScopeResolution>`). Each resolution records:
