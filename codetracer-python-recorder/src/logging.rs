@@ -8,6 +8,7 @@ pub use logger::{
     init_rust_logging_with_default, log_recorder_error, set_active_trace_id, with_error_code,
     with_error_code_opt,
 };
+#[allow(unused_imports)]
 pub use metrics::{
     install_metrics, record_detach, record_dropped_event, record_panic, RecorderMetrics,
 };

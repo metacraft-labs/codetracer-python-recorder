@@ -52,6 +52,12 @@
   - `logger.rs` owns the log installation, filter parsing, policy application, and error-code scoping; it exposes helpers (`with_error_code`, `log_recorder_error`, `set_active_trace_id`) for the rest of the crate.
   - `metrics.rs` encapsulates the `RecorderMetrics` trait, sink installation, and testing harness; `trailer.rs` manages JSON error toggles and payload emission via the logger's context snapshot.
   - Updated facade tests (`structured_log_records`, `json_error_trailers_emit_payload`, metrics capture) to rely on the new modules; `just test` verifies Rust + Python suites after the split.
+- 🔄 Milestone 3 Kickoff: revisiting `session/bootstrap.rs` to catalogue filesystem, metadata, and filter responsibilities ahead of submodule extraction.
+  - Filesystem prep: `ensure_trace_directory`, `resolve_trace_format`, directory walkers (`discover_default_trace_filter`, `resolve_program_directory`, `current_directory`).
+  - Metadata capture: `ProgramMetadata` struct, `collect_program_metadata`.
+  - Filter loading: constants (`TRACE_FILTER_*`, builtin include), `load_trace_filter`, `discover_default_trace_filter`, explicit override merge logic.
+  - `TraceSessionBootstrap::prepare` orchestrates all helpers and owns the struct fields; tests cover directory creation, format validation, metadata fallbacks, filter discovery/merging.
+- ✅ Milestone 3 Step 1: established `session/bootstrap/{filesystem,metadata,filters}.rs`, re-exported `ProgramMetadata`, and migrated helper functions/tests without changing the facade API. `just test` validates the split scaffold.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -68,5 +74,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Sweep for stray logging call sites or docs that reference the old monolith, updating imports as needed (Milestone 2 Step 5 hygiene).
-2. Start planning Milestone 3 (session bootstrap refactor) once logging consumers are stable and no additional adjustments are required.
+1. Continue Milestone 3 by tightening module responsibilities: move remaining filesystem/metadata/filter helpers into their submodules (e.g., `TraceSessionBootstrap::prepare` orchestration steps).
+2. Add focused unit tests within the new modules for error scenarios (unwritable directory, unsupported format, missing default filter) before rerunning `just test`.
