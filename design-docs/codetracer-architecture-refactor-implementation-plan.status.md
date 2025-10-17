@@ -43,6 +43,7 @@
     - **Shared utilities:** `with_error_code[_opt]`, `set_active_trace_id`, `log_recorder_error`, `JSON_ERRORS_ENABLED`.
 - ✅ Milestone 2 scaffolding: created placeholder modules `policy::{model, env, ffi}` and `logging::{logger, metrics, trailer}`; top-level `policy.rs`/`logging.rs` still host existing logic pending extraction. `just test` validates the skeletal split compiles.
 - ✅ Milestone 2 Step 1: moved policy data structures and global helpers into `policy::model`, re-exported public APIs, updated tests, and reran Rust/Python suites (`cargo nextest`, `pytest`) successfully.
+- ✅ Milestone 2 Step 2: migrated environment parsing/consts into `policy::env`, cleaned `policy.rs` to consume the facade, and refreshed unit tests. `uv run cargo nextest` + `uv run python -m pytest` both pass.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -59,5 +60,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Begin Step 2: move environment parsing (env constants, `configure_policy_from_env`, `parse_bool`, `parse_capture_io`) into `policy::env`, adapting call sites.
-2. After Step 2, relocate PyO3 bindings into `policy::ffi` and refresh exports before tackling logging splits.
+1. Proceed with Step 3: relocate PyO3 bindings into `policy::ffi`, update re-exports, and run tests.
+2. Once policy refactor is complete, commence logging module decomposition per plan (Milestone 2 Steps 4–5).
