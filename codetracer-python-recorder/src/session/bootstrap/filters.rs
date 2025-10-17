@@ -51,7 +51,7 @@ fn discover_default_trace_filter(program: &str) -> Result<Option<PathBuf>> {
 pub mod tests {
     use super::*;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     pub fn write_default_filter(root: &Path) -> PathBuf {
@@ -120,5 +120,45 @@ pub mod tests {
         let found =
             discover_default_trace_filter(script.to_str().expect("utf8")).expect("discover");
         assert!(found.is_some());
+    }
+
+    #[test]
+    fn load_trace_filter_includes_builtin() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+
+        let engine = load_trace_filter(None, script.to_str().expect("utf8"))
+            .expect("load")
+            .expect("engine");
+        let summary = engine.summary();
+        assert!(summary
+            .entries
+            .iter()
+            .any(|entry| entry.path == PathBuf::from("<inline:builtin-default>")));
+    }
+
+    #[test]
+    fn load_trace_filter_merges_default_and_override() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+        let (default_filter_path, override_filter_path) = write_default_and_override(root);
+
+        let engine = load_trace_filter(
+            Some(&[override_filter_path.clone()]),
+            script.to_str().expect("utf8"),
+        )
+        .expect("load")
+        .expect("engine");
+        let paths: Vec<PathBuf> = engine
+            .summary()
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
+        assert!(paths.contains(&default_filter_path));
+        assert!(paths.contains(&override_filter_path));
     }
 }

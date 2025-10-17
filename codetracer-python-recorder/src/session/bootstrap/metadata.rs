@@ -80,4 +80,31 @@ pub mod tests {
             .expect("restore argv");
         result
     }
+
+    #[test]
+    fn collects_program_and_args() {
+        Python::with_gil(|py| {
+            let metadata = with_sys_argv(
+                py,
+                ProgramArgs::new(["/tmp/prog.py", "--flag", "value"]),
+                || collect_program_metadata(py),
+            )
+            .expect("metadata");
+            assert_eq!(metadata.program, "/tmp/prog.py");
+            assert_eq!(
+                metadata.args,
+                vec!["--flag".to_string(), "value".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn defaults_to_unknown_program() {
+        Python::with_gil(|py| {
+            let metadata = with_sys_argv(py, ProgramArgs::empty(), || collect_program_metadata(py))
+                .expect("metadata");
+            assert_eq!(metadata.program, "<unknown>");
+            assert!(metadata.args.is_empty());
+        });
+    }
 }

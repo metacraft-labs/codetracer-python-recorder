@@ -94,72 +94,8 @@ impl TraceSessionBootstrap {
 mod tests {
     use super::*;
     use metadata::tests::{with_sys_argv, ProgramArgs};
-    use recorder_errors::ErrorCode;
     use std::path::PathBuf;
     use tempfile::tempdir;
-
-    #[test]
-    fn ensure_trace_directory_creates_missing_dir() {
-        let tmp = tempdir().expect("tempdir");
-        let target = tmp.path().join("trace-out");
-        ensure_trace_directory(&target).expect("create directory");
-        assert!(target.is_dir());
-    }
-
-    #[test]
-    fn ensure_trace_directory_rejects_file_path() {
-        let tmp = tempdir().expect("tempdir");
-        let file_path = tmp.path().join("trace.bin");
-        std::fs::write(&file_path, b"stub").expect("write stub file");
-        let err = ensure_trace_directory(&file_path).expect_err("should reject file path");
-        assert_eq!(err.code, ErrorCode::TraceDirectoryConflict);
-    }
-
-    #[test]
-    fn resolve_trace_format_accepts_supported_aliases() {
-        assert!(matches!(
-            resolve_trace_format("json").expect("json format"),
-            TraceEventsFileFormat::Json
-        ));
-        assert!(matches!(
-            resolve_trace_format("BiNaRy").expect("binary alias"),
-            TraceEventsFileFormat::BinaryV0
-        ));
-    }
-
-    #[test]
-    fn resolve_trace_format_rejects_unknown_values() {
-        let err = resolve_trace_format("yaml").expect_err("should reject yaml");
-        assert_eq!(err.code, ErrorCode::UnsupportedFormat);
-        assert!(err.message().contains("unsupported trace format"));
-    }
-
-    #[test]
-    fn collect_program_metadata_reads_sys_argv() {
-        Python::with_gil(|py| {
-            let metadata = with_sys_argv(
-                py,
-                ProgramArgs::new(["/tmp/prog.py", "--flag", "value"]),
-                || collect_program_metadata(py),
-            )
-            .expect("metadata");
-            assert_eq!(metadata.program, "/tmp/prog.py");
-            assert_eq!(
-                metadata.args,
-                vec!["--flag".to_string(), "value".to_string()]
-            );
-        });
-    }
-
-    #[test]
-    fn collect_program_metadata_defaults_unknown_program() {
-        Python::with_gil(|py| {
-            let metadata = with_sys_argv(py, ProgramArgs::empty(), || collect_program_metadata(py))
-                .expect("metadata");
-            assert_eq!(metadata.program, "<unknown>");
-            assert!(metadata.args.is_empty());
-        });
-    }
 
     #[test]
     fn prepare_bootstrap_populates_fields_and_creates_directory() {
