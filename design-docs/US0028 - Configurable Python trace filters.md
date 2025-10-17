@@ -30,7 +30,7 @@ As a **Python team lead**, I want **a powerful configuration language to filter 
   - When I inspect a trace event  
   - Then only the allowed variables are serialized, with excluded variables redacted
 - [ ] Scenario: Merge multiple filter files  
-  - Given I provide a base filter `filters/common.trace` and user-specific overrides `filters/local.trace` combined as `filters/common.trace//filters/local.trace`  
+  - Given I provide a base filter `filters/common.trace` and user-specific overrides `filters/local.trace` combined as `filters/common.trace::filters/local.trace`  
   - When I launch the recorder  
   - Then the merged configuration applies deterministic precedence and validation before tracing starts
 - [ ] Scenario: Default filter protects secrets  
@@ -47,7 +47,7 @@ As a **Python team lead**, I want **a powerful configuration language to filter 
 - **Value Capture Controls**: Within each scope rule, evaluate a top-down list of value patterns (locals, globals, arguments, return payloads, and optionally nested attributes). Patterns resolve to allow-or-deny decisions, with denied values redacted while preserving variable names to indicate omission.
 - **I/O Capture Toggle**: Expose a filter flag to enable/disable interceptors for stdout, stderr, stdin, and file descriptors, aligning with the concurrent IO capture effort.
 - **Configuration Source**: Filters live in a human-editable file (default path: `<project_root>/.codetracer/trace-filter.cfg`) and can be overridden via CLI/API parameters for alternate locations.
-- **Filter Composition**: Support chained composition using the `filter_a//filter_b` syntax, where later filters extend or override earlier ones with clear conflict resolution rules.
+- **Filter Composition**: Support chained composition using the `filter_a::filter_b` syntax, where later filters extend or override earlier ones with clear conflict resolution rules.
 - **Default Policy**: Ship a curated default filter that aggressively redacts common secrets (tokens, passwords, keys) and excludes sensitive system modules. This fallback activates when no project filter is found.
 
 ## Unified Scope Selector Format
@@ -308,7 +308,7 @@ The recorder validates filter files against the schema below. Keys not listed ar
       - `reason` *(string, optional)*: Document why the pattern exists.  
 
 ### Composition Semantics
-- Filters may be combined via `filter_a//filter_b`. Evaluation walks the chain left → right; later filters override earlier ones when keys conflict.
+- Filters may be combined via `filter_a::filter_b`. Evaluation walks the chain left → right; later filters override earlier ones when keys conflict.
 - `inherit` defaults carry the value from the previous filter in the chain; if no prior value exists, validation fails with a descriptive error.
 - `scope.rules` arrays merge by appending, so rules contributed by later filters execute after earlier ones and can override them through ordered evaluation.
 - Nested `value_patterns` arrays also append, preserving the expectation that later entries refine or replace earlier decisions.

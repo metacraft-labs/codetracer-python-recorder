@@ -4,6 +4,8 @@
 - `design-docs/US0028 - Configurable Python trace filters.md`
 - `design-docs/adr/0009-configurable-trace-filters.md`
 - `design-docs/configurable-trace-filters-implementation-plan.md`
+- `design-docs/adr/0010-codetracer-python-recorder-benchmarking.md` *(benchmarking roadmap)*
+- `design-docs/codetracer-python-benchmarking-implementation-plan.md`
 
 ## Key Source Files
 - `codetracer-python-recorder/src/trace_filter/selector.rs` *(new in WS1)*
@@ -29,7 +31,7 @@
 - ✅ **WS3 – Runtime Engine & Caching:** Implemented `trace_filter::engine` with `TraceFilterEngine::resolve` caching `ScopeResolution` entries per code id (DashMap), deriving module/object/file metadata, and compiling value policies with ordered pattern evaluation. Added `ValueKind` to align future runtime integration and unit tests proving caching, rule precedence (object > package/file), and relative path normalisation—all exercised via `just cargo-test`.
 - ✅ **WS4 – RuntimeTracer Integration:** `RuntimeTracer` now accepts an optional `Arc<TraceFilterEngine>`, caches `ScopeResolution` results per code id, and records `filter_scope_skip` when scopes are denied. Value capture helpers honour `ValuePolicy` with a reusable `<redacted>` sentinel, emit per-kind telemetry, and we persist the active filter summary plus skip/redaction counts into `trace_metadata.json`. Bootstrapping now discovers `.codetracer/trace-filter.toml`, instantiates `TraceFilterEngine`, and passes the shared `Arc` into `RuntimeTracer::new`; new `session::bootstrap` tests cover both presence/absence of the default filter and `just cargo-test` (nextest `--no-default-features`) confirms the flow end-to-end.
 - ✅ **WS5 – Python Surface, CLI, Metadata:** Session helpers normalise chained specs, auto-start honours `CODETRACER_TRACE_FILTER`, PyO3 merges explicit/default chains, CLI exposes `--trace-filter`, unit coverage exercises env auto-start filter chaining, and docs/CLI help now describe filter precedence and env wiring.
-- 🔄 **WS6 – Hardening, Benchmarks & Documentation:** Inception in progress—reviewing selector error handling ahead of introducing a logging guard for regex compilation failures, and scoping the benchmark harness (Rust microbench + Python smoke) before wiring documentation updates and CI guard-rails.
+- ✅ **WS6 – Hardening, Benchmarks & Documentation:** Completed selector error logging hardening, delivered Rust + Python benchmarking harnesses with `just bench` automation, refreshed the Nix dev shell (gnuplot) to keep Criterion plots available, and closed documentation gaps (README, onboarding guide). Follow-on benchmarking integration tasks are tracked under ADR 0010.
 
 ## WS5 Progress Checklist
 1. ✅ Introduced Python-side helpers that normalise `trace_filter` inputs (strings, Paths, iterables) into absolute path chains, updated session API/context manager, and threaded env-driven auto-start.
@@ -38,10 +40,11 @@
 
 ## WS6 Progress Checklist
 1. ✅ Tightened selector diagnostics by adding a deduplicated warning path when regex compilation fails, sanitising the logged pattern and pointing users to fallback strategies (`codetracer-python-recorder/src/trace_filter/selector.rs`). Attempted `cargo test trace_filter::selector --lib`, but it still requires a CPython toolchain; rerun under the `just cargo-test` shim (nextest `--no-default-features`) once the virtualenv is bootstrapped.
-2. ✅ Established a Criterion-backed microbench harness comparing baseline vs glob- and regex-heavy filter chains (`codetracer-python-recorder/benches/trace_filter.rs`) and wired supporting dev-dependencies/bench target entries in `Cargo.toml`. `just bench` now provisions the venv, pins `PYO3_PYTHON`, builds with `--no-default-features`, and executes the harness end-to-end (baseline ≈1.12 ms, glob ≈33.8 ms, regex ≈8.44 ms per 10 k event batch on the current dev host).
+2. ✅ Established a Criterion-backed microbench harness comparing baseline vs glob- and regex-heavy filter chains (`codetracer-python-recorder/benches/trace_filter.rs`) and wired supporting dev-dependencies/bench target entries in `Cargo.toml`. `just bench` now provisions the venv, pins `PYO3_PYTHON`, builds with `--no-default-features`, executes the harness end-to-end (baseline ≈1.12 ms, glob ≈33.8 ms, regex ≈8.44 ms per 10 k event batch on the current dev host), and relies on the dev-shell `gnuplot` install for local plots.
 3. ✅ Added the Python smoke benchmark (`codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py`) exercising `TraceSession` end-to-end, emitting JSON perf artefacts, and wired it into `just bench`.
 4. ✅ Updated docs (`docs/onboarding/trace-filters.md`, repo README, recorder README) with filter syntax, CLI/env wiring, and benchmarking guidance.
 
 ## Next Steps
-1. Feed the new `just bench` output into perf tracking (decide storage format, add regression thresholds), and smooth out benchmark noise (e.g., address Criterion outlier warnings, optional gnuplot support).
-2. Establish guard-rail thresholds for the Python smoke benchmark and decide how to surface the JSON artefacts in CI.
+1. Package WS1–WS6 outcomes for release (changelog entry, internal announcement, update `docs/onboarding/trace-filters.md` as needed with final screenshots/links).
+2. Monitor early adoption and gather feedback from pilot integrations; triage any follow-up defects in `TraceFilterConfig`/`TraceFilterEngine`.
+3. Coordinate with stakeholders to kick off the benchmarking initiative defined in ADR 0010 once capacity frees up (artefact retention, baseline refresh cadence, CI scheduling).

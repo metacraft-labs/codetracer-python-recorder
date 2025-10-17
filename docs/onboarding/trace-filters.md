@@ -55,9 +55,9 @@
 
 ## Loading and Chaining Filters
 - Default discovery: `RuntimeTracer` searches for `.codetracer/trace-filter.toml` near the target script.
-- CLI: `--trace-filter path/to/filter.toml`. Provide multiple times or use `//` within one argument to append more files.
-- Environment: `CODETRACER_TRACE_FILTER=filters/prod.toml//filters/hotfix.toml`. Respected by the auto-start hook and the CLI.
-- Python API: `trace(..., trace_filter=[path1, path2])` or pass a `//`-delimited string. Paths are expanded to absolute locations and must exist.
+- CLI: `--trace-filter path/to/filter.toml`. Provide multiple times or use `::` within one argument to append more files.
+- Environment: `CODETRACER_TRACE_FILTER=filters/prod.toml::filters/hotfix.toml`. Respected by the auto-start hook and the CLI.
+- Python API: `trace(..., trace_filter=[path1, path2])` or pass a `::`-delimited string. Paths are expanded to absolute locations and must exist.
 - The recorder loads filters in the order discovered: default file first, then CLI/env entries, then explicit Python API arguments. Later rules override earlier ones when selectors overlap.
 
 ## Runtime Metadata

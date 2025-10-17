@@ -5,7 +5,7 @@ Target PRD: US0028 – Configurable Python trace filters
 Related ADR: 0009 – Configurable Trace Filters for codetracer-python-recorder
 
 ## Goals
-- Load one or more TOML filter files (`filter_a//filter_b`) and compile them into a reusable engine that models ordered scope rules and value redaction patterns.
+- Load one or more TOML filter files (`filter_a::filter_b`) and compile them into a reusable engine that models ordered scope rules and value redaction patterns.
 - Gate tracing for packages, files, and qualified objects before we allocate call/line events. Redact locals, globals, args, and return payloads while keeping variable names visible.
 - Expose configuration through the Python API, CLI, and environment variables with actionable validation errors.
 - Preserve performance: cached decisions keep `on_py_start`, `on_line`, and `on_py_return` within the existing overhead budget (<10 % slowdown and <8 µs added per event when filters are active).
@@ -86,11 +86,11 @@ Related ADR: 0009 – Configurable Trace Filters for codetracer-python-recorder
 ### WS5 – Python Surface, CLI, and Metadata
 **Scope:** Wire filters through session helpers and document them.
 - Update `#[pyfunction] start_tracing` signature with `#[pyo3(signature = (path, format, activation_path=None, trace_filter=None))]`.
-  - Parse `trace_filter` (string/path) into `FilterSpec`, split on `//`, resolve to absolute paths, and feed into loader. Map errors via `RecorderError`.
+  - Parse `trace_filter` (string/path) into `FilterSpec`, split on `::`, resolve to absolute paths, and feed into loader. Map errors via `RecorderError`.
 - Extend `TraceSessionBootstrap` (or adjacent helper) to find the default `<project>/.codetracer/trace-filter.toml` by walking up from the script path when no explicit spec is provided.
 - Modify `session.start` and `.trace` to accept `trace_filter` keyword; wrap `pathlib.Path` inputs.
 - CLI:
-  - Add `--trace-filter path` (repeatable). When multiple provided, respect CLI order; combine with default using `//`.
+  - Add `--trace-filter path` (repeatable). When multiple provided, respect CLI order; combine with default using `::`.
   - Show helpful message when file missing or parse fails.
 - Auto-start: read `CODETRACER_TRACE_FILTER`.
 - Augment trace metadata writer (`TraceOutputPaths::write_metadata` or equivalent) with filter summary (paths + hashes).

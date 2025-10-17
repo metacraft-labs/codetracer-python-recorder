@@ -17,7 +17,7 @@
 We must let maintainers author deterministic filters that:
 - Enable or disable tracing for specific packages, files, or fully qualified code objects with glob/regex support.
 - Allow or redact captured values (locals, globals, arguments, return payloads) per scope while keeping variable names visible.
-- Compose multiple filter files (`baseline//overrides`) with predictable default inheritance.
+- Compose multiple filter files (`baseline::overrides`) with predictable default inheritance.
 
 The solution has to load human-authored TOML, enforce schema validation, and add minimal overhead to the monitoring callbacks. Policy errors must surface as structured `RecorderError` instances.
 
@@ -26,7 +26,7 @@ The solution has to load human-authored TOML, enforce schema validation, and add
    - Parse TOML using `serde` + `toml` with `deny_unknown_fields`.
    - Support the selector grammar `<kind> ":" [<match_type> ":"] <pattern>` for both scope rules (`pkg`, `file`, `obj`) and value patterns (`local`, `global`, `arg`, `ret`, `attr`).
    - Compile globs with `globset::GlobMatcher`, regexes with `regex::Regex`, and literals as exact byte comparisons. Keep compiled matchers alongside original text for diagnostics.
-   - Resolve `inherit` defaults while chaining multiple files (split on `//`). Later files append to the ordered rule list; `value_patterns` are likewise appended.
+   - Resolve `inherit` defaults while chaining multiple files (split on `::`). Later files append to the ordered rule list; `value_patterns` are likewise appended.
 2. **Expose filter loading at session bootstrap.**
    - Extend `TraceSessionBootstrap` to locate the default project filter (`<cwd>/.codetracer/trace-filter.toml` up the directory tree) and accept optional override specs from CLI, Python API, or env (`CODETRACER_TRACE_FILTER`).
    - Parse each provided file once per `start_tracing` call. Propagate `RecorderError` on IO or schema failures with context about the offending selector.
@@ -39,7 +39,7 @@ The solution has to load human-authored TOML, enforce schema validation, and add
    - Augment `capture_call_arguments`, `record_visible_scope`, and `record_return_value` to accept a `ValuePolicy`. Encode real values for `Allow` and emit a reusable redaction record (`ValueRecord::Error { msg: "<redacted>" }`) for `Deny`.
    - Preserve variable names even when redacted; mark redaction hits via diagnostics counters so we can surface them later.
 4. **Surface configuration from Python.**
-   - Extend `codetracer_python_recorder.session.start` with a `trace_filter` keyword accepting a string or pathlike. Accept the same parameter on the CLI as `--trace-filter`, honouring `filter_a//filter_b` composition or repeated flags.
+   - Extend `codetracer_python_recorder.session.start` with a `trace_filter` keyword accepting a string or pathlike. Accept the same parameter on the CLI as `--trace-filter`, honouring `filter_a::filter_b` composition or repeated flags.
    - Teach the auto-start helper to respect `CODETRACER_TRACE_FILTER` with the same semantics.
    - Provide `codetracer_python_recorder.codetracer_python_recorder.configure_trace_filter(path_spec: str | None)` to preload/clear filters for embedding scenarios.
 5. **Diagnostics and metadata.**

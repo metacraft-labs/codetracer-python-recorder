@@ -71,7 +71,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         action="append",
         help=(
             "Path to a trace filter file. Provide multiple times to chain filters; "
-            "specify multiple paths within a single argument using '//' separators. "
+            "specify multiple paths within a single argument using '::' separators. "
             "Filters load after any project default '.codetracer/trace-filter.toml' so "
             "later entries override earlier ones; the CODETRACER_TRACE_FILTER "
             "environment variable accepts the same syntax for env auto-start."

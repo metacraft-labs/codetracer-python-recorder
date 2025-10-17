@@ -132,12 +132,12 @@ def test_parse_args_collects_trace_filters(tmp_path: Path) -> None:
             "--trace-filter",
             str(filter_a),
             "--trace-filter",
-            f"{filter_b}//{filter_a}",
+            f"{filter_b}::{filter_a}",
             str(script),
         ]
     )
 
-    assert config.trace_filter == (str(filter_a), f"{filter_b}//{filter_a}")
+    assert config.trace_filter == (str(filter_a), f"{filter_b}::{filter_a}")
 
 
 def test_parse_args_enables_io_capture_fd_mirroring(tmp_path: Path) -> None:

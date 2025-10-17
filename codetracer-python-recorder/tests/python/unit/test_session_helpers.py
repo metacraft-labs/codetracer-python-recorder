@@ -140,7 +140,7 @@ def test_normalize_trace_filter_expands_sequence(tmp_path: Path) -> None:
     overrides.write_text("# overrides\n", encoding="utf-8")
 
     result = session._normalize_trace_filter(
-        [default, f"{overrides}//{default}", overrides]
+        [default, f"{overrides}::{default}", overrides]
     )
 
     assert result == [

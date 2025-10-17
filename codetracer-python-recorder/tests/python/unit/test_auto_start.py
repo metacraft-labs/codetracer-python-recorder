@@ -43,7 +43,7 @@ def test_auto_start_resolves_filter_chain(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setenv(auto_start.ENV_TRACE_PATH, str(trace_dir))
     monkeypatch.setenv(
-        auto_start.ENV_TRACE_FILTER, f"{default_filter}//{override_filter}"
+        auto_start.ENV_TRACE_FILTER, f"{default_filter}::{override_filter}"
     )
 
     monkeypatch.setattr(session, "_start_backend", fake_start_backend)

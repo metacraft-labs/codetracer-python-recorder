@@ -76,7 +76,7 @@ def start(
         the referenced file.
     trace_filter:
         Optional filter specification. Accepts a path-like object, an iterable
-        of path-like objects, or a string containing ``//``-separated paths.
+        of path-like objects, or a string containing ``::``-separated paths.
         Paths are expanded to absolute locations and must exist.
     policy:
         Optional mapping of runtime policy overrides forwarded to
@@ -224,7 +224,7 @@ def _extract_filter_segments(
 
 
 def _split_filter_spec(value: str) -> list[str]:
-    parts = [segment.strip() for segment in value.split("//")]
+    parts = [segment.strip() for segment in value.split("::")]
     return [segment for segment in parts if segment]
 
 

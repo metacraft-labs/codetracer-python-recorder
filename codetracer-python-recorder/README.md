@@ -40,12 +40,12 @@ python -m codetracer_python_recorder \
   integration with the DB backend importer.
 - `--activation-path` – optional gate that postpones tracing until the interpreter
   executes this file (defaults to the target script).
-- `--trace-filter` – path to a filter file. Provide multiple times or use `//`
+- `--trace-filter` – path to a filter file. Provide multiple times or use `::`
   separators within a single argument to build a chain. When present, the recorder
   prepends the project default `.codetracer/trace-filter.toml` (if found near the
   target script) so later entries override the defaults. The
-  `CODETRACER_TRACE_FILTER` environment variable accepts the same syntax when using
-  the auto-start hook.
+  `CODETRACER_TRACE_FILTER` environment variable accepts the same `::`-separated
+  syntax when using the auto-start hook.
 
 All additional arguments are forwarded to the target script unchanged. The CLI
 reuses whichever interpreter launches it so wrappers such as `uv run`, `pipx`,
@@ -54,7 +54,7 @@ or activated virtual environments behave identically to `python script.py`.
 ## Trace filter configuration
 - Filter files are TOML with `[meta]`, `[scope]`, and `[[scope.rules]]` tables. Rules evaluate in declaration order and can tweak both execution (`exec`) and value decisions (`value_default`).
 - Supported selector domains: `pkg`, `file`, `obj` for scopes; `local`, `global`, `arg`, `ret`, `attr` for value policies. Match types default to `glob` and also accept `regex` or `literal` (e.g. `local:regex:^(metric|masked)_\w+$`).
-- Default discovery: `.codetracer/trace-filter.toml` next to the traced script. Chain additional files via CLI (`--trace-filter path_a --trace-filter path_b`), environment variable (`CODETRACER_TRACE_FILTER=path_a//path_b`), or Python helpers (`trace(..., trace_filter=[path_a, path_b])`). Later entries override earlier ones when selectors overlap.
+- Default discovery: `.codetracer/trace-filter.toml` next to the traced script. Chain additional files via CLI (`--trace-filter path_a --trace-filter path_b`), environment variable (`CODETRACER_TRACE_FILTER=path_a::path_b`), or Python helpers (`trace(..., trace_filter=[path_a, path_b])`). Later entries override earlier ones when selectors overlap.
 - Runtime metadata captures the active chain under `trace_metadata.json -> trace_filter`, including per-kind redaction counters. See `docs/onboarding/trace-filters.md` for the full DSL reference and examples.
 
 Example snippet:
