@@ -483,7 +483,7 @@ mod tests {
                 [[scope.rules]]
                 selector = "pkg:src.special"
                 exec = "skip"
-                value_default = "deny"
+                value_default = "redact"
                 "#,
             )
             .expect("write override filter");

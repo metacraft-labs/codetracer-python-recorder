@@ -510,7 +510,7 @@ mod tests {
             r#"
             [scope]
             default_exec = "skip"
-            default_value_action = "deny"
+            default_value_action = "redact"
 
             [[scope.rules]]
             selector = "pkg:app.foo"
@@ -523,7 +523,11 @@ mod tests {
 
             [[scope.rules.value_patterns]]
             selector = "arg:password"
-            action = "deny"
+            action = "redact"
+
+            [[scope.rules.value_patterns]]
+            selector = "local:temp"
+            action = "drop"
             "#,
         )?;
 
@@ -548,7 +552,11 @@ mod tests {
             let policy = first.value_policy();
             assert_eq!(policy.default_action(), ValueAction::Allow);
             assert_eq!(policy.decide(ValueKind::Local, "user"), ValueAction::Allow);
-            assert_eq!(policy.decide(ValueKind::Arg, "password"), ValueAction::Deny);
+            assert_eq!(
+                policy.decide(ValueKind::Arg, "password"),
+                ValueAction::Redact
+            );
+            assert_eq!(policy.decide(ValueKind::Local, "temp"), ValueAction::Drop);
             assert_eq!(
                 policy.decide(ValueKind::Global, "anything"),
                 ValueAction::Allow
@@ -575,7 +583,7 @@ mod tests {
             [[scope.rules]]
             selector = "obj:app.foo.bar"
             exec = "trace"
-            value_default = "deny"
+            value_default = "redact"
             "#,
         )?;
 
@@ -596,7 +604,7 @@ mod tests {
             assert_eq!(resolution.matched_rule_index(), Some(1));
             assert_eq!(
                 resolution.value_policy().default_action(),
-                ValueAction::Deny
+                ValueAction::Redact
             );
             Ok(())
         })

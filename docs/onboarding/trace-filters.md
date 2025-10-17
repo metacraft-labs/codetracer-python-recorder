@@ -10,11 +10,11 @@
 - Filters live alongside the project (default: `.codetracer/trace-filter.toml`). Any other file can be supplied via CLI, environment variable, or Python API.
 - Required sections:
   - `[meta]` – `name`, `version` (integer), optional `description`.
-  - `[scope]` – `default_exec` (`"trace"`/`"skip"`), `default_value_action` (`"allow"`/`"deny"`).
+  - `[scope]` – `default_exec` (`"trace"`/`"skip"`), `default_value_action` (`"allow"`/`"redact"`/`"drop"`).
 - Rules appear under `[[scope.rules]]` in declaration order. Each rule has:
   - `selector` – matches a package, file, or object (see selector syntax).
   - Optional `exec` override (`"trace"`/`"skip"`).
-  - Optional `value_default` override (`"allow"`/`"deny"`).
+  - Optional `value_default` override (`"allow"`/`"redact"`/`"drop"`).
   - Optional `reason` string stored in telemetry.
   - `[[scope.rules.value_patterns]]` entries that refine value capture by selector.
 - Example:
@@ -30,7 +30,7 @@
 
   [[scope.rules]]
   selector = "pkg:my_app.services.*"
-  value_default = "deny"
+  value_default = "redact"
   [[scope.rules.value_patterns]]
   selector = "local:glob:public_*"
   action = "allow"
@@ -39,7 +39,10 @@
   action = "allow"
   [[scope.rules.value_patterns]]
   selector = "local:glob:secret_*"
-  action = "deny"
+  action = "redact"
+  [[scope.rules.value_patterns]]
+  selector = "arg:literal:debug_payload"
+  action = "drop"
   ```
 
 ## Selector Syntax
@@ -65,7 +68,8 @@
 - `trace_metadata.json` now exposes a `trace_filter` object containing:
   - `filters` – ordered list of filter summaries (`name`, `version`, SHA-256 digest, absolute path).
   - `stats.scopes_skipped` – total number of code objects blocked by `exec = "skip"`.
-  - `stats.value_redactions` – per-kind counts for denied values (`argument`, `local`, `global`, `return`, `attribute`).
+  - `stats.value_redactions` – per-kind counts for redacted values (`argument`, `local`, `global`, `return`, `attribute`).
+  - `stats.value_drops` – per-kind counts for values removed entirely from the trace.
 - These counters help CI/quality tooling detect unexpectedly aggressive filters.
 
 ## Benchmarks and Guard Rails
@@ -74,5 +78,5 @@
 - `just bench` orchestrates both:
   1. Ensures the development virtualenv exists (`just venv`).
   2. Runs the Criterion bench with `PYO3_PYTHON` pinned to the virtualenv interpreter.
-  3. Executes the Python smoke benchmark, writing `codetracer-python-recorder/target/perf/trace_filter_py.json` (durations and redaction stats per scenario).
+ 3. Executes the Python smoke benchmark, writing `codetracer-python-recorder/target/perf/trace_filter_py.json` (durations plus redaction/drop stats per scenario).
 - Use the JSON artefact to feed dashboards or simple regression checks while longer-term gating thresholds are defined.
