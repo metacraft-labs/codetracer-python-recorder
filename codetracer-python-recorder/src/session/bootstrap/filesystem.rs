@@ -78,3 +78,44 @@ pub fn current_directory() -> Result<PathBuf> {
             .with_context("io", err.to_string())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn creates_missing_directory() {
+        let tmp = tempdir().expect("tempdir");
+        let target = tmp.path().join("trace-out");
+        ensure_trace_directory(&target).expect("create directory");
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn rejects_existing_file_target() {
+        let tmp = tempdir().expect("tempdir");
+        let file_path = tmp.path().join("trace.bin");
+        std::fs::write(&file_path, b"stub").expect("write stub file");
+        let err = ensure_trace_directory(&file_path).expect_err("should reject file path");
+        assert_eq!(err.code, ErrorCode::TraceDirectoryConflict);
+    }
+
+    #[test]
+    fn resolves_supported_formats() {
+        assert!(matches!(
+            resolve_trace_format("json").expect("json format"),
+            TraceEventsFileFormat::Json
+        ));
+        assert!(matches!(
+            resolve_trace_format("binary").expect("binary format"),
+            TraceEventsFileFormat::BinaryV0
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_format() {
+        let err = resolve_trace_format("yaml").expect_err("should reject yaml");
+        assert_eq!(err.code, ErrorCode::UnsupportedFormat);
+    }
+}
