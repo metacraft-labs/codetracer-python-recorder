@@ -51,7 +51,12 @@ bench:
         echo "Python interpreter not found. Run 'just venv <version>' first."; \
         exit 1; \
     fi; \
-    PYO3_PYTHON="$PYTHON_BIN" uv run cargo bench --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --bench trace_filter
+    PERF_DIR="$ROOT/codetracer-python-recorder/target/perf"; \
+    mkdir -p "$PERF_DIR"; \
+    PYO3_PYTHON="$PYTHON_BIN" uv run cargo bench --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --bench trace_filter && \
+    CODETRACER_TRACE_FILTER_PERF=1 \
+    CODETRACER_TRACE_FILTER_PERF_OUTPUT="$PERF_DIR/trace_filter_py.json" \
+    uv run --group dev --group test pytest codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py -q
 
 py-test:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder

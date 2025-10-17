@@ -39,10 +39,9 @@
 ## WS6 Progress Checklist
 1. ✅ Tightened selector diagnostics by adding a deduplicated warning path when regex compilation fails, sanitising the logged pattern and pointing users to fallback strategies (`codetracer-python-recorder/src/trace_filter/selector.rs`). Attempted `cargo test trace_filter::selector --lib`, but it still requires a CPython toolchain; rerun under the `just cargo-test` shim (nextest `--no-default-features`) once the virtualenv is bootstrapped.
 2. ✅ Established a Criterion-backed microbench harness comparing baseline vs glob- and regex-heavy filter chains (`codetracer-python-recorder/benches/trace_filter.rs`) and wired supporting dev-dependencies/bench target entries in `Cargo.toml`. `just bench` now provisions the venv, pins `PYO3_PYTHON`, builds with `--no-default-features`, and executes the harness end-to-end (baseline ≈1.12 ms, glob ≈33.8 ms, regex ≈8.44 ms per 10 k event batch on the current dev host).
-3. ⬜ Add Python smoke benchmark exercising `TraceSession` end-to-end to validate cross-language overhead. *(targeting `codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py`)*
-4. ⬜ Update docs (`docs/` tree + README) summarising filter syntax, CLI/env controls, and benchmarking guarantees before closing WS6.
+3. ✅ Added the Python smoke benchmark (`codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py`) exercising `TraceSession` end-to-end, emitting JSON perf artefacts, and wired it into `just bench`.
+4. ✅ Updated docs (`docs/onboarding/trace-filters.md`, repo README, recorder README) with filter syntax, CLI/env wiring, and benchmarking guidance.
 
 ## Next Steps
-1. Prototype the Python smoke benchmark to exercise cross-language overhead.
-2. Outline documentation updates to reflect runtime hardening and new perf guard-rails.
-3. Feed the new `just bench` output into perf tracking (decide storage format, add regression thresholds), and smooth out benchmark noise (e.g., address Criterion outlier warnings, optional gnuplot support).
+1. Feed the new `just bench` output into perf tracking (decide storage format, add regression thresholds), and smooth out benchmark noise (e.g., address Criterion outlier warnings, optional gnuplot support).
+2. Establish guard-rail thresholds for the Python smoke benchmark and decide how to surface the JSON artefacts in CI.

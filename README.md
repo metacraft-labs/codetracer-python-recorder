@@ -137,6 +137,7 @@ Basic workflow:
 - Run the full split test suite (Rust nextest + Python pytest): `just test`
 - Run only Rust integration/unit tests: `just cargo-test`
 - Run only Python tests (including the pure-Python recorder to guard regressions): `just py-test`
+- Exercise the trace-filter benchmarks (Rust Criterion + Python smoke, JSON output under `codetracer-python-recorder/target/perf`): `just bench`
 - Collect coverage artefacts locally (LCOV + Cobertura/JSON): `just coverage`
 
 The CI workflow mirrors these commands. Pull requests get an automated comment with the latest Rust/Python coverage tables and downloadable artefacts (`lcov.info`, `coverage.xml`, `coverage.json`).
