@@ -5,15 +5,16 @@
 
 use crate::code_object::CodeObjectWrapper;
 use crate::trace_filter::config::{
-    ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
+    ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction,
+    ValuePattern,
 };
 use crate::trace_filter::selector::{Selector, SelectorKind};
 use dashmap::DashMap;
+use pyo3::{prelude::*, PyErr};
 use recorder_errors::{target, ErrorCode, RecorderResult};
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use pyo3::{prelude::*, PyErr};
 
 /// Final execution decision emitted by the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,8 +379,9 @@ impl ScopeContext {
             if let Ok(stripped) = Path::new(filename).strip_prefix(&source.project_root) {
                 let stripped_owned = stripped.to_path_buf();
                 let better = match &best_match {
-                    Some((_, current)) => stripped_owned.components().count()
-                        >= current.components().count(),
+                    Some((_, current)) => {
+                        stripped_owned.components().count() >= current.components().count()
+                    }
                     None => true,
                 };
                 if better {
@@ -526,7 +528,12 @@ mod tests {
         )?;
 
         Python::with_gil(|py| -> RecorderResult<()> {
-            let module = load_module(py, "app.foo", &file_path, "def foo(user, password):\n    return user\n")?;
+            let module = load_module(
+                py,
+                "app.foo",
+                &file_path,
+                "def foo(user, password):\n    return user\n",
+            )?;
             let code_obj = get_code(&module, "foo")?;
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
 
@@ -542,7 +549,10 @@ mod tests {
             assert_eq!(policy.default_action(), ValueAction::Allow);
             assert_eq!(policy.decide(ValueKind::Local, "user"), ValueAction::Allow);
             assert_eq!(policy.decide(ValueKind::Arg, "password"), ValueAction::Deny);
-            assert_eq!(policy.decide(ValueKind::Global, "anything"), ValueAction::Allow);
+            assert_eq!(
+                policy.decide(ValueKind::Global, "anything"),
+                ValueAction::Allow
+            );
 
             let second = engine.resolve(py, &wrapper)?;
             assert!(Arc::ptr_eq(&first, &second));
@@ -570,8 +580,12 @@ mod tests {
         )?;
 
         Python::with_gil(|py| -> RecorderResult<()> {
-            let module =
-                load_module(py, "app.foo", &file_path, "def bar():\n    secret = 1\n    return secret\n")?;
+            let module = load_module(
+                py,
+                "app.foo",
+                &file_path,
+                "def bar():\n    secret = 1\n    return secret\n",
+            )?;
             let code_obj = get_code(&module, "bar")?;
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
 
@@ -580,7 +594,10 @@ mod tests {
 
             assert_eq!(resolution.exec(), ExecDecision::Trace);
             assert_eq!(resolution.matched_rule_index(), Some(1));
-            assert_eq!(resolution.value_policy().default_action(), ValueAction::Deny);
+            assert_eq!(
+                resolution.value_policy().default_action(),
+                ValueAction::Deny
+            );
             Ok(())
         })
     }
@@ -600,8 +617,7 @@ mod tests {
         )?;
 
         Python::with_gil(|py| -> RecorderResult<()> {
-            let module =
-                load_module(py, "app.foo", &file_path, "def baz():\n    return 42\n")?;
+            let module = load_module(py, "app.foo", &file_path, "def baz():\n    return 42\n")?;
             let code_obj = get_code(&module, "baz")?;
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
 
@@ -659,14 +675,19 @@ mod tests {
         let file_c = CString::new(file_path).expect("path without NUL");
         let module_c = CString::new(module_name).expect("module without NUL");
 
-        let module = PyModule::from_code(py, code_c.as_c_str(), file_c.as_c_str(), module_c.as_c_str())
-            .map_err(|err| {
-                target!(
-                    ErrorCode::FrameIntrospectionFailed,
-                    "failed to load module for engine test: {}",
-                    err
-                )
-            })?;
+        let module = PyModule::from_code(
+            py,
+            code_c.as_c_str(),
+            file_c.as_c_str(),
+            module_c.as_c_str(),
+        )
+        .map_err(|err| {
+            target!(
+                ErrorCode::FrameIntrospectionFailed,
+                "failed to load module for engine test: {}",
+                err
+            )
+        })?;
         Ok(module.into())
     }
 

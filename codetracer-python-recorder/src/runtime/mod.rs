@@ -107,7 +107,7 @@ pub struct RuntimeTracer {
     line_snapshots: Arc<LineSnapshotStore>,
     io_capture: Option<IoCapturePipeline>,
     trace_filter: Option<Arc<TraceFilterEngine>>,
-    scope_cache: HashMap<usize, Arc<ScopeResolution>>, 
+    scope_cache: HashMap<usize, Arc<ScopeResolution>>,
     filter_stats: FilterStats,
 }
 
@@ -394,8 +394,7 @@ impl RuntimeTracer {
         match engine.resolve(py, code) {
             Ok(resolution) => {
                 if resolution.exec() == ExecDecision::Trace {
-                    self.scope_cache
-                        .insert(code_id, Arc::clone(&resolution));
+                    self.scope_cache.insert(code_id, Arc::clone(&resolution));
                 } else {
                     self.scope_cache.remove(&code_id);
                 }
@@ -408,7 +407,8 @@ impl RuntimeTracer {
                     let _mute = ScopedMuteIoCapture::new();
                     log::error!(
                         "[RuntimeTracer] trace filter resolution failed for code id {}: {}",
-                        code_id, message
+                        code_id,
+                        message
                     );
                 });
                 record_dropped_event("filter_resolution_error");
@@ -606,11 +606,10 @@ impl RuntimeTracer {
             })?;
             Ok(())
         } else {
-            Err(enverr!(
-                ErrorCode::Io,
-                "trace metadata must be a JSON object"
+            Err(
+                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
+                    .with_context("path", path.display().to_string()),
             )
-            .with_context("path", path.display().to_string()))
         }
     }
 
@@ -848,9 +847,7 @@ impl Tracer for RuntimeTracer {
         let scope_resolution = self.scope_cache.get(&code.id()).cloned();
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
-        let object_name = scope_resolution
-            .as_ref()
-            .and_then(|res| res.object_name());
+        let object_name = scope_resolution.as_ref().and_then(|res| res.object_name());
 
         let mut telemetry_holder = if wants_telemetry {
             Some(self.filter_stats.redactions_mut())
@@ -975,8 +972,8 @@ mod tests {
     use serde::Deserialize;
     use std::cell::Cell;
     use std::collections::BTreeMap;
-    use std::fs;
     use std::ffi::CString;
+    use std::fs;
     use std::path::Path;
     use std::sync::Arc;
     use std::thread;
@@ -1334,13 +1331,13 @@ result = compute()\n"
             )
             .expect("write script");
 
-        let mut tracer = RuntimeTracer::new(
-            script_path.to_string_lossy().as_ref(),
-            &[],
-            TraceEventsFileFormat::Json,
-            None,
-            None,
-        );
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
@@ -1440,13 +1437,13 @@ result = compute()\n"
             )
             .expect("write script");
 
-        let mut tracer = RuntimeTracer::new(
-            script_path.to_string_lossy().as_ref(),
-            &[],
-            TraceEventsFileFormat::Json,
-            None,
-            None,
-        );
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
@@ -1951,7 +1948,8 @@ sensitive("s3cr3t")
             tracer.finish(py).expect("finish tracer");
 
             let metadata_str = fs::read_to_string(outputs.metadata()).expect("read metadata");
-            let metadata: serde_json::Value = serde_json::from_str(&metadata_str).expect("parse metadata");
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_str).expect("parse metadata");
             let trace_filter = metadata
                 .get("trace_filter")
                 .and_then(|value| value.as_object())
@@ -1963,7 +1961,10 @@ sensitive("s3cr3t")
                 .expect("filters array");
             assert_eq!(filters.len(), 1);
             let filter_entry = filters[0].as_object().expect("filter entry");
-            assert_eq!(filter_entry.get("name").and_then(|v| v.as_str()), Some("redact"));
+            assert_eq!(
+                filter_entry.get("name").and_then(|v| v.as_str()),
+                Some("redact")
+            );
 
             let stats = trace_filter
                 .get("stats")
@@ -2462,13 +2463,13 @@ snapshot()
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
 
-        let mut tracer = RuntimeTracer::new(
-            program_path.to_string_lossy().as_ref(),
-            &[],
-            TraceEventsFileFormat::Json,
-            None,
-            None,
-        );
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             tracer.begin(&outputs, 1).expect("begin tracer");
 
             let err = tracer
@@ -2496,13 +2497,13 @@ snapshot()
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
 
-        let mut tracer = RuntimeTracer::new(
-            program_path.to_string_lossy().as_ref(),
-            &[],
-            TraceEventsFileFormat::Json,
-            None,
-            None,
-        );
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer.mark_failure();
 
@@ -2539,13 +2540,13 @@ snapshot()
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
 
-        let mut tracer = RuntimeTracer::new(
-            program_path.to_string_lossy().as_ref(),
-            &[],
-            TraceEventsFileFormat::Json,
-            None,
-            None,
-        );
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer.mark_failure();
 

@@ -1,6 +1,6 @@
 //! Filter configuration loader that parses TOML files, resolves inheritance, and
 //! prepares flattened scope/value rules for the runtime engine.
-//! 
+//!
 //! The implementation follows the schema defined in
 //! `design-docs/US0028 - Configurable Python trace filters.md`.
 
@@ -316,7 +316,9 @@ fn detect_project_root(path: &Path) -> PathBuf {
         }
         current = dir.parent();
     }
-    path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
+    path.parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn parse_meta(raw: &RawMeta, path: &Path) -> RecorderResult<FilterMeta> {
@@ -363,7 +365,8 @@ fn resolve_defaults(
     current_value_action: Option<ValueAction>,
 ) -> RecorderResult<ResolvedDefaults> {
     let exec = parse_default_exec(&scope.default_exec, path, current_exec)?;
-    let value_action = parse_default_value_action(&scope.default_value_action, path, current_value_action)?;
+    let value_action =
+        parse_default_value_action(&scope.default_value_action, path, current_value_action)?;
     Ok(ResolvedDefaults { exec, value_action })
 }
 
@@ -383,14 +386,16 @@ fn parse_default_exec(
             }
             Ok(None)
         }
-        _ => ExecDirective::parse(token).ok_or_else(|| {
-            usage!(
-                ErrorCode::InvalidPolicyValue,
-                "unsupported value '{}' for 'scope.default_exec' in '{}'",
-                token,
-                path.display()
-            )
-        }).map(Some),
+        _ => ExecDirective::parse(token)
+            .ok_or_else(|| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "unsupported value '{}' for 'scope.default_exec' in '{}'",
+                    token,
+                    path.display()
+                )
+            })
+            .map(Some),
     }
 }
 
@@ -410,14 +415,16 @@ fn parse_default_value_action(
             }
             Ok(None)
         }
-        _ => ValueAction::parse(token).ok_or_else(|| {
-            usage!(
-                ErrorCode::InvalidPolicyValue,
-                "unsupported value '{}' for 'scope.default_value_action' in '{}'",
-                token,
-                path.display()
-            )
-        }).map(Some),
+        _ => ValueAction::parse(token)
+            .ok_or_else(|| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "unsupported value '{}' for 'scope.default_value_action' in '{}'",
+                    token,
+                    path.display()
+                )
+            })
+            .map(Some),
     }
 }
 
@@ -478,51 +485,47 @@ fn parse_rules(
     let mut rules = Vec::new();
     for (idx, raw_rule) in raw_rules.iter().enumerate() {
         let location = format!("{} scope.rules[{}]", path.display(), idx);
-        let selector = Selector::parse(&raw_rule.selector, &SCOPE_SELECTOR_KINDS).map_err(|err| {
-            usage!(
-                ErrorCode::InvalidPolicyValue,
-                "invalid scope selector in {}: {}",
-                location,
-                err
-            )
-        })?;
+        let selector =
+            Selector::parse(&raw_rule.selector, &SCOPE_SELECTOR_KINDS).map_err(|err| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "invalid scope selector in {}: {}",
+                    location,
+                    err
+                )
+            })?;
         let selector = normalize_scope_selector(selector, project_root, &location)?;
 
         let exec = match raw_rule.exec.as_deref() {
             None | Some("inherit") => None,
-            Some(value) => Some(
-                ExecDirective::parse(value).ok_or_else(|| {
-                    usage!(
-                        ErrorCode::InvalidPolicyValue,
-                        "unsupported value '{}' for 'exec' in {}",
-                        value,
-                        location
-                    )
-                })?,
-            ),
+            Some(value) => Some(ExecDirective::parse(value).ok_or_else(|| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "unsupported value '{}' for 'exec' in {}",
+                    value,
+                    location
+                )
+            })?),
         };
 
         let value_default = match raw_rule.value_default.as_deref() {
             None | Some("inherit") => None,
-            Some(value) => Some(
-                ValueAction::parse(value).ok_or_else(|| {
-                    usage!(
-                        ErrorCode::InvalidPolicyValue,
-                        "unsupported value '{}' for 'value_default' in {}",
-                        value,
-                        location
-                    )
-                })?,
-            ),
+            Some(value) => Some(ValueAction::parse(value).ok_or_else(|| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "unsupported value '{}' for 'value_default' in {}",
+                    value,
+                    location
+                )
+            })?),
         };
 
         let mut value_patterns = Vec::new();
         if let Some(patterns) = raw_rule.value_patterns.as_ref() {
             for (pidx, pattern) in patterns.iter().enumerate() {
-                let pattern_location =
-                    format!("{} value_patterns[{}]", location, pidx);
-                let selector = Selector::parse(&pattern.selector, &VALUE_SELECTOR_KINDS)
-                    .map_err(|err| {
+                let pattern_location = format!("{} value_patterns[{}]", location, pidx);
+                let selector =
+                    Selector::parse(&pattern.selector, &VALUE_SELECTOR_KINDS).map_err(|err| {
                         usage!(
                             ErrorCode::InvalidPolicyValue,
                             "invalid value selector in {}: {}",
@@ -530,15 +533,14 @@ fn parse_rules(
                             err
                         )
                     })?;
-                let action =
-                    ValueAction::parse(pattern.action.as_str()).ok_or_else(|| {
-                        usage!(
-                            ErrorCode::InvalidPolicyValue,
-                            "unsupported value '{}' for 'action' in {}",
-                            pattern.action,
-                            pattern_location
-                        )
-                    })?;
+                let action = ValueAction::parse(pattern.action.as_str()).ok_or_else(|| {
+                    usage!(
+                        ErrorCode::InvalidPolicyValue,
+                        "unsupported value '{}' for 'action' in {}",
+                        pattern.action,
+                        pattern_location
+                    )
+                })?;
 
                 value_patterns.push(ValuePattern {
                     selector,
@@ -570,8 +572,12 @@ fn normalize_scope_selector(
         return Ok(selector);
     }
 
-    let normalized_pattern =
-        normalize_file_pattern(selector.pattern(), selector.match_type(), project_root, location)?;
+    let normalized_pattern = normalize_file_pattern(
+        selector.pattern(),
+        selector.match_type(),
+        project_root,
+        location,
+    )?;
     if normalized_pattern == selector.pattern() {
         return Ok(selector);
     }
@@ -604,19 +610,24 @@ fn normalize_file_pattern(
     }
 }
 
-fn normalize_literal_path(pattern: &str, project_root: &Path, location: &str) -> RecorderResult<String> {
+fn normalize_literal_path(
+    pattern: &str,
+    project_root: &Path,
+    location: &str,
+) -> RecorderResult<String> {
     let path = Path::new(pattern);
     let relative = if path.is_absolute() {
-        path.strip_prefix(project_root).map_err(|_| {
-            usage!(
-                ErrorCode::InvalidPolicyValue,
-                "file selector '{}' in {} must reside within project root '{}'",
-                pattern,
-                location,
-                project_root.display()
-            )
-        })?
-        .to_path_buf()
+        path.strip_prefix(project_root)
+            .map_err(|_| {
+                usage!(
+                    ErrorCode::InvalidPolicyValue,
+                    "file selector '{}' in {} must reside within project root '{}'",
+                    pattern,
+                    location,
+                    project_root.display()
+                )
+            })?
+            .to_path_buf()
     } else {
         path.to_path_buf()
     };
@@ -827,13 +838,9 @@ mod tests {
             "#,
             literal = literal_path.to_string_lossy()
         );
-        write_filter(
-            &overrides_path,
-            overrides.as_str(),
-        );
+        write_filter(&overrides_path, overrides.as_str());
 
-        let config =
-            TraceFilterConfig::from_paths(&[base_path.clone(), overrides_path.clone()])?;
+        let config = TraceFilterConfig::from_paths(&[base_path.clone(), overrides_path.clone()])?;
 
         assert_eq!(config.default_exec(), ExecDirective::Trace);
         assert_eq!(config.default_value_action(), ValueAction::Deny);
@@ -848,10 +855,7 @@ mod tests {
         assert!(matches!(file_rule.exec, None));
         assert_eq!(file_rule.value_default, Some(ValueAction::Deny));
         assert_eq!(file_rule.value_patterns.len(), 1);
-        assert_eq!(
-            file_rule.value_patterns[0].selector.raw(),
-            "arg:password"
-        );
+        assert_eq!(file_rule.value_patterns[0].selector.raw(), "arg:password");
         assert_eq!(
             file_rule.selector.pattern(),
             "app/__init__.py",
@@ -945,7 +949,6 @@ mod tests {
 
     fn write_filter(path: &Path, contents: &str) {
         let mut file = fs::File::create(path).unwrap();
-        file.write_all(contents.trim_start().as_bytes())
-            .unwrap();
+        file.write_all(contents.trim_start().as_bytes()).unwrap();
     }
 }

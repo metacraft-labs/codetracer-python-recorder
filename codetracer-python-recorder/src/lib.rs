@@ -10,9 +10,9 @@ mod ffi;
 mod logging;
 pub mod monitoring;
 mod policy;
-pub mod trace_filter;
 mod runtime;
 mod session;
+pub mod trace_filter;
 
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 pub use crate::monitoring as tracer;

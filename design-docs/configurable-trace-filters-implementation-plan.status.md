@@ -19,6 +19,8 @@
 - `codetracer-python-recorder/tests/python/unit/test_cli.py`
 - `codetracer-python-recorder/Cargo.toml`
 - `codetracer-python-recorder/src/lib.rs`
+- `codetracer-python-recorder/benches/trace_filter.rs` *(WS6 microbench harness)*
+- `Justfile` *(WS6 bench automation)*
 - Future stages: `codetracer-python-recorder/src/runtime/mod.rs`, Python surface files under `codetracer_python_recorder/`
 
 ## Stage Progress
@@ -27,14 +29,20 @@
 - ✅ **WS3 – Runtime Engine & Caching:** Implemented `trace_filter::engine` with `TraceFilterEngine::resolve` caching `ScopeResolution` entries per code id (DashMap), deriving module/object/file metadata, and compiling value policies with ordered pattern evaluation. Added `ValueKind` to align future runtime integration and unit tests proving caching, rule precedence (object > package/file), and relative path normalisation—all exercised via `just cargo-test`.
 - ✅ **WS4 – RuntimeTracer Integration:** `RuntimeTracer` now accepts an optional `Arc<TraceFilterEngine>`, caches `ScopeResolution` results per code id, and records `filter_scope_skip` when scopes are denied. Value capture helpers honour `ValuePolicy` with a reusable `<redacted>` sentinel, emit per-kind telemetry, and we persist the active filter summary plus skip/redaction counts into `trace_metadata.json`. Bootstrapping now discovers `.codetracer/trace-filter.toml`, instantiates `TraceFilterEngine`, and passes the shared `Arc` into `RuntimeTracer::new`; new `session::bootstrap` tests cover both presence/absence of the default filter and `just cargo-test` (nextest `--no-default-features`) confirms the flow end-to-end.
 - ✅ **WS5 – Python Surface, CLI, Metadata:** Session helpers normalise chained specs, auto-start honours `CODETRACER_TRACE_FILTER`, PyO3 merges explicit/default chains, CLI exposes `--trace-filter`, unit coverage exercises env auto-start filter chaining, and docs/CLI help now describe filter precedence and env wiring.
-- ⏳ **WS6 – Hardening, Benchmarks & Documentation:** Pending prior stages.
+- 🔄 **WS6 – Hardening, Benchmarks & Documentation:** Inception in progress—reviewing selector error handling ahead of introducing a logging guard for regex compilation failures, and scoping the benchmark harness (Rust microbench + Python smoke) before wiring documentation updates and CI guard-rails.
 
 ## WS5 Progress Checklist
 1. ✅ Introduced Python-side helpers that normalise `trace_filter` inputs (strings, Paths, iterables) into absolute path chains, updated session API/context manager, and threaded env-driven auto-start.
 2. ✅ Extended the PyO3 surface (`start_tracing`) and bootstrap loader to merge explicit specs with discovered defaults before building a shared `TraceFilterEngine`.
 3. ✅ Updated CLI/env plumbing (`--trace-filter`, `CODETRACER_TRACE_FILTER`) plus unit/integration coverage exercising CLI parsing and end-to-end filter metadata.
 
+## WS6 Progress Checklist
+1. ✅ Tightened selector diagnostics by adding a deduplicated warning path when regex compilation fails, sanitising the logged pattern and pointing users to fallback strategies (`codetracer-python-recorder/src/trace_filter/selector.rs`). Attempted `cargo test trace_filter::selector --lib`, but it still requires a CPython toolchain; rerun under the `just cargo-test` shim (nextest `--no-default-features`) once the virtualenv is bootstrapped.
+2. ✅ Established a Criterion-backed microbench harness comparing baseline vs glob- and regex-heavy filter chains (`codetracer-python-recorder/benches/trace_filter.rs`) and wired supporting dev-dependencies/bench target entries in `Cargo.toml`. `just bench` now provisions the venv, pins `PYO3_PYTHON`, builds with `--no-default-features`, and executes the harness end-to-end (baseline ≈1.12 ms, glob ≈33.8 ms, regex ≈8.44 ms per 10 k event batch on the current dev host).
+3. ⬜ Add Python smoke benchmark exercising `TraceSession` end-to-end to validate cross-language overhead. *(targeting `codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py`)*
+4. ⬜ Update docs (`docs/` tree + README) summarising filter syntax, CLI/env controls, and benchmarking guarantees before closing WS6.
+
 ## Next Steps
-1. ✅ Added explicit tests for `CODETRACER_TRACE_FILTER` auto-start behaviour so env-driven sessions verify filter chaining (`codetracer_python_recorder/tests/python/unit/test_auto_start.py`).
-2. ✅ Drafted docs/CLI help updates covering the new flag, env var, and filter discovery precedence ahead of WS5 sign-off.
-3. Plan integration of `TraceFilterConfig::io` toggles with runtime IO capture enablement before moving into WS6.
+1. Prototype the Python smoke benchmark to exercise cross-language overhead.
+2. Outline documentation updates to reflect runtime hardening and new perf guard-rails.
+3. Feed the new `just bench` output into perf tracking (decide storage format, add regression thresholds), and smooth out benchmark noise (e.g., address Criterion outlier warnings, optional gnuplot support).

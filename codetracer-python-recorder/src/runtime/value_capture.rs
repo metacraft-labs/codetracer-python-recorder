@@ -35,7 +35,6 @@ impl ValueRedactionStats {
     pub fn count(&self, kind: ValueKind) -> u64 {
         self.counts[kind.index()]
     }
-
 }
 
 fn redacted_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
@@ -58,11 +57,7 @@ fn record_redaction(kind: ValueKind, candidate: &str, telemetry: Option<&mut Val
         ValueKind::Attr => "filter_value_redacted.attr",
     };
     record_dropped_event(metric);
-    log::debug!(
-        "[RuntimeTracer] redacted {} '{}'",
-        kind.label(),
-        candidate
-    );
+    log::debug!("[RuntimeTracer] redacted {} '{}'", kind.label(), candidate);
 }
 
 fn encode_with_policy<'py>(
@@ -117,8 +112,15 @@ pub fn capture_call_arguments<'py>(
                 "missing positional arg '{name}'"
             ))
         })?;
-        let encoded =
-            encode_with_policy(py, writer, &value, policy, ValueKind::Arg, name, telemetry.as_deref_mut());
+        let encoded = encode_with_policy(
+            py,
+            writer,
+            &value,
+            policy,
+            ValueKind::Arg,
+            name,
+            telemetry.as_deref_mut(),
+        );
         args.push(TraceWriter::arg(writer, name, encoded));
         idx += 1;
     }

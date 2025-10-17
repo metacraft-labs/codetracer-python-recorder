@@ -40,3 +40,8 @@ sha2 = "0.10"
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }
 tempfile = "3.10"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "trace_filter"
+harness = false

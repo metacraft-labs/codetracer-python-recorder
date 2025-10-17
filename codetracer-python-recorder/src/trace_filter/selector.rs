@@ -1,8 +1,11 @@
 //! Selector parsing and matching utilities shared across scope and value filters.
 
+use dashmap::DashSet;
 use globset::{GlobBuilder, GlobMatcher};
-use regex::Regex;
+use once_cell::sync::Lazy;
 use recorder_errors::{usage, ErrorCode, RecorderResult};
+use regex::{Error as RegexError, Regex};
+use std::borrow::Cow;
 use std::fmt;
 
 /// Domains supported by the selector grammar.
@@ -126,9 +129,12 @@ impl Selector {
         }
 
         let mut segments = raw.splitn(3, ':');
-        let kind_token = segments
-            .next()
-            .ok_or_else(|| usage!(ErrorCode::InvalidPolicyValue, "selector must include a kind"))?;
+        let kind_token = segments.next().ok_or_else(|| {
+            usage!(
+                ErrorCode::InvalidPolicyValue,
+                "selector must include a kind"
+            )
+        })?;
         let remainder = segments
             .next()
             .ok_or_else(|| usage!(ErrorCode::InvalidPolicyValue, "selector missing pattern"))?;
@@ -158,14 +164,13 @@ impl Selector {
                         "selector match type cannot be empty"
                     ));
                 }
-                let resolved_match =
-                    MatchType::parse(match_token).ok_or_else(|| {
-                        usage!(
-                            ErrorCode::InvalidPolicyValue,
-                            "unsupported selector match type '{}'",
-                            match_token
-                        )
-                    })?;
+                let resolved_match = MatchType::parse(match_token).ok_or_else(|| {
+                    usage!(
+                        ErrorCode::InvalidPolicyValue,
+                        "unsupported selector match type '{}'",
+                        match_token
+                    )
+                })?;
                 (resolved_match, pattern)
             }
             None => (MatchType::Glob, remainder),
@@ -231,17 +236,45 @@ fn build_matcher(match_type: MatchType, pattern: &str) -> RecorderResult<Matcher
                 })?;
             Ok(Matcher::Glob(glob.compile_matcher()))
         }
-        MatchType::Regex => {
-            let regex = Regex::new(pattern).map_err(|err| {
-                usage!(
+        MatchType::Regex => match Regex::new(pattern) {
+            Ok(regex) => Ok(Matcher::Regex(regex)),
+            Err(err) => {
+                log_regex_failure(pattern, &err);
+                Err(usage!(
                     ErrorCode::InvalidPolicyValue,
                     "invalid regex pattern '{}': {}",
                     pattern,
                     err
-                )
-            })?;
-            Ok(Matcher::Regex(regex))
-        }
+                ))
+            }
+        },
+    }
+}
+
+fn log_regex_failure(pattern: &str, err: &RegexError) {
+    static LOGGED: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
+    if !LOGGED.insert(pattern.to_string()) {
+        return;
+    }
+
+    let display_pattern = sanitize_pattern(pattern);
+    crate::logging::with_error_code(ErrorCode::InvalidPolicyValue, || {
+        log::warn!(
+            target: "codetracer_python_recorder::trace_filters",
+            "Rejected trace filter regex pattern '{}': {err}. Update the expression or switch to `match = \"glob\"` if a simple wildcard suffices.",
+            display_pattern
+        );
+    });
+}
+
+fn sanitize_pattern(pattern: &str) -> Cow<'_, str> {
+    const MAX_CHARS: usize = 120;
+    if pattern.chars().count() > MAX_CHARS {
+        let mut truncated: String = pattern.chars().take(MAX_CHARS).collect();
+        truncated.push('…');
+        Cow::Owned(truncated)
+    } else {
+        Cow::Borrowed(pattern)
     }
 }
 
@@ -249,7 +282,12 @@ fn build_matcher(match_type: MatchType, pattern: &str) -> RecorderResult<Matcher
 mod tests {
     use super::*;
 
-    fn assert_parse(raw: &str, expected_kind: SelectorKind, mt: MatchType, pattern: &str) -> Selector {
+    fn assert_parse(
+        raw: &str,
+        expected_kind: SelectorKind,
+        mt: MatchType,
+        pattern: &str,
+    ) -> Selector {
         let selector = Selector::parse(raw, &[]).unwrap_or_else(|err| {
             panic!("selector parse failed for '{}': {}", raw, err);
         });
@@ -261,7 +299,12 @@ mod tests {
 
     #[test]
     fn parses_default_glob_scope_selector() {
-        let selector = assert_parse("pkg:my_app.core.*", SelectorKind::Package, MatchType::Glob, "my_app.core.*");
+        let selector = assert_parse(
+            "pkg:my_app.core.*",
+            SelectorKind::Package,
+            MatchType::Glob,
+            "my_app.core.*",
+        );
         assert!(selector.matches("my_app.core.services"));
         assert!(!selector.matches("other.module"));
     }
@@ -298,7 +341,8 @@ mod tests {
 
     #[test]
     fn rejects_disallowed_kind() {
-        let err = Selector::parse("pkg:foo", &[SelectorKind::Local]).expect_err("kind not permitted");
+        let err =
+            Selector::parse("pkg:foo", &[SelectorKind::Local]).expect_err("kind not permitted");
         assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
     }
 
@@ -322,7 +366,12 @@ mod tests {
 
     #[test]
     fn matches_glob_against_values() {
-        let selector = assert_parse("local:user_*", SelectorKind::Local, MatchType::Glob, "user_*");
+        let selector = assert_parse(
+            "local:user_*",
+            SelectorKind::Local,
+            MatchType::Glob,
+            "user_*",
+        );
         assert!(selector.matches("user_id"));
         assert!(!selector.matches("order_id"));
     }
