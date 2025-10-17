@@ -149,14 +149,27 @@ pub struct TraceFilterConfig {
 impl TraceFilterConfig {
     /// Load and compose filters from the provided paths.
     pub fn from_paths(paths: &[PathBuf]) -> RecorderResult<Self> {
-        if paths.is_empty() {
+        Self::from_inline_and_paths(&[], paths)
+    }
+
+    /// Load and compose filters from inline TOML sources combined with paths.
+    ///
+    /// Inline entries are ingested first in the order provided, followed by files.
+    pub fn from_inline_and_paths(
+        inline: &[(&str, &str)],
+        paths: &[PathBuf],
+    ) -> RecorderResult<Self> {
+        if inline.is_empty() && paths.is_empty() {
             return Err(usage!(
                 ErrorCode::InvalidPolicyValue,
-                "no trace filter paths supplied"
+                "no trace filter sources supplied"
             ));
         }
 
         let mut aggregator = ConfigAggregator::default();
+        for (label, contents) in inline {
+            aggregator.ingest_inline(label, contents)?;
+        }
         for path in paths {
             aggregator.ingest_file(path)?;
         }
@@ -225,8 +238,17 @@ impl ConfigAggregator {
             )
         })?;
 
-        let checksum = calculate_sha256(&contents);
-        let raw: RawFilterFile = toml::from_str(&contents).map_err(|err| {
+        self.ingest_source(path, &contents)
+    }
+
+    fn ingest_inline(&mut self, label: &str, contents: &str) -> RecorderResult<()> {
+        let pseudo_path = PathBuf::from(format!("<inline:{label}>"));
+        self.ingest_source(&pseudo_path, contents)
+    }
+
+    fn ingest_source(&mut self, path: &Path, contents: &str) -> RecorderResult<()> {
+        let checksum = calculate_sha256(contents);
+        let raw: RawFilterFile = toml::from_str(contents).map_err(|err| {
             usage!(
                 ErrorCode::InvalidPolicyValue,
                 "failed to parse trace filter '{}': {}",
@@ -771,6 +793,7 @@ const VALUE_SELECTOR_KINDS: [SelectorKind; 5] = [
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -867,6 +890,30 @@ mod tests {
         assert_eq!(summary.entries[0].name, "base");
         assert_eq!(summary.entries[1].name, "overrides");
 
+        Ok(())
+    }
+
+    #[test]
+    fn from_inline_and_paths_parses_inline_only() -> RecorderResult<()> {
+        let inline_filter = r#"
+            [meta]
+            name = "inline"
+            version = 1
+
+            [scope]
+            default_exec = "trace"
+            default_value_action = "allow"
+        "#;
+
+        let config = TraceFilterConfig::from_inline_and_paths(&[("inline", inline_filter)], &[])?;
+
+        assert_eq!(config.default_exec(), ExecDirective::Trace);
+        assert_eq!(config.default_value_action(), ValueAction::Allow);
+        assert_eq!(config.rules().len(), 0);
+        let summary = config.summary();
+        assert_eq!(summary.entries.len(), 1);
+        assert_eq!(summary.entries[0].name, "inline");
+        assert_eq!(summary.entries[0].path, PathBuf::from("<inline:inline>"));
         Ok(())
     }
 

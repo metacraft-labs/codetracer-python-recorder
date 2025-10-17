@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import runpy
 import sys
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import flush, start, stop
+from .auto_start import ENV_TRACE_FILTER
 from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, normalize_format
 
 
@@ -252,6 +254,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     script_path = config.script
     script_args = config.script_args
     filter_specs = list(config.trace_filter)
+    env_filter = os.getenv(ENV_TRACE_FILTER)
+    if env_filter:
+        filter_specs.insert(0, env_filter)
     policy_overrides = config.policy_overrides if config.policy_overrides else None
 
     old_argv = sys.argv

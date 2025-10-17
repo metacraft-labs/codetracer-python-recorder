@@ -55,6 +55,7 @@ or activated virtual environments behave identically to `python script.py`.
 - Filter files are TOML with `[meta]`, `[scope]`, and `[[scope.rules]]` tables. Rules evaluate in declaration order and can tweak both execution (`exec`) and value decisions (`value_default`).
 - Supported selector domains: `pkg`, `file`, `obj` for scopes; `local`, `global`, `arg`, `ret`, `attr` for value policies. Match types default to `glob` and also accept `regex` or `literal` (e.g. `local:regex:^(metric|masked)_\w+$`).
 - Default discovery: `.codetracer/trace-filter.toml` next to the traced script. Chain additional files via CLI (`--trace-filter path_a --trace-filter path_b`), environment variable (`CODETRACER_TRACE_FILTER=path_a::path_b`), or Python helpers (`trace(..., trace_filter=[path_a, path_b])`). Later entries override earlier ones when selectors overlap.
+- A built-in `builtin-default` filter is always prepended. It skips CPython standard-library frames (e.g. `asyncio`, `threading`, `importlib`) while re-enabling third-party packages under `site-packages` (except helpers such as `_virtualenv.py`), and redacts common secrets (`password`, `token`, API keys, etc.) across locals/globals/args/returns/attributes. Project filters can loosen or tighten these defaults as required.
 - Runtime metadata captures the active chain under `trace_metadata.json -> trace_filter`, including per-kind redaction counters. See `docs/onboarding/trace-filters.md` for the full DSL reference and examples.
 
 Example snippet:

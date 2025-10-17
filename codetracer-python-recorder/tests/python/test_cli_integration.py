@@ -137,6 +137,48 @@ def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
     filters = trace_filter.get("filters", [])
     paths = [entry.get("path") for entry in filters if isinstance(entry, dict)]
     assert paths == [
+        "<inline:builtin-default>",
         str(default_filter.resolve()),
         str(override_filter.resolve()),
+    ]
+
+
+def test_cli_honours_env_trace_filter(tmp_path: Path) -> None:
+    script = tmp_path / "program.py"
+    _write_script(script, "print('env filter test')\n")
+
+    filter_path = tmp_path / "env-filter.toml"
+    filter_path.write_text(
+        """
+        [meta]
+        name = "env-filter"
+        version = 1
+
+        [scope]
+        default_exec = "trace"
+        default_value_action = "allow"
+
+        [[scope.rules]]
+        selector = "pkg:program"
+        exec = "skip"
+        value_default = "allow"
+        """,
+        encoding="utf-8",
+    )
+
+    trace_dir = tmp_path / "trace"
+    env = _prepare_env()
+    env["CODETRACER_TRACE_FILTER"] = str(filter_path)
+
+    result = _run_cli(["--trace-dir", str(trace_dir), str(script)], cwd=tmp_path, env=env)
+    assert result.returncode == 0
+
+    metadata_file = trace_dir / "trace_metadata.json"
+    payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    trace_filter = payload.get("trace_filter", {})
+    filters = trace_filter.get("filters", [])
+    paths = [entry.get("path") for entry in filters if isinstance(entry, dict)]
+    assert paths == [
+        "<inline:builtin-default>",
+        str(filter_path.resolve()),
     ]
