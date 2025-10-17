@@ -1,6 +1,7 @@
 //! Trace filter data models (directives, rules, summaries).
 
 use crate::trace_filter::selector::Selector;
+use crate::trace_filter::summary;
 use std::path::PathBuf;
 
 /// Scope-level execution directive.
@@ -169,16 +170,6 @@ impl TraceFilterConfig {
 
     /// Helper producing a summary used by metadata writers.
     pub fn summary(&self) -> FilterSummary {
-        let entries = self
-            .sources
-            .iter()
-            .map(|source| FilterSummaryEntry {
-                path: source.path.clone(),
-                sha256: source.sha256.clone(),
-                name: source.meta.name.clone(),
-                version: source.meta.version,
-            })
-            .collect();
-        FilterSummary { entries }
+        summary::build_summary(&self.sources)
     }
 }

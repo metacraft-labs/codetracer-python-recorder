@@ -28,6 +28,8 @@
 - ✅ Milestone 1 skeleton: added placeholder modules `trace_filter::model`, `::loader`, and `::summary`; updated `trace_filter::mod` to expose them while retaining existing `config`/`engine` facades for compatibility.
 - ✅ Step 1 complete: relocated shared model types (`ExecDirective`, `ValueAction`, `IoStream`, `IoConfig`, `ValuePattern`, `ScopeRule`, `FilterSource`, `FilterMeta`, `FilterSummary*`, `TraceFilterConfig`) into `trace_filter::model`, re-exported them from `config`, and removed duplicate impls. `just test` verified the crate after the move.
 - ✅ Step 2 complete: extracted loader utilities and serde `Raw*` structures into `trace_filter::loader`, rewrote the config facade to use `ConfigAggregator`, and rebuilt selector normalisation via `Selector::parse`. `just test` (Rust + Python suites) confirmed parsing works post-move.
+- ✅ Step 3 complete: moved summary construction into `trace_filter::summary`, updated `TraceFilterConfig::summary` to delegate to the new helper, and re-ran `just test` (all Rust/Python tests pass).
+- ✅ Facade review: `trace_filter::config` now re-exports model types and delegates to the loader; no redundant helpers remain. Module exports verified via `just test`.
 
 ### Planned Extraction Order (Milestone 1)
 1. **Model types first:** Relocate shared enums/structs (`ExecDirective`, `ValueAction`, `IoStream`, `FilterMeta`, `IoConfig`, `ValuePattern`, `ScopeRule`, `FilterSource`, `FilterSummary*`, `TraceFilterConfig`) into `trace_filter::model`. Update `config.rs` to re-export or `use` the new module and adjust external call sites (`session/bootstrap.rs`, `runtime/mod.rs`, tests).
@@ -37,5 +39,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Tackle Step 3: move summary construction helpers into `trace_filter::summary` and update `TraceFilterConfig::summary` consumers.
-2. After migrating summaries, run `just test` and then trim any remaining `config.rs` glue if redundant.
+1. Prep Milestone 1 wrap-up: document file moves (update developer notes if needed) and flag any downstream code (e.g., integration tests) that should receive additional coverage after the structural split.
+2. Draft a short summary for the implementation plan outlining remaining Milestone 1 tasks (if any) before moving to Milestone 2.
