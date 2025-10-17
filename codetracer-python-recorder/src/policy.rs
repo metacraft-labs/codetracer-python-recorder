@@ -1,12 +1,17 @@
 //! Runtime configuration policy for the recorder.
 
+mod model;
+
+use model::{apply_policy_update, PolicyPath, PolicyUpdate};
+pub use model::{policy_snapshot, IoCapturePolicy, OnRecorderError, RecorderPolicy};
+#[allow(unused_imports)]
+pub use model::PolicyParseError;
+
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::RwLock;
 
-use once_cell::sync::OnceCell;
-use recorder_errors::{usage, ErrorCode, RecorderError, RecorderResult};
+use recorder_errors::{usage, ErrorCode, RecorderResult};
 
 /// Environment variable configuring how the recorder reacts to internal errors.
 pub const ENV_ON_RECORDER_ERROR: &str = "CODETRACER_ON_RECORDER_ERROR";
@@ -22,158 +27,6 @@ pub const ENV_LOG_FILE: &str = "CODETRACER_LOG_FILE";
 pub const ENV_JSON_ERRORS: &str = "CODETRACER_JSON_ERRORS";
 /// Environment variable toggling IO capture strategies.
 pub const ENV_CAPTURE_IO: &str = "CODETRACER_CAPTURE_IO";
-
-static POLICY: OnceCell<RwLock<RecorderPolicy>> = OnceCell::new();
-
-fn policy_cell() -> &'static RwLock<RecorderPolicy> {
-    POLICY.get_or_init(|| RwLock::new(RecorderPolicy::default()))
-}
-
-/// Behaviour when the recorder encounters an error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OnRecorderError {
-    /// Propagate the error to callers; tracing stops with a non-zero exit.
-    Abort,
-    /// Disable tracing but allow the host process to continue running.
-    Disable,
-}
-
-impl Default for OnRecorderError {
-    fn default() -> Self {
-        OnRecorderError::Abort
-    }
-}
-
-#[derive(Debug)]
-pub struct PolicyParseError(pub RecorderError);
-
-impl FromStr for OnRecorderError {
-    type Err = PolicyParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "abort" => Ok(OnRecorderError::Abort),
-            "disable" => Ok(OnRecorderError::Disable),
-            other => Err(PolicyParseError(usage!(
-                ErrorCode::InvalidPolicyValue,
-                "invalid on_recorder_error value '{}' (expected 'abort' or 'disable')",
-                other
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IoCapturePolicy {
-    pub line_proxies: bool,
-    pub fd_fallback: bool,
-}
-
-impl Default for IoCapturePolicy {
-    fn default() -> Self {
-        Self {
-            line_proxies: true,
-            fd_fallback: false,
-        }
-    }
-}
-
-/// Recorder-wide runtime configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecorderPolicy {
-    pub on_recorder_error: OnRecorderError,
-    pub require_trace: bool,
-    pub keep_partial_trace: bool,
-    pub log_level: Option<String>,
-    pub log_file: Option<PathBuf>,
-    pub json_errors: bool,
-    pub io_capture: IoCapturePolicy,
-}
-
-impl Default for RecorderPolicy {
-    fn default() -> Self {
-        Self {
-            on_recorder_error: OnRecorderError::Abort,
-            require_trace: false,
-            keep_partial_trace: false,
-            log_level: None,
-            log_file: None,
-            json_errors: false,
-            io_capture: IoCapturePolicy::default(),
-        }
-    }
-}
-
-impl RecorderPolicy {
-    fn apply_update(&mut self, update: PolicyUpdate) {
-        if let Some(on_err) = update.on_recorder_error {
-            self.on_recorder_error = on_err;
-        }
-        if let Some(require_trace) = update.require_trace {
-            self.require_trace = require_trace;
-        }
-        if let Some(keep_partial) = update.keep_partial_trace {
-            self.keep_partial_trace = keep_partial;
-        }
-        if let Some(level) = update.log_level {
-            self.log_level = match level.trim() {
-                "" => None,
-                other => Some(other.to_string()),
-            };
-        }
-        if let Some(path) = update.log_file {
-            self.log_file = match path {
-                PolicyPath::Clear => None,
-                PolicyPath::Value(pb) => Some(pb),
-            };
-        }
-        if let Some(json_errors) = update.json_errors {
-            self.json_errors = json_errors;
-        }
-        if let Some(line_proxies) = update.io_capture_line_proxies {
-            self.io_capture.line_proxies = line_proxies;
-            if !self.io_capture.line_proxies {
-                self.io_capture.fd_fallback = false;
-            }
-        }
-        if let Some(fd_fallback) = update.io_capture_fd_fallback {
-            // fd fallback requires proxies to be on.
-            self.io_capture.fd_fallback = fd_fallback && self.io_capture.line_proxies;
-        }
-    }
-}
-
-/// Internal helper representing path updates.
-#[derive(Debug, Clone)]
-enum PolicyPath {
-    Clear,
-    Value(PathBuf),
-}
-
-/// Mutation record for the policy.
-#[derive(Debug, Default, Clone)]
-struct PolicyUpdate {
-    on_recorder_error: Option<OnRecorderError>,
-    require_trace: Option<bool>,
-    keep_partial_trace: Option<bool>,
-    log_level: Option<String>,
-    log_file: Option<PolicyPath>,
-    json_errors: Option<bool>,
-    io_capture_line_proxies: Option<bool>,
-    io_capture_fd_fallback: Option<bool>,
-}
-
-/// Snapshot the current policy.
-pub fn policy_snapshot() -> RecorderPolicy {
-    policy_cell().read().expect("policy lock poisoned").clone()
-}
-
-/// Apply the provided update to the global policy.
-fn apply_policy_update(update: PolicyUpdate) {
-    let mut guard = policy_cell().write().expect("policy lock poisoned");
-    guard.apply_update(update);
-    crate::logging::apply_policy(&guard);
-}
 
 /// Load policy overrides from environment variables.
 pub fn configure_policy_from_env() -> RecorderResult<()> {
@@ -387,8 +240,7 @@ mod tests {
     use std::path::Path;
 
     fn reset_policy() {
-        let mut guard = super::policy_cell().write().expect("policy lock poisoned");
-        *guard = RecorderPolicy::default();
+        super::model::reset_policy_for_tests();
     }
 
     #[test]
