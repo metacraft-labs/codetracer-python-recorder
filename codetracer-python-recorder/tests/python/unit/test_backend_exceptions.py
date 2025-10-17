@@ -20,9 +20,9 @@ def stop_after() -> None:
 
 
 def test_start_tracing_raises_usage_error(tmp_path) -> None:
-    start_tracing(str(tmp_path), "json", None)
+    start_tracing(str(tmp_path), "json", None, None)
     with pytest.raises(UsageError) as excinfo:
-        start_tracing(str(tmp_path), "json", None)
+        start_tracing(str(tmp_path), "json", None, None)
     err = excinfo.value
     assert getattr(err, "code") == "ERR_ALREADY_TRACING"
     assert "tracing already active" in str(err)

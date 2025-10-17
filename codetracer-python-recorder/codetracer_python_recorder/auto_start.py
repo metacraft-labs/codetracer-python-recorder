@@ -9,6 +9,7 @@ from .formats import DEFAULT_FORMAT
 
 ENV_TRACE_PATH = "CODETRACER_TRACE"
 ENV_TRACE_FORMAT = "CODETRACER_FORMAT"
+ENV_TRACE_FILTER = "CODETRACER_TRACE_FILTER"
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def auto_start_from_env() -> None:
     path = os.getenv(ENV_TRACE_PATH)
     if not path:
         return
+    filter_spec = os.getenv(ENV_TRACE_FILTER)
 
     # Delay import to avoid boot-time circular dependencies.
     from . import session
@@ -31,13 +33,15 @@ def auto_start_from_env() -> None:
 
     fmt = os.getenv(ENV_TRACE_FORMAT, DEFAULT_FORMAT)
     log.debug(
-        "codetracer auto-start triggered", extra={"trace_path": path, "format": fmt}
+        "codetracer auto-start triggered",
+        extra={"trace_path": path, "format": fmt, "trace_filter": filter_spec},
     )
-    session.start(path, format=fmt)
+    session.start(path, format=fmt, trace_filter=filter_spec)
 
 
 __all__: Iterable[str] = (
     "ENV_TRACE_FORMAT",
     "ENV_TRACE_PATH",
+    "ENV_TRACE_FILTER",
     "auto_start_from_env",
 )

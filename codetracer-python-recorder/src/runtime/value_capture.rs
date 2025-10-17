@@ -6,12 +6,109 @@ use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 use recorder_errors::{usage, ErrorCode};
-use runtime_tracing::{FullValueRecord, NonStreamingTraceWriter, TraceWriter};
+use runtime_tracing::{
+    FullValueRecord, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord,
+};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
+use crate::logging::record_dropped_event;
 use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
 use crate::runtime::value_encoder::encode_value;
+use crate::trace_filter::config::ValueAction;
+use crate::trace_filter::engine::{ValueKind, ValuePolicy};
+
+const REDACTED_SENTINEL: &str = "<redacted>";
+
+const VALUE_KIND_COUNT: usize = 5;
+
+#[derive(Debug, Default, Clone)]
+pub struct ValueFilterStats {
+    redacted: [u64; VALUE_KIND_COUNT],
+    dropped: [u64; VALUE_KIND_COUNT],
+}
+
+impl ValueFilterStats {
+    pub fn record_redaction(&mut self, kind: ValueKind) {
+        self.redacted[kind.index()] += 1;
+    }
+
+    pub fn record_drop(&mut self, kind: ValueKind) {
+        self.dropped[kind.index()] += 1;
+    }
+
+    pub fn redacted_count(&self, kind: ValueKind) -> u64 {
+        self.redacted[kind.index()]
+    }
+
+    pub fn dropped_count(&self, kind: ValueKind) -> u64 {
+        self.dropped[kind.index()]
+    }
+}
+
+fn redacted_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
+    let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Redacted");
+    ValueRecord::Error {
+        msg: REDACTED_SENTINEL.to_string(),
+        type_id: ty,
+    }
+}
+
+fn record_redaction(kind: ValueKind, candidate: &str, telemetry: Option<&mut ValueFilterStats>) {
+    if let Some(stats) = telemetry {
+        stats.record_redaction(kind);
+    }
+    let metric = match kind {
+        ValueKind::Arg => "filter_value_redacted.arg",
+        ValueKind::Local => "filter_value_redacted.local",
+        ValueKind::Global => "filter_value_redacted.global",
+        ValueKind::Return => "filter_value_redacted.return",
+        ValueKind::Attr => "filter_value_redacted.attr",
+    };
+    record_dropped_event(metric);
+    log::debug!("[RuntimeTracer] redacted {} '{}'", kind.label(), candidate);
+}
+
+fn record_drop(kind: ValueKind, candidate: &str, telemetry: Option<&mut ValueFilterStats>) {
+    if let Some(stats) = telemetry {
+        stats.record_drop(kind);
+    }
+    let metric = match kind {
+        ValueKind::Arg => "filter_value_dropped.arg",
+        ValueKind::Local => "filter_value_dropped.local",
+        ValueKind::Global => "filter_value_dropped.global",
+        ValueKind::Return => "filter_value_dropped.return",
+        ValueKind::Attr => "filter_value_dropped.attr",
+    };
+    record_dropped_event(metric);
+    log::debug!(
+        "[RuntimeTracer] dropped {} '{}' from trace",
+        kind.label(),
+        candidate
+    );
+}
+
+fn encode_with_policy<'py>(
+    py: Python<'py>,
+    writer: &mut NonStreamingTraceWriter,
+    value: &Bound<'py, PyAny>,
+    policy: Option<&ValuePolicy>,
+    kind: ValueKind,
+    candidate: &str,
+    telemetry: Option<&mut ValueFilterStats>,
+) -> Option<ValueRecord> {
+    match policy.map(|p| p.decide(kind, candidate)) {
+        Some(ValueAction::Redact) => {
+            record_redaction(kind, candidate, telemetry);
+            Some(redacted_value(writer))
+        }
+        Some(ValueAction::Drop) => {
+            record_drop(kind, candidate, telemetry);
+            None
+        }
+        _ => Some(encode_value(py, writer, value)),
+    }
+}
 
 /// Capture Python call arguments for the provided code object and encode them
 /// using the runtime tracer writer.
@@ -19,6 +116,8 @@ pub fn capture_call_arguments<'py>(
     py: Python<'py>,
     writer: &mut NonStreamingTraceWriter,
     code: &CodeObjectWrapper,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
 ) -> PyResult<Vec<FullValueRecord>> {
     let snapshot = capture_frame(py, code)?;
     let locals = snapshot.locals();
@@ -45,16 +144,34 @@ pub fn capture_call_arguments<'py>(
                 "missing positional arg '{name}'"
             ))
         })?;
-        let encoded = encode_value(py, writer, &value);
-        args.push(TraceWriter::arg(writer, name, encoded));
+        if let Some(encoded) = encode_with_policy(
+            py,
+            writer,
+            &value,
+            policy,
+            ValueKind::Arg,
+            name,
+            telemetry.as_deref_mut(),
+        ) {
+            args.push(TraceWriter::arg(writer, name, encoded));
+        }
         idx += 1;
     }
 
     if (flags & CO_VARARGS) != 0 && idx < varnames.len() {
         let name = &varnames[idx];
         if let Some(value) = locals.get_item(name)? {
-            let encoded = encode_value(py, writer, &value);
-            args.push(TraceWriter::arg(writer, name, encoded));
+            if let Some(encoded) = encode_with_policy(
+                py,
+                writer,
+                &value,
+                policy,
+                ValueKind::Arg,
+                name,
+                telemetry.as_deref_mut(),
+            ) {
+                args.push(TraceWriter::arg(writer, name, encoded));
+            }
         }
         idx += 1;
     }
@@ -67,16 +184,34 @@ pub fn capture_call_arguments<'py>(
                 "missing kw-only arg '{name}'"
             ))
         })?;
-        let encoded = encode_value(py, writer, &value);
-        args.push(TraceWriter::arg(writer, name, encoded));
+        if let Some(encoded) = encode_with_policy(
+            py,
+            writer,
+            &value,
+            policy,
+            ValueKind::Arg,
+            name,
+            telemetry.as_deref_mut(),
+        ) {
+            args.push(TraceWriter::arg(writer, name, encoded));
+        }
     }
     idx = idx.saturating_add(kwonly_take);
 
     if (flags & CO_VARKEYWORDS) != 0 && idx < varnames.len() {
         let name = &varnames[idx];
         if let Some(value) = locals.get_item(name)? {
-            let encoded = encode_value(py, writer, &value);
-            args.push(TraceWriter::arg(writer, name, encoded));
+            if let Some(encoded) = encode_with_policy(
+                py,
+                writer,
+                &value,
+                policy,
+                ValueKind::Arg,
+                name,
+                telemetry.as_deref_mut(),
+            ) {
+                args.push(TraceWriter::arg(writer, name, encoded));
+            }
         }
     }
 
@@ -89,6 +224,8 @@ pub fn record_visible_scope(
     writer: &mut NonStreamingTraceWriter,
     snapshot: &FrameSnapshot<'_>,
     recorded: &mut HashSet<String>,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
 ) {
     for (key, value) in snapshot.locals().iter() {
         let name = match key.downcast::<PyString>() {
@@ -98,9 +235,19 @@ pub fn record_visible_scope(
             },
             Err(_) => continue,
         };
-        let encoded = encode_value(py, writer, &value);
-        TraceWriter::register_variable_with_full_value(writer, &name, encoded);
-        recorded.insert(name);
+        let encoded = encode_with_policy(
+            py,
+            writer,
+            &value,
+            policy,
+            ValueKind::Local,
+            &name,
+            telemetry.as_deref_mut(),
+        );
+        if let Some(encoded) = encoded {
+            TraceWriter::register_variable_with_full_value(writer, &name, encoded);
+            recorded.insert(name);
+        }
     }
 
     if snapshot.locals_is_globals() {
@@ -119,9 +266,19 @@ pub fn record_visible_scope(
             if name == "__builtins__" || recorded.contains(name) {
                 continue;
             }
-            let encoded = encode_value(py, writer, &value);
-            TraceWriter::register_variable_with_full_value(writer, name, encoded);
-            recorded.insert(name.to_owned());
+            let encoded = encode_with_policy(
+                py,
+                writer,
+                &value,
+                policy,
+                ValueKind::Global,
+                name,
+                telemetry.as_deref_mut(),
+            );
+            if let Some(encoded) = encoded {
+                TraceWriter::register_variable_with_full_value(writer, name, encoded);
+                recorded.insert(name.to_owned());
+            }
         }
     }
 }
@@ -131,7 +288,21 @@ pub fn record_return_value(
     py: Python<'_>,
     writer: &mut NonStreamingTraceWriter,
     value: &Bound<'_, PyAny>,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
+    candidate: Option<&str>,
 ) {
-    let encoded = encode_value(py, writer, value);
-    TraceWriter::register_return(writer, encoded);
+    let name = candidate.unwrap_or("<return>");
+    let encoded = encode_with_policy(
+        py,
+        writer,
+        value,
+        policy,
+        ValueKind::Return,
+        name,
+        telemetry.as_deref_mut(),
+    );
+    if let Some(encoded) = encoded {
+        TraceWriter::register_return(writer, encoded);
+    }
 }

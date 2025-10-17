@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import runpy
 import sys
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import flush, start, stop
+from .auto_start import ENV_TRACE_FILTER
 from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, normalize_format
 
 
@@ -23,6 +25,7 @@ class RecorderCLIConfig:
     activation_path: Path
     script: Path
     script_args: list[str]
+    trace_filter: tuple[str, ...]
     policy_overrides: dict[str, object]
 
 
@@ -63,6 +66,17 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         help=(
             "Optional path used to gate tracing. When provided, tracing begins once the "
             "interpreter enters this file. Defaults to the target script."
+        ),
+    )
+    parser.add_argument(
+        "--trace-filter",
+        action="append",
+        help=(
+            "Path to a trace filter file. Provide multiple times to chain filters; "
+            "specify multiple paths within a single argument using '::' separators. "
+            "Filters load after any project default '.codetracer/trace-filter.toml' so "
+            "later entries override earlier ones; the CODETRACER_TRACE_FILTER "
+            "environment variable accepts the same syntax for env auto-start."
         ),
     )
     parser.add_argument(
@@ -174,6 +188,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         activation_path=activation_path,
         script=script_path,
         script_args=script_args,
+        trace_filter=tuple(known.trace_filter or ()),
         policy_overrides=policy,
     )
 
@@ -238,6 +253,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     trace_dir = config.trace_dir
     script_path = config.script
     script_args = config.script_args
+    filter_specs = list(config.trace_filter)
+    env_filter = os.getenv(ENV_TRACE_FILTER)
+    if env_filter:
+        filter_specs.insert(0, env_filter)
     policy_overrides = config.policy_overrides if config.policy_overrides else None
 
     old_argv = sys.argv
@@ -248,6 +267,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             trace_dir,
             format=config.format,
             start_on_enter=config.activation_path,
+            trace_filter=filter_specs or None,
             policy=policy_overrides,
         )
     except Exception as exc:

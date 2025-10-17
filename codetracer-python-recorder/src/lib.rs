@@ -12,6 +12,7 @@ pub mod monitoring;
 mod policy;
 mod runtime;
 mod session;
+pub mod trace_filter;
 
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 pub use crate::monitoring as tracer;

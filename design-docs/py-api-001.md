@@ -61,6 +61,12 @@ class TraceSession:
 ## Environment Integration
 - Auto-start tracing when `CODETRACER_TRACE` is set; the value is interpreted as the output directory.
 - When `CODETRACER_FORMAT` is provided, it overrides the default output format.
+- Accept `CODETRACER_TRACE_FILTER` with either `::`-separated paths or multiple
+  entries (mirroring the CLI). The env-driven chain is appended after any
+  discovered project default `.codetracer/trace-filter.toml`, allowing overrides
+  to refine or replace default rules.
+- Even when no env/CLI filters are provided, prepend the bundled `builtin-default`
+  filter so a baseline redaction/stdlib skip policy always applies.
 
 ## Usage Example
 ```py

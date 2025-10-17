@@ -43,6 +43,9 @@
 
               # CapNProto
 	      capnproto
+
+              # Benchmark visualisation
+              gnuplot
             ];
 
 	    shellHook = ''
