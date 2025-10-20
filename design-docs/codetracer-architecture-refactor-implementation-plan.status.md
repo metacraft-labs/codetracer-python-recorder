@@ -74,6 +74,11 @@
 - ✅ Milestone 4 Step 5: documentation pass to close out the milestone and queue the next phase.
   - Summarised the refactor scope (status tracker + ADR 0011 update) and recorded the retrospective in `design-docs/codetracer-architecture-refactor-milestone-4-retrospective.md`.
   - Repository remains test-clean; next work items roll into Milestone 5 prep.
+- 🔄 Milestone 5 Kickoff: audited `runtime/mod.rs` to outline collaborator boundaries before extracting modules.
+  - **Lifecycle management:** `RuntimeTracer::new`, `finish`, `finalise_writer`, `cleanup_partial_outputs`, `notify_failure`, `require_trace_or_fail`, activation teardown, and metadata writers.
+  - **Event handling:** `Tracer` impl (`interest`, `on_py_start`, `on_line`, `on_py_return`) plus helpers (`ensure_function_id`, `mark_event`, `mark_failure`).
+  - **Filter cache:** `scope_resolution`, `should_trace_code`, `FilterStats`, ignore tracking, and filter summary appenders.
+  - **IO coordination:** `install_io_capture`, `flush_*`, `drain_io_chunks`, `record_io_chunk`, `build_io_metadata`, `teardown_io_capture`, and `io_flag_labels`.
 
 
 ### Planned Extraction Order (Milestone 4)
@@ -81,6 +86,13 @@
 2. **Callback relocation:** Move the `*_callback` PyO3 functions plus the `catch_callback` and `call_tracer_with_code` helpers into `monitoring::callbacks`, exposing a minimal API for registering callbacks against a tool id.
 3. **Install plumbing:** Shift `install_tracer`, `flush_installed_tracer`, and `uninstall_tracer` into `monitoring::install`, ensuring tool acquisition, event mask negotiation, and disable-sentinel handling route through the new callback table.
 4. **Tests and verification:** Update unit tests (including panic-to-pyerr coverage) to point at the new modules, add table-driven tests for registration completeness, and run `just test` to confirm the refactor preserves behaviour.
+
+### Planned Extraction Order (Milestone 5)
+1. **Scaffold collaborators:** Introduce `runtime::tracer` with submodules for lifecycle, events, filtering, and IO; move `RuntimeTracer` into the new tree while keeping the public facade (`crate::runtime::RuntimeTracer`) stable.
+2. **IO coordinator migration:** Extract IO capture installation/flush/record logic into `runtime::tracer::io::IoCoordinator`, delegating from `RuntimeTracer` and covering payload metadata helpers.
+3. **Filter cache module:** Move scope resolution, ignore tracking, statistics, and metadata serialisation into `runtime::tracer::filtering`, exposing a collaborator that caches resolutions and records drops.
+4. **Lifecycle controller:** Relocate writer setup/teardown, policy checks, failure handling, activation gating, and metadata finalisation into `runtime::tracer::lifecycle`.
+5. **Event processor:** Shift `Tracer` trait implementation and per-event pipelines into `runtime::tracer::events`, wiring through the collaborators and updating unit/integration tests; run `just test` after the split.
 
 ### Planned Extraction Order (Milestone 2)
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
@@ -97,6 +109,6 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Draft the Milestone 4 retrospective/ADR update and circulate for feedback.
-2. Revisit the Milestone 5 runtime tracer plan with the monitoring split in mind; flag any prep tasks.
+1. Create the `runtime::tracer` scaffolding and re-export `RuntimeTracer` through the existing facade.
+2. Extract IO coordination into `runtime::tracer::io` and refresh tests to cover the delegate.
 3. Track stakeholder feedback and spin out follow-up issues if new risks surface.
