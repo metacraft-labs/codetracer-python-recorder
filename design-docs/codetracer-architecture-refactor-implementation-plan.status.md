@@ -82,6 +82,7 @@
 - ✅ Milestone 5 Step 1: moved `RuntimeTracer` and companion helpers into `runtime::tracer::runtime_tracer`, re-exported the type via `runtime::tracer` and `runtime`, and kept module scaffolding for upcoming collaborators. `just test` (Rust nextest + Python pytest) confirms the relocation preserves behaviour.
 - ✅ Milestone 5 Step 2: extracted IO coordination into `runtime::tracer::io::IoCoordinator`, delegating installation, flush/teardown, metadata enrichment, and snapshot tracking from `RuntimeTracer`. Updated callers to mark events on IO writes and re-ran `just test` to validate Rust and Python suites.
 - ✅ Milestone 5 Step 3: introduced `runtime::tracer::filtering::FilterCoordinator` to own scope resolution, skip caching, telemetry stats, and metadata wiring. `RuntimeTracer` now delegates trace decisions and summary emission, while tests continue to validate skip behaviour and metadata shape with unchanged expectations.
+- ✅ Milestone 5 Step 4: carved lifecycle orchestration into `runtime::tracer::lifecycle::LifecycleController`, covering activation gating, writer initialisation/finalisation, policy enforcement, failure cleanup, and trace id scoping. Added focused unit tests for the controller and re-ran `just test` (nextest + pytest) to verify no behavioural drift.
 
 
 ### Planned Extraction Order (Milestone 4)
@@ -112,6 +113,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Carve lifecycle management into `runtime::tracer::lifecycle` while keeping the public facade stable.
-2. Shift event handling into `runtime::tracer::events`, threading collaborators through the callbacks.
-3. Track stakeholder feedback and spin out follow-up issues if new risks surface.
+1. Shift event handling into `runtime::tracer::events`, threading collaborators through the callbacks.
+2. Track stakeholder feedback and spin out follow-up issues if new risks surface.

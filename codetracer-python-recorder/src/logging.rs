@@ -4,6 +4,8 @@ mod logger;
 mod metrics;
 mod trailer;
 
+#[cfg(test)]
+pub(crate) use logger::snapshot_run_and_trace;
 pub use logger::{
     init_rust_logging_with_default, log_recorder_error, set_active_trace_id, with_error_code,
     with_error_code_opt,

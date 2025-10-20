@@ -1,6 +1,6 @@
 use super::filtering::{FilterCoordinator, TraceDecision};
 use super::io::IoCoordinator;
-use crate::runtime::activation::ActivationController;
+use super::lifecycle::LifecycleController;
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use crate::runtime::logging::log_event;
@@ -10,8 +10,7 @@ use crate::runtime::value_capture::{
 };
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 #[cfg(feature = "integration-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -22,49 +21,26 @@ use std::thread::{self, ThreadId};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
-use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
-use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{Line, PathId, TraceEventsFileFormat, TraceWriter};
-use serde_json::json;
-
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
-use crate::logging::{set_active_trace_id, with_error_code};
+use crate::logging::with_error_code;
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::trace_filter::engine::TraceFilterEngine;
-
-use uuid::Uuid;
-
-struct TraceIdResetGuard;
-
-impl TraceIdResetGuard {
-    fn new() -> Self {
-        TraceIdResetGuard
-    }
-}
-
-impl Drop for TraceIdResetGuard {
-    fn drop(&mut self) {
-        set_active_trace_id(None);
-    }
-}
+use recorder_errors::{bug, enverr, target, ErrorCode};
+use runtime_tracing::NonStreamingTraceWriter;
+use runtime_tracing::{Line, PathId, TraceEventsFileFormat, TraceWriter};
 
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
 pub struct RuntimeTracer {
     writer: NonStreamingTraceWriter,
     format: TraceEventsFileFormat,
-    activation: ActivationController,
-    program_path: PathBuf,
+    lifecycle: LifecycleController,
     function_ids: HashMap<usize, runtime_tracing::FunctionId>,
-    output_paths: Option<TraceOutputPaths>,
-    events_recorded: bool,
-    encountered_failure: bool,
-    trace_id: String,
     io: IoCoordinator,
     filter: FilterCoordinator,
 }
@@ -206,18 +182,12 @@ impl RuntimeTracer {
     ) -> Self {
         let mut writer = NonStreamingTraceWriter::new(program, args);
         writer.set_format(format);
-        let activation = ActivationController::new(activation_path);
-        let program_path = PathBuf::from(program);
+        let lifecycle = LifecycleController::new(program, activation_path);
         Self {
             writer,
             format,
-            activation,
-            program_path,
+            lifecycle,
             function_ids: HashMap::new(),
-            output_paths: None,
-            events_recorded: false,
-            encountered_failure: false,
-            trace_id: Uuid::new_v4().to_string(),
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
         }
@@ -251,18 +221,9 @@ impl RuntimeTracer {
 
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
-        let start_path = self.activation.start_path(&self.program_path);
-        {
-            let _mute = ScopedMuteIoCapture::new();
-            log::debug!("{}", start_path.display());
-        }
-        outputs
-            .configure_writer(&mut self.writer, start_path, start_line)
+        self.lifecycle
+            .begin(&mut self.writer, outputs, start_line)
             .map_err(ffi::map_recorder_error)?;
-        self.output_paths = Some(outputs.clone());
-        self.events_recorded = false;
-        self.encountered_failure = false;
-        set_active_trace_id(Some(self.trace_id.clone()));
         Ok(())
     }
 
@@ -272,115 +233,11 @@ impl RuntimeTracer {
             log::debug!("[RuntimeTracer] skipping event mark due to test injection");
             return;
         }
-        self.events_recorded = true;
+        self.lifecycle.mark_event();
     }
 
     fn mark_failure(&mut self) {
-        self.encountered_failure = true;
-    }
-
-    fn cleanup_partial_outputs(&self) -> RecorderResult<()> {
-        if let Some(outputs) = &self.output_paths {
-            for path in [outputs.events(), outputs.metadata(), outputs.paths()] {
-                if path.exists() {
-                    fs::remove_file(path).map_err(|err| {
-                        enverr!(ErrorCode::Io, "failed to remove partial trace file")
-                            .with_context("path", path.display().to_string())
-                            .with_context("io", err.to_string())
-                    })?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn require_trace_or_fail(&self, policy: &RecorderPolicy) -> RecorderResult<()> {
-        if policy.require_trace && !self.events_recorded {
-            return Err(usage!(
-                ErrorCode::TraceMissing,
-                "recorder policy requires a trace but no events were recorded"
-            ));
-        }
-        Ok(())
-    }
-
-    fn finalise_writer(&mut self) -> RecorderResult<()> {
-        TraceWriter::finish_writing_trace_metadata(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace metadata")
-                .with_context("source", err.to_string())
-        })?;
-        self.append_filter_metadata()?;
-        TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace paths")
-                .with_context("source", err.to_string())
-        })?;
-        TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace events")
-                .with_context("source", err.to_string())
-        })?;
-        Ok(())
-    }
-
-    fn append_filter_metadata(&self) -> RecorderResult<()> {
-        let Some(outputs) = &self.output_paths else {
-            return Ok(());
-        };
-        let Some(engine) = self.filter.engine() else {
-            return Ok(());
-        };
-
-        let path = outputs.metadata();
-        let original = fs::read_to_string(path).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to read trace metadata")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        let mut metadata: serde_json::Value = serde_json::from_str(&original).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to parse trace metadata JSON")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        let filters = engine.summary();
-        let filters_json: Vec<serde_json::Value> = filters
-            .entries
-            .iter()
-            .map(|entry| {
-                json!({
-                    "path": entry.path.to_string_lossy(),
-                    "sha256": entry.sha256,
-                    "name": entry.name,
-                    "version": entry.version,
-                })
-            })
-            .collect();
-
-        if let serde_json::Value::Object(ref mut obj) = metadata {
-            obj.insert(
-                "trace_filter".to_string(),
-                json!({
-                    "filters": filters_json,
-                    "stats": self.filter.summary_json(),
-                }),
-            );
-            let serialised = serde_json::to_string(&metadata).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to serialise trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            fs::write(path, serialised).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to write trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            Ok(())
-        } else {
-            Err(
-                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
-                    .with_context("path", path.display().to_string()),
-            )
-        }
+        self.lifecycle.mark_failure();
     }
 
     fn ensure_function_id(
@@ -422,7 +279,10 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
-        let is_active = self.activation.should_process_event(py, code);
+        let is_active = self
+            .lifecycle
+            .activation_mut()
+            .should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
@@ -484,7 +344,10 @@ impl Tracer for RuntimeTracer {
     }
 
     fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) -> CallbackResult {
-        let is_active = self.activation.should_process_event(py, code);
+        let is_active = self
+            .lifecycle
+            .activation_mut()
+            .should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
@@ -559,7 +422,10 @@ impl Tracer for RuntimeTracer {
         _offset: i32,
         retval: &Bound<'_, PyAny>,
     ) -> CallbackResult {
-        let is_active = self.activation.should_process_event(py, code);
+        let is_active = self
+            .lifecycle
+            .activation_mut()
+            .should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
@@ -595,7 +461,11 @@ impl Tracer for RuntimeTracer {
             object_name,
         );
         self.mark_event();
-        if self.activation.handle_return_event(code.id()) {
+        if self
+            .lifecycle
+            .activation_mut()
+            .handle_return_event(code.id())
+        {
             let _mute = ScopedMuteIoCapture::new();
             log::debug!("[RuntimeTracer] deactivated on activation return");
         }
@@ -641,17 +511,16 @@ impl Tracer for RuntimeTracer {
             return Err(injected_failure_err(FailureStage::Finish));
         }
 
-        set_active_trace_id(Some(self.trace_id.clone()));
-        let _reset = TraceIdResetGuard::new();
+        let _trace_scope = self.lifecycle.trace_id_scope();
         let policy = policy_snapshot();
 
         if self.io.teardown(py, &mut self.writer) {
             self.mark_event();
         }
 
-        if self.encountered_failure {
+        if self.lifecycle.encountered_failure() {
             if policy.keep_partial_trace {
-                if let Err(err) = self.finalise_writer() {
+                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter) {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
                             "failed to finalise partial trace after disable: {}",
@@ -659,7 +528,7 @@ impl Tracer for RuntimeTracer {
                         );
                     });
                 }
-                if let Some(outputs) = &self.output_paths {
+                if let Some(outputs) = self.lifecycle.output_paths() {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
                             "recorder detached after failure; keeping partial trace at {}",
@@ -668,21 +537,27 @@ impl Tracer for RuntimeTracer {
                     });
                 }
             } else {
-                self.cleanup_partial_outputs()
+                self.lifecycle
+                    .cleanup_partial_outputs()
                     .map_err(ffi::map_recorder_error)?;
             }
             self.function_ids.clear();
             self.io.clear_snapshots();
             self.filter.reset();
+            self.lifecycle.reset_event_state();
             return Ok(());
         }
 
-        self.require_trace_or_fail(&policy)
+        self.lifecycle
+            .require_trace_or_fail(&policy)
             .map_err(ffi::map_recorder_error)?;
-        self.finalise_writer().map_err(ffi::map_recorder_error)?;
+        self.lifecycle
+            .finalise(&mut self.writer, &self.filter)
+            .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
         self.filter.reset();
         self.io.clear_snapshots();
+        self.lifecycle.reset_event_state();
         Ok(())
     }
 }
@@ -879,7 +754,7 @@ result = compute()\n"
                 returns
             );
             assert_eq!(last_outcome(), Some(CallbackOutcome::Continue));
-            assert!(!tracer.activation.is_active());
+            assert!(!tracer.lifecycle.activation().is_active());
         });
     }
 
