@@ -1,3 +1,4 @@
+use super::io::IoCoordinator;
 use crate::runtime::activation::ActivationController;
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
@@ -22,9 +23,8 @@ use pyo3::types::PyAny;
 
 use recorder_errors::{bug, enverr, target, usage, ErrorCode, RecorderResult};
 use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{
-    EventLogKind, Line, PathId, RecordEvent, TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter,
-};
+use runtime_tracing::{Line, PathId, TraceEventsFileFormat, TraceWriter};
+use serde_json::json;
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
@@ -33,12 +33,8 @@ use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
-use crate::runtime::io_capture::{
-    IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
-};
+use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::trace_filter::engine::{ExecDecision, ScopeResolution, TraceFilterEngine, ValueKind};
-use serde::Serialize;
-use serde_json::{self, json};
 
 use uuid::Uuid;
 
@@ -56,29 +52,6 @@ impl Drop for TraceIdResetGuard {
     }
 }
 
-fn io_flag_labels(flags: IoChunkFlags) -> Vec<&'static str> {
-    let mut labels = Vec::new();
-    if flags.contains(IoChunkFlags::NEWLINE_TERMINATED) {
-        labels.push("newline");
-    }
-    if flags.contains(IoChunkFlags::EXPLICIT_FLUSH) {
-        labels.push("flush");
-    }
-    if flags.contains(IoChunkFlags::STEP_BOUNDARY) {
-        labels.push("step_boundary");
-    }
-    if flags.contains(IoChunkFlags::TIME_SPLIT) {
-        labels.push("time_split");
-    }
-    if flags.contains(IoChunkFlags::INPUT_CHUNK) {
-        labels.push("input");
-    }
-    if flags.contains(IoChunkFlags::FD_MIRROR) {
-        labels.push("mirror");
-    }
-    labels
-}
-
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
 pub struct RuntimeTracer {
@@ -92,8 +65,7 @@ pub struct RuntimeTracer {
     events_recorded: bool,
     encountered_failure: bool,
     trace_id: String,
-    line_snapshots: Arc<LineSnapshotStore>,
-    io_capture: Option<IoCapturePipeline>,
+    io: IoCoordinator,
     trace_filter: Option<Arc<TraceFilterEngine>>,
     scope_cache: HashMap<usize, Arc<ScopeResolution>>,
     filter_stats: FilterStats,
@@ -301,8 +273,7 @@ impl RuntimeTracer {
             events_recorded: false,
             encountered_failure: false,
             trace_id: Uuid::new_v4().to_string(),
-            line_snapshots: Arc::new(LineSnapshotStore::new()),
-            io_capture: None,
+            io: IoCoordinator::new(),
             trace_filter,
             scope_cache: HashMap::new(),
             filter_stats: FilterStats::default(),
@@ -312,7 +283,7 @@ impl RuntimeTracer {
     /// Share the snapshot store with collaborators (IO capture, tests).
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn line_snapshot_store(&self) -> Arc<LineSnapshotStore> {
-        Arc::clone(&self.line_snapshots)
+        self.io.snapshot_store()
     }
 
     pub fn install_io_capture(&mut self, py: Python<'_>, policy: &RecorderPolicy) -> PyResult<()> {
@@ -320,60 +291,19 @@ impl RuntimeTracer {
             line_proxies: policy.io_capture.line_proxies,
             fd_mirror: policy.io_capture.fd_fallback,
         };
-        let pipeline = IoCapturePipeline::install(py, Arc::clone(&self.line_snapshots), settings)?;
-        self.io_capture = pipeline;
-        Ok(())
+        self.io.install(py, settings)
     }
 
     fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if let Some(pipeline) = self.io_capture.as_ref() {
-            pipeline.flush_before_step(thread_id);
+        if self.io.flush_before_step(thread_id, &mut self.writer) {
+            self.mark_event();
         }
-        self.drain_io_chunks();
     }
 
     fn flush_pending_io(&mut self) {
-        if let Some(pipeline) = self.io_capture.as_ref() {
-            pipeline.flush_all();
+        if self.io.flush_all(&mut self.writer) {
+            self.mark_event();
         }
-        self.drain_io_chunks();
-    }
-
-    fn drain_io_chunks(&mut self) {
-        if let Some(pipeline) = self.io_capture.as_ref() {
-            let chunks = pipeline.drain_chunks();
-            for chunk in chunks {
-                self.record_io_chunk(chunk);
-            }
-        }
-    }
-
-    fn record_io_chunk(&mut self, mut chunk: IoChunk) {
-        if chunk.path_id.is_none() {
-            if let Some(path) = chunk.path.as_deref() {
-                let path_id = TraceWriter::ensure_path_id(&mut self.writer, Path::new(path));
-                chunk.path_id = Some(path_id);
-            }
-        }
-
-        let kind = match chunk.stream {
-            IoStream::Stdout => EventLogKind::Write,
-            IoStream::Stderr => EventLogKind::WriteOther,
-            IoStream::Stdin => EventLogKind::Read,
-        };
-
-        let metadata = self.build_io_metadata(&chunk);
-        let content = String::from_utf8_lossy(&chunk.payload).into_owned();
-
-        TraceWriter::add_event(
-            &mut self.writer,
-            TraceLowLevelEvent::Event(RecordEvent {
-                kind,
-                metadata,
-                content,
-            }),
-        );
-        self.mark_event();
     }
 
     fn scope_resolution(
@@ -410,68 +340,6 @@ impl RuntimeTracer {
                 });
                 record_dropped_event("filter_resolution_error");
                 None
-            }
-        }
-    }
-
-    fn build_io_metadata(&self, chunk: &IoChunk) -> String {
-        #[derive(Serialize)]
-        struct IoEventMetadata<'a> {
-            stream: &'a str,
-            thread: String,
-            path_id: Option<usize>,
-            line: Option<i64>,
-            frame_id: Option<u64>,
-            flags: Vec<&'a str>,
-        }
-
-        let snapshot = self.line_snapshots.snapshot_for_thread(chunk.thread_id);
-        let path_id = chunk
-            .path_id
-            .map(|id| id.0)
-            .or_else(|| snapshot.as_ref().map(|snap| snap.path_id().0));
-        let line = chunk
-            .line
-            .map(|line| line.0)
-            .or_else(|| snapshot.as_ref().map(|snap| snap.line().0));
-        let frame_id = chunk
-            .frame_id
-            .or_else(|| snapshot.as_ref().map(|snap| snap.frame_id()));
-
-        let metadata = IoEventMetadata {
-            stream: match chunk.stream {
-                IoStream::Stdout => "stdout",
-                IoStream::Stderr => "stderr",
-                IoStream::Stdin => "stdin",
-            },
-            thread: format!("{:?}", chunk.thread_id),
-            path_id,
-            line,
-            frame_id: frame_id.map(|id| id.as_raw()),
-            flags: io_flag_labels(chunk.flags),
-        };
-
-        match serde_json::to_string(&metadata) {
-            Ok(json) => json,
-            Err(err) => {
-                let _mute = ScopedMuteIoCapture::new();
-                log::error!("failed to serialise IO metadata: {err}");
-                "{}".to_string()
-            }
-        }
-    }
-
-    fn teardown_io_capture(&mut self, py: Python<'_>) {
-        if let Some(mut pipeline) = self.io_capture.take() {
-            pipeline.flush_all();
-            let chunks = pipeline.drain_chunks();
-            for chunk in chunks {
-                self.record_io_chunk(chunk);
-            }
-            pipeline.uninstall(py);
-            let trailing = pipeline.drain_chunks();
-            for chunk in trailing {
-                self.record_io_chunk(chunk);
             }
         }
     }
@@ -796,8 +664,8 @@ impl Tracer for RuntimeTracer {
 
         if let Some((path_id, line)) = recorded_path {
             let frame_id = FrameId::from_raw(snapshot.frame_ptr() as usize as u64);
-            self.line_snapshots
-                .record(thread::current().id(), path_id, line, frame_id);
+            self.io
+                .record_snapshot(thread::current().id(), path_id, line, frame_id);
         }
 
         let mut recorded: HashSet<String> = HashSet::new();
@@ -913,7 +781,9 @@ impl Tracer for RuntimeTracer {
         let _reset = TraceIdResetGuard::new();
         let policy = policy_snapshot();
 
-        self.teardown_io_capture(py);
+        if self.io.teardown(py, &mut self.writer) {
+            self.mark_event();
+        }
 
         if self.encountered_failure {
             if policy.keep_partial_trace {
@@ -940,7 +810,7 @@ impl Tracer for RuntimeTracer {
             self.ignored_code_ids.clear();
             self.function_ids.clear();
             self.scope_cache.clear();
-            self.line_snapshots.clear();
+            self.io.clear_snapshots();
             self.filter_stats.reset();
             return Ok(());
         }
@@ -952,7 +822,7 @@ impl Tracer for RuntimeTracer {
         self.function_ids.clear();
         self.scope_cache.clear();
         self.filter_stats.reset();
-        self.line_snapshots.clear();
+        self.io.clear_snapshots();
         Ok(())
     }
 }

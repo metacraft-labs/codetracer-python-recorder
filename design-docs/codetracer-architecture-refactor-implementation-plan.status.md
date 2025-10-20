@@ -80,6 +80,7 @@
   - **Filter cache:** `scope_resolution`, `should_trace_code`, `FilterStats`, ignore tracking, and filter summary appenders.
   - **IO coordination:** `install_io_capture`, `flush_*`, `drain_io_chunks`, `record_io_chunk`, `build_io_metadata`, `teardown_io_capture`, and `io_flag_labels`.
 - ✅ Milestone 5 Step 1: moved `RuntimeTracer` and companion helpers into `runtime::tracer::runtime_tracer`, re-exported the type via `runtime::tracer` and `runtime`, and kept module scaffolding for upcoming collaborators. `just test` (Rust nextest + Python pytest) confirms the relocation preserves behaviour.
+- ✅ Milestone 5 Step 2: extracted IO coordination into `runtime::tracer::io::IoCoordinator`, delegating installation, flush/teardown, metadata enrichment, and snapshot tracking from `RuntimeTracer`. Updated callers to mark events on IO writes and re-ran `just test` to validate Rust and Python suites.
 
 
 ### Planned Extraction Order (Milestone 4)
@@ -110,6 +111,6 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Extract IO coordination into `runtime::tracer::io` and refresh tests to cover the delegate.
-2. Move filter caching and metadata writers into `runtime::tracer::filtering`, adapting call sites accordingly.
+1. Move filter caching and metadata writers into `runtime::tracer::filtering`, adapting call sites accordingly.
+2. Carve lifecycle management into `runtime::tracer::lifecycle` while preserving facade APIs.
 3. Track stakeholder feedback and spin out follow-up issues if new risks surface.
