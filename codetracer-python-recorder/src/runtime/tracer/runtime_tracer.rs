@@ -1,3 +1,4 @@
+use super::filtering::{FilterCoordinator, TraceDecision};
 use super::io::IoCoordinator;
 use crate::runtime::activation::ActivationController;
 use crate::runtime::frame_inspector::capture_frame;
@@ -5,7 +6,7 @@ use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use crate::runtime::logging::log_event;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::value_capture::{
-    capture_call_arguments, record_return_value, record_visible_scope, ValueFilterStats,
+    capture_call_arguments, record_return_value, record_visible_scope,
 };
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -28,13 +29,13 @@ use serde_json::json;
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
-use crate::logging::{record_dropped_event, set_active_trace_id, with_error_code};
+use crate::logging::{set_active_trace_id, with_error_code};
 use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 use crate::policy::{policy_snapshot, RecorderPolicy};
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
-use crate::trace_filter::engine::{ExecDecision, ScopeResolution, TraceFilterEngine, ValueKind};
+use crate::trace_filter::engine::TraceFilterEngine;
 
 use uuid::Uuid;
 
@@ -59,22 +60,13 @@ pub struct RuntimeTracer {
     format: TraceEventsFileFormat,
     activation: ActivationController,
     program_path: PathBuf,
-    ignored_code_ids: HashSet<usize>,
     function_ids: HashMap<usize, runtime_tracing::FunctionId>,
     output_paths: Option<TraceOutputPaths>,
     events_recorded: bool,
     encountered_failure: bool,
     trace_id: String,
     io: IoCoordinator,
-    trace_filter: Option<Arc<TraceFilterEngine>>,
-    scope_cache: HashMap<usize, Arc<ScopeResolution>>,
-    filter_stats: FilterStats,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ShouldTrace {
-    Trace,
-    SkipAndDisable,
+    filter: FilterCoordinator,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,47 +83,6 @@ impl FailureStage {
             FailureStage::Line => "line",
             FailureStage::Finish => "finish",
         }
-    }
-}
-
-#[derive(Debug, Default)]
-struct FilterStats {
-    skipped_scopes: u64,
-    values: ValueFilterStats,
-}
-
-impl FilterStats {
-    fn record_skip(&mut self) {
-        self.skipped_scopes += 1;
-    }
-
-    fn values_mut(&mut self) -> &mut ValueFilterStats {
-        &mut self.values
-    }
-
-    fn reset(&mut self) {
-        self.skipped_scopes = 0;
-        self.values = ValueFilterStats::default();
-    }
-
-    fn summary_json(&self) -> serde_json::Value {
-        let mut redactions = serde_json::Map::new();
-        let mut drops = serde_json::Map::new();
-        for kind in ValueKind::ALL {
-            redactions.insert(
-                kind.label().to_string(),
-                json!(self.values.redacted_count(kind)),
-            );
-            drops.insert(
-                kind.label().to_string(),
-                json!(self.values.dropped_count(kind)),
-            );
-        }
-        json!({
-            "scopes_skipped": self.skipped_scopes,
-            "value_redactions": serde_json::Value::Object(redactions),
-            "value_drops": serde_json::Value::Object(drops),
-        })
     }
 }
 
@@ -245,11 +196,6 @@ fn injected_failure_err(stage: FailureStage) -> PyErr {
     ffi::map_recorder_error(err)
 }
 
-fn is_real_filename(filename: &str) -> bool {
-    let trimmed = filename.trim();
-    !(trimmed.starts_with('<') && trimmed.ends_with('>'))
-}
-
 impl RuntimeTracer {
     pub fn new(
         program: &str,
@@ -267,16 +213,13 @@ impl RuntimeTracer {
             format,
             activation,
             program_path,
-            ignored_code_ids: HashSet::new(),
             function_ids: HashMap::new(),
             output_paths: None,
             events_recorded: false,
             encountered_failure: false,
             trace_id: Uuid::new_v4().to_string(),
             io: IoCoordinator::new(),
-            trace_filter,
-            scope_cache: HashMap::new(),
-            filter_stats: FilterStats::default(),
+            filter: FilterCoordinator::new(trace_filter),
         }
     }
 
@@ -303,44 +246,6 @@ impl RuntimeTracer {
     fn flush_pending_io(&mut self) {
         if self.io.flush_all(&mut self.writer) {
             self.mark_event();
-        }
-    }
-
-    fn scope_resolution(
-        &mut self,
-        py: Python<'_>,
-        code: &CodeObjectWrapper,
-    ) -> Option<Arc<ScopeResolution>> {
-        let engine = self.trace_filter.as_ref()?;
-        let code_id = code.id();
-
-        if let Some(existing) = self.scope_cache.get(&code_id) {
-            return Some(existing.clone());
-        }
-
-        match engine.resolve(py, code) {
-            Ok(resolution) => {
-                if resolution.exec() == ExecDecision::Trace {
-                    self.scope_cache.insert(code_id, Arc::clone(&resolution));
-                } else {
-                    self.scope_cache.remove(&code_id);
-                }
-                Some(resolution)
-            }
-            Err(err) => {
-                let message = err.to_string();
-                let error_code = err.code;
-                with_error_code(error_code, || {
-                    let _mute = ScopedMuteIoCapture::new();
-                    log::error!(
-                        "[RuntimeTracer] trace filter resolution failed for code id {}: {}",
-                        code_id,
-                        message
-                    );
-                });
-                record_dropped_event("filter_resolution_error");
-                None
-            }
         }
     }
 
@@ -420,7 +325,7 @@ impl RuntimeTracer {
         let Some(outputs) = &self.output_paths else {
             return Ok(());
         };
-        let Some(engine) = self.trace_filter.as_ref() else {
+        let Some(engine) = self.filter.engine() else {
             return Ok(());
         };
 
@@ -456,7 +361,7 @@ impl RuntimeTracer {
                 "trace_filter".to_string(),
                 json!({
                     "filters": filters_json,
-                    "stats": self.filter_stats.summary_json(),
+                    "stats": self.filter.summary_json(),
                 }),
             );
             let serialised = serde_json::to_string(&metadata).map_err(|err| {
@@ -500,48 +405,8 @@ impl RuntimeTracer {
         }
     }
 
-    fn should_trace_code(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> ShouldTrace {
-        let code_id = code.id();
-        if self.ignored_code_ids.contains(&code_id) {
-            return ShouldTrace::SkipAndDisable;
-        }
-
-        if let Some(resolution) = self.scope_resolution(py, code) {
-            match resolution.exec() {
-                ExecDecision::Skip => {
-                    self.scope_cache.remove(&code_id);
-                    self.filter_stats.record_skip();
-                    self.ignored_code_ids.insert(code_id);
-                    record_dropped_event("filter_scope_skip");
-                    return ShouldTrace::SkipAndDisable;
-                }
-                ExecDecision::Trace => {
-                    // already cached for future use
-                }
-            }
-        }
-
-        let filename = match code.filename(py) {
-            Ok(name) => name,
-            Err(err) => {
-                with_error_code(ErrorCode::Io, || {
-                    let _mute = ScopedMuteIoCapture::new();
-                    log::error!("failed to resolve code filename: {err}");
-                });
-                record_dropped_event("filename_lookup_failed");
-                self.scope_cache.remove(&code_id);
-                self.ignored_code_ids.insert(code_id);
-                return ShouldTrace::SkipAndDisable;
-            }
-        };
-        if is_real_filename(filename) {
-            ShouldTrace::Trace
-        } else {
-            self.scope_cache.remove(&code_id);
-            self.ignored_code_ids.insert(code_id);
-            record_dropped_event("synthetic_filename");
-            ShouldTrace::SkipAndDisable
-        }
+    fn should_trace_code(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> TraceDecision {
+        self.filter.decide(py, code)
     }
 }
 
@@ -560,7 +425,7 @@ impl Tracer for RuntimeTracer {
         let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
-            ShouldTrace::SkipAndDisable
+            TraceDecision::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
@@ -584,13 +449,13 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_py_start", None);
 
-        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let scope_resolution = self.filter.cached_resolution(code.id());
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
 
         if let Ok(fid) = self.ensure_function_id(py, code) {
             let mut telemetry_holder = if wants_telemetry {
-                Some(self.filter_stats.values_mut())
+                Some(self.filter.values_mut())
             } else {
                 None
             };
@@ -622,7 +487,7 @@ impl Tracer for RuntimeTracer {
         let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
-            ShouldTrace::SkipAndDisable
+            TraceDecision::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
@@ -645,7 +510,7 @@ impl Tracer for RuntimeTracer {
 
         self.flush_io_before_step(thread::current().id());
 
-        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let scope_resolution = self.filter.cached_resolution(code.id());
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
 
@@ -670,7 +535,7 @@ impl Tracer for RuntimeTracer {
 
         let mut recorded: HashSet<String> = HashSet::new();
         let mut telemetry_holder = if wants_telemetry {
-            Some(self.filter_stats.values_mut())
+            Some(self.filter.values_mut())
         } else {
             None
         };
@@ -697,7 +562,7 @@ impl Tracer for RuntimeTracer {
         let is_active = self.activation.should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
-            ShouldTrace::SkipAndDisable
+            TraceDecision::SkipAndDisable
         ) {
             return Ok(CallbackOutcome::DisableLocation);
         }
@@ -709,13 +574,13 @@ impl Tracer for RuntimeTracer {
 
         self.flush_pending_io();
 
-        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let scope_resolution = self.filter.cached_resolution(code.id());
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
         let object_name = scope_resolution.as_ref().and_then(|res| res.object_name());
 
         let mut telemetry_holder = if wants_telemetry {
-            Some(self.filter_stats.values_mut())
+            Some(self.filter.values_mut())
         } else {
             None
         };
@@ -763,8 +628,7 @@ impl Tracer for RuntimeTracer {
                 // Streaming writer: no partial flush to avoid closing the stream.
             }
         }
-        self.ignored_code_ids.clear();
-        self.scope_cache.clear();
+        self.filter.clear_caches();
         Ok(())
     }
 
@@ -807,21 +671,17 @@ impl Tracer for RuntimeTracer {
                 self.cleanup_partial_outputs()
                     .map_err(ffi::map_recorder_error)?;
             }
-            self.ignored_code_ids.clear();
             self.function_ids.clear();
-            self.scope_cache.clear();
             self.io.clear_snapshots();
-            self.filter_stats.reset();
+            self.filter.reset();
             return Ok(());
         }
 
         self.require_trace_or_fail(&policy)
             .map_err(ffi::map_recorder_error)?;
         self.finalise_writer().map_err(ffi::map_recorder_error)?;
-        self.ignored_code_ids.clear();
         self.function_ids.clear();
-        self.scope_cache.clear();
-        self.filter_stats.reset();
+        self.filter.reset();
         self.io.clear_snapshots();
         Ok(())
     }
@@ -832,6 +692,7 @@ mod tests {
     use super::*;
     use crate::monitoring::CallbackOutcome;
     use crate::policy;
+    use crate::runtime::tracer::filtering::is_real_filename;
     use crate::trace_filter::config::TraceFilterConfig;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
@@ -926,7 +787,7 @@ mod tests {
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
             assert_eq!(
                 tracer.should_trace_code(py, &wrapper),
-                ShouldTrace::SkipAndDisable
+                TraceDecision::SkipAndDisable
             );
         });
     }
