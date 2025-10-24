@@ -29,11 +29,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Prepare dev environment (Python 3.13)
-        run: nix develop --command bash -lc 'just venv 3.13 dev'
+        run: nix develop ./nix --command bash -lc 'just venv 3.13 dev'
       - name: Run test suite
-        run: nix develop --command bash -lc 'just test'
+        run: nix develop ./nix --command bash -lc 'just test'
       - name: Check recorder version parity
-        run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
+        run: nix develop ./nix --command bash -lc 'python3 scripts/check_recorder_version.py'
 
   build:
     name: Build Artefacts (${{ matrix.name }})
