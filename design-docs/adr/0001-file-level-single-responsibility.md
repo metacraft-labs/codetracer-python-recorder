@@ -9,7 +9,7 @@
 
 The codetracer Python recorder crate has evolved quickly and several source files now mix unrelated concerns:
 - [`src/lib.rs`](../../codetracer-python-recorder/src/lib.rs) hosts PyO3 module wiring, global logging setup, tracing session state, and filesystem validation in one place.
-- [`src/runtime_tracer.rs`](../../codetracer-python-recorder/src/runtime_tracer.rs) interleaves activation gating, writer lifecycle control, PyFrame helpers, and Python value encoding logic, making it challenging to test or extend any portion independently.
+- [`src/runtime/tracer/runtime_tracer.rs`](../../codetracer-python-recorder/src/runtime/tracer/runtime_tracer.rs) (formerly `src/runtime_tracer.rs`) interleaves activation gating, writer lifecycle control, PyFrame helpers, and Python value encoding logic, making it challenging to test or extend any portion independently.
 - [`src/tracer.rs`](../../codetracer-python-recorder/src/tracer.rs) combines sys.monitoring shim code with the `Tracer` trait, callback registration, and global caches.
 - [`codetracer_python_recorder/api.py`](../../codetracer-python-recorder/codetracer_python_recorder/api.py) mixes format constants, backend interaction, context manager ergonomics, and environment based auto-start side effects.
 
@@ -43,7 +43,7 @@ These changes are mechanical reorganisations—no behavioural changes are expect
 2. **Preserve APIs.** When moving functions, re-export them from their new module so that existing callers (Rust and Python) compile without modification in the same PR.
 3. **Add Focused Tests.** Whenever a helper is extracted (e.g., value encoding), add or migrate unit tests that cover its edge cases.
 4. **Document Moves.** Update doc comments and module-level docs to reflect the new structure. Remove outdated TODOs or convert them into follow-up issues.
-5. **Coordinate on Shared Types.** When splitting `runtime_tracer.rs`, agree on ownership for shared structs (e.g., `RuntimeTracer` remains in `runtime/mod.rs`). Use `pub(crate)` to keep internals encapsulated.
+5. **Coordinate on Shared Types.** When evolving the `runtime::tracer` modules, agree on ownership for shared structs (e.g., `RuntimeTracer` remains re-exported from `runtime/mod.rs`). Use `pub(crate)` to keep internals encapsulated.
 6. **Python Imports.** After splitting the Python modules, ensure `__all__` in `__init__.py` continues to export the public API. Use relative imports to avoid accidental circular dependencies.
 7. **Parallel Work.** Follow the sequencing from `design-docs/file-level-srp-refactor-plan.md` to know when tasks can proceed in parallel.
 

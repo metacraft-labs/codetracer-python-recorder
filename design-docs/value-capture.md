@@ -336,7 +336,7 @@ result = builtins_test([5, 3, 7])
 # General Rules
 
 * This spec is for `/codetracer-python-recorder` project and NOT for `/codetracer-pure-python-recorder`
-* Code and tests should be added to `/codetracer-python-recorder/src/runtime_tracer.rs`
+* Code and tests should be added under `/codetracer-python-recorder/src/runtime/tracer/` (primarily `runtime_tracer.rs` and its collaborators)
 * Performance is important. Avoid using Python modules and functions and prefer PyO3 methods including the FFI API.
 * If you want to run Python do it like so `uv run python` This will set up the right venv. Similarly for running tests `uv run pytest`.
 * After every code change you need to run `just dev` to make sure that you are testing the new code. Otherwise some tests might run against the old code

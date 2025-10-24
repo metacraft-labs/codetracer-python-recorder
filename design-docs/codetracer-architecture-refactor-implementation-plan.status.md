@@ -84,6 +84,7 @@
 - ✅ Milestone 5 Step 3: introduced `runtime::tracer::filtering::FilterCoordinator` to own scope resolution, skip caching, telemetry stats, and metadata wiring. `RuntimeTracer` now delegates trace decisions and summary emission, while tests continue to validate skip behaviour and metadata shape with unchanged expectations.
 - ✅ Milestone 5 Step 4: carved lifecycle orchestration into `runtime::tracer::lifecycle::LifecycleController`, covering activation gating, writer initialisation/finalisation, policy enforcement, failure cleanup, and trace id scoping. Added focused unit tests for the controller and re-ran `just test` (nextest + pytest) to verify no behavioural drift.
 - ✅ Milestone 5 Step 5: shifted event handling into `runtime::tracer::events`, relocating the `Tracer` trait implementation alongside failure-injection helpers and telemetry wiring. `RuntimeTracer` now exposes a slim collaborator API (`mark_event`, `flush_io_before_step`, `ensure_function_id`), while tests import the trait explicitly. `just test` (nextest + pytest) confirms the callbacks behave identically after the split.
+- ✅ Milestone 5 Step 6: harmonised the tracer module facade by tightening `IoCoordinator` visibility, pruning unused re-exports, documenting the `runtime::tracer` layout, and updating design docs that referenced the legacy `runtime_tracer.rs` path. `just test` (Rust nextest + Python pytest) verified the cleanup.
 
 
 ### Planned Extraction Order (Milestone 4)
@@ -114,5 +115,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Kick off Milestone 5 Step 6 by harmonising the new tracer submodules (facade re-exports, docs, dead code sweep) ahead of integration cleanup.
+1. Scope the Milestone 6 integration/cleanup tasks (CI configs, packaging metadata, doc updates) now that the runtime tracer refactor is complete.
 2. Track stakeholder feedback and spin out follow-up issues if new risks surface.

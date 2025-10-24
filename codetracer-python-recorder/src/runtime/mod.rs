@@ -1,4 +1,7 @@
-//! Runtime tracer facade translating sys.monitoring callbacks into `runtime_tracing` records.
+//! Runtime tracing facade wiring sys.monitoring callbacks into dedicated collaborators.
+//!
+//! The [`tracer`] module hosts lifecycle, IO, filtering, and event pipelines and re-exports
+//! [`RuntimeTracer`] so callers can keep importing it from `crate::runtime`.
 
 mod activation;
 mod frame_inspector;
@@ -10,7 +13,5 @@ pub mod tracer;
 mod value_capture;
 mod value_encoder;
 
-#[allow(unused_imports)]
-pub use line_snapshots::{FrameId, LineSnapshotStore};
 pub use output_paths::TraceOutputPaths;
 pub use tracer::RuntimeTracer;

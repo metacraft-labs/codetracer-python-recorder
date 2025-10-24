@@ -15,14 +15,14 @@ use std::sync::Arc;
 use std::thread::ThreadId;
 
 /// Coordinates installation, flushing, and teardown of the IO capture pipeline.
-pub struct IoCoordinator {
+pub(crate) struct IoCoordinator {
     snapshots: Arc<LineSnapshotStore>,
     pipeline: Option<IoCapturePipeline>,
 }
 
 impl IoCoordinator {
     /// Create a coordinator with a fresh snapshot store and no active pipeline.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             snapshots: Arc::new(LineSnapshotStore::new()),
             pipeline: None,
@@ -30,18 +30,22 @@ impl IoCoordinator {
     }
 
     /// Expose the shared snapshot store for collaborators (tests, IO capture).
-    pub fn snapshot_store(&self) -> Arc<LineSnapshotStore> {
+    pub(crate) fn snapshot_store(&self) -> Arc<LineSnapshotStore> {
         Arc::clone(&self.snapshots)
     }
 
     /// Install the IO capture pipeline using the provided settings.
-    pub fn install(&mut self, py: Python<'_>, settings: IoCaptureSettings) -> PyResult<()> {
+    pub(crate) fn install(
+        &mut self,
+        py: Python<'_>,
+        settings: IoCaptureSettings,
+    ) -> PyResult<()> {
         self.pipeline = IoCapturePipeline::install(py, Arc::clone(&self.snapshots), settings)?;
         Ok(())
     }
 
     /// Flush buffered output for the active thread before emitting a step event.
-    pub fn flush_before_step(
+    pub(crate) fn flush_before_step(
         &self,
         thread_id: ThreadId,
         writer: &mut NonStreamingTraceWriter,
@@ -55,7 +59,7 @@ impl IoCoordinator {
     }
 
     /// Flush every buffered chunk regardless of thread affinity.
-    pub fn flush_all(&self, writer: &mut NonStreamingTraceWriter) -> bool {
+    pub(crate) fn flush_all(&self, writer: &mut NonStreamingTraceWriter) -> bool {
         let Some(pipeline) = self.pipeline.as_ref() else {
             return false;
         };
@@ -65,7 +69,11 @@ impl IoCoordinator {
     }
 
     /// Drain remaining chunks and uninstall the capture pipeline.
-    pub fn teardown(&mut self, py: Python<'_>, writer: &mut NonStreamingTraceWriter) -> bool {
+    pub(crate) fn teardown(
+        &mut self,
+        py: Python<'_>,
+        writer: &mut NonStreamingTraceWriter,
+    ) -> bool {
         let Some(mut pipeline) = self.pipeline.take() else {
             return false;
         };
@@ -87,12 +95,12 @@ impl IoCoordinator {
     }
 
     /// Clear the snapshot cache once tracing concludes.
-    pub fn clear_snapshots(&self) {
+    pub(crate) fn clear_snapshots(&self) {
         self.snapshots.clear();
     }
 
     /// Record the latest frame snapshot for the active thread.
-    pub fn record_snapshot(
+    pub(crate) fn record_snapshot(
         &self,
         thread_id: ThreadId,
         path_id: PathId,
@@ -192,7 +200,7 @@ impl IoCoordinator {
 }
 
 /// Translate chunk flags into telemetry labels.
-pub fn flag_labels(flags: IoChunkFlags) -> Vec<&'static str> {
+fn flag_labels(flags: IoChunkFlags) -> Vec<&'static str> {
     let mut labels = Vec::new();
     if flags.contains(IoChunkFlags::NEWLINE_TERMINATED) {
         labels.push("newline");
