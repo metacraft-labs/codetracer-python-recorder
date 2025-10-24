@@ -199,7 +199,7 @@ def test_trace_filter_perf_smoke(tmp_path: Path) -> None:
         assert glob.duration_seconds > 0
         assert regex.duration_seconds > 0
 
-        assert baseline.filter_names == ["bench-baseline"]
+        assert baseline.filter_names == ["builtin-default", "bench-baseline"]
         assert "bench-glob" in glob.filter_names
         assert "bench-regex" in regex.filter_names
 

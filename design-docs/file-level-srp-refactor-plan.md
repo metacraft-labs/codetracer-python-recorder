@@ -7,7 +7,7 @@
 
 ## Current State Observations
 - `src/lib.rs` is responsible for PyO3 module registration, lifecycle management for tracing sessions, global logging initialisation, and runtime format selection, which mixes unrelated concerns in one file.
-- `src/runtime_tracer.rs` couples trace lifecycle control, activation toggling, and Python value encoding in a single module, making it difficult to unit test or substitute individual pieces.
+- `src/runtime/tracer/runtime_tracer.rs` (previously the monolithic `runtime_tracer.rs`) couples trace lifecycle control, activation toggling, and Python value encoding in a single module, making it difficult to unit test or substitute individual pieces.
 - `src/tracer.rs` combines the `Tracer` trait definition, sys.monitoring shims, callback registration utilities, and thread-safe storage, meaning small changes can ripple through unrelated logic.
 - `codetracer_python_recorder/api.py` interleaves environment based auto-start, context-manager ergonomics, backend state management, and format constants, leaving no clearly isolated entry-point for CLI or library callers.
 
