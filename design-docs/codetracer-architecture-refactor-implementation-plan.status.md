@@ -87,6 +87,7 @@
 - ✅ Milestone 5 Step 6: harmonised the tracer module facade by tightening `IoCoordinator` visibility, pruning unused re-exports, documenting the `runtime::tracer` layout, and updating design docs that referenced the legacy `runtime_tracer.rs` path. `just test` (Rust nextest + Python pytest) verified the cleanup.
 - 🔄 Milestone 6 Kickoff: audited crate exports to keep the new module tree internal by default (runtime tracer collaborators + monitoring submodules now `pub(crate)`), and confirmed packaging metadata/docs already reference the updated paths so no additional adjustments are required yet. Pending follow-up: sweep for dead imports and finalise documentation/CI updates before ADR 0011 sign-off.
 - ✅ Milestone 6 Step 1: realigned the Python trace filter benchmark to account for the always-prepended `builtin-default` filter when validating metadata, restoring the smoke test with `just test` (nextest + pytest) coverage.
+- ✅ Milestone 6 Step 2: finished the integration cleanup—tightened monitoring callback logging to use the new table metadata, confirmed no stale doc references or build script changes were required, and re-ran `just test` (nextest + pytest) as the final verification before ADR 0011 acceptance.
 
 
 ### Planned Extraction Order (Milestone 4)
@@ -117,5 +118,5 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
-1. Scope the Milestone 6 integration/cleanup tasks (CI configs, packaging metadata, doc updates) now that the runtime tracer refactor is complete.
-2. Track stakeholder feedback and spin out follow-up issues if new risks surface.
+1. Communicate completion to stakeholders and monitor for regression reports during adoption.
+2. Archive supporting notes and update any external runbooks that referenced the pre-refactor layout.

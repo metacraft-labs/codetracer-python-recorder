@@ -7,7 +7,7 @@ use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use crate::ffi;
 use crate::logging;
 use crate::policy::{self, OnRecorderError};
-use log::{error, warn};
+use log::{error, trace, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyCode, PyModule};
 use pyo3::wrap_pyfunction;
@@ -486,7 +486,6 @@ type CallbackFactory = for<'py> fn(&Bound<'py, PyModule>) -> PyResult<CallbackFn
 /// Metadata describing how to register a sys.monitoring callback.
 pub struct CallbackSpec {
     /// Debug label (mirrors the PyO3 function name).
-    #[allow(dead_code)]
     pub name: &'static str,
     event: fn(&MonitoringEvents) -> EventId,
     factory: CallbackFactory,
@@ -598,6 +597,11 @@ pub fn register_enabled_callbacks<'py>(
 ) -> PyResult<()> {
     for spec in enabled_specs(mask, events) {
         let event = spec.event(events);
+        trace!(
+            "[monitoring] registering callback `{}` for event id {}",
+            spec.name,
+            event.0
+        );
         let cb = spec.make(module)?;
         register_callback(py, tool, &event, Some(&cb))?;
     }
@@ -613,6 +617,11 @@ pub fn unregister_enabled_callbacks(
 ) -> PyResult<()> {
     for spec in enabled_specs(mask, events) {
         let event = spec.event(events);
+        trace!(
+            "[monitoring] unregistering callback `{}` for event id {}",
+            spec.name,
+            event.0
+        );
         register_callback(py, tool, &event, None)?;
     }
     Ok(())
