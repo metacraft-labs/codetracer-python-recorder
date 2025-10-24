@@ -16,7 +16,7 @@ use recorder_errors::ErrorCode;
 use super::api::Tracer;
 use super::{register_callback, EventId, EventSet, MonitoringEvents, ToolId};
 
-pub use super::{events_union, CallbackFn, CallbackOutcome, CallbackResult};
+pub use super::{CallbackFn, CallbackOutcome, CallbackResult};
 
 /// Global tracer state shared between callback invocations and installer.
 pub(super) struct Global {
@@ -486,6 +486,7 @@ type CallbackFactory = for<'py> fn(&Bound<'py, PyModule>) -> PyResult<CallbackFn
 /// Metadata describing how to register a sys.monitoring callback.
 pub struct CallbackSpec {
     /// Debug label (mirrors the PyO3 function name).
+    #[allow(dead_code)]
     pub name: &'static str,
     event: fn(&MonitoringEvents) -> EventId,
     factory: CallbackFactory,

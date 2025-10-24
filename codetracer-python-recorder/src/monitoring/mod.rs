@@ -4,9 +4,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 use std::sync::OnceLock;
 
-pub mod api;
-pub mod callbacks;
-pub mod install;
+pub(crate) mod api;
+pub(crate) mod callbacks;
+pub(crate) mod install;
 pub mod tracer;
 
 pub use api::Tracer;
