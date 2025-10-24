@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "codetracer-python-recorder"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Rust-backed Python module for CodeTracer recording (PyO3)"
