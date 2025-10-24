@@ -86,6 +86,7 @@
 - ✅ Milestone 5 Step 5: shifted event handling into `runtime::tracer::events`, relocating the `Tracer` trait implementation alongside failure-injection helpers and telemetry wiring. `RuntimeTracer` now exposes a slim collaborator API (`mark_event`, `flush_io_before_step`, `ensure_function_id`), while tests import the trait explicitly. `just test` (nextest + pytest) confirms the callbacks behave identically after the split.
 - ✅ Milestone 5 Step 6: harmonised the tracer module facade by tightening `IoCoordinator` visibility, pruning unused re-exports, documenting the `runtime::tracer` layout, and updating design docs that referenced the legacy `runtime_tracer.rs` path. `just test` (Rust nextest + Python pytest) verified the cleanup.
 - 🔄 Milestone 6 Kickoff: audited crate exports to keep the new module tree internal by default (runtime tracer collaborators + monitoring submodules now `pub(crate)`), and confirmed packaging metadata/docs already reference the updated paths so no additional adjustments are required yet. Pending follow-up: sweep for dead imports and finalise documentation/CI updates before ADR 0011 sign-off.
+- ✅ Milestone 6 Step 1: realigned the Python trace filter benchmark to account for the always-prepended `builtin-default` filter when validating metadata, restoring the smoke test with `just test` (nextest + pytest) coverage.
 
 
 ### Planned Extraction Order (Milestone 4)
