@@ -98,9 +98,14 @@ def test_trace_context_manager_starts_and_stops(monkeypatch: pytest.MonkeyPatch,
 
     trace_state = {"active": False}
 
-    def fake_start(path: str, fmt: str, activation: str | None) -> None:
+    def fake_start(
+        path: str,
+        fmt: str,
+        activation: str | None,
+        filters: list[str] | None,
+    ) -> None:
         trace_state["active"] = True
-        calls["start"].append((Path(path), fmt, activation))
+        calls["start"].append((Path(path), fmt, activation, filters))
 
     def fake_stop() -> None:
         trace_state["active"] = False
@@ -118,5 +123,35 @@ def test_trace_context_manager_starts_and_stops(monkeypatch: pytest.MonkeyPatch,
         assert handle.path == target.expanduser()
         assert handle.format == "binary"
 
-    assert calls["start"] == [(target, "binary", None)]
+    assert calls["start"] == [(target, "binary", None, None)]
     assert calls["stop"] == [True]
+
+
+def test_normalize_trace_filter_handles_none() -> None:
+    assert session._normalize_trace_filter(None) is None
+
+
+def test_normalize_trace_filter_expands_sequence(tmp_path: Path) -> None:
+    filters_dir = tmp_path / "filters"
+    filters_dir.mkdir()
+    default = filters_dir / "default.toml"
+    default.write_text("# default\n", encoding="utf-8")
+    overrides = filters_dir / "overrides.toml"
+    overrides.write_text("# overrides\n", encoding="utf-8")
+
+    result = session._normalize_trace_filter(
+        [default, f"{overrides}::{default}", overrides]
+    )
+
+    assert result == [
+        str(default.resolve()),
+        str(overrides.resolve()),
+        str(default.resolve()),
+        str(overrides.resolve()),
+    ]
+
+
+def test_normalize_trace_filter_rejects_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "filters" / "absent.toml"
+    with pytest.raises(FileNotFoundError):
+        session._normalize_trace_filter(str(missing))

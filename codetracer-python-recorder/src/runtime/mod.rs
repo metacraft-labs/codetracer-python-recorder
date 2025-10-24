@@ -15,7 +15,9 @@ pub use output_paths::TraceOutputPaths;
 use activation::ActivationController;
 use frame_inspector::capture_frame;
 use logging::log_event;
-use value_capture::{capture_call_arguments, record_return_value, record_visible_scope};
+use value_capture::{
+    capture_call_arguments, record_return_value, record_visible_scope, ValueFilterStats,
+};
 
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fs;
@@ -46,8 +48,9 @@ use crate::policy::{policy_snapshot, RecorderPolicy};
 use crate::runtime::io_capture::{
     IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
 };
+use crate::trace_filter::engine::{ExecDecision, ScopeResolution, TraceFilterEngine, ValueKind};
 use serde::Serialize;
-use serde_json;
+use serde_json::{self, json};
 
 use uuid::Uuid;
 
@@ -103,6 +106,9 @@ pub struct RuntimeTracer {
     trace_id: String,
     line_snapshots: Arc<LineSnapshotStore>,
     io_capture: Option<IoCapturePipeline>,
+    trace_filter: Option<Arc<TraceFilterEngine>>,
+    scope_cache: HashMap<usize, Arc<ScopeResolution>>,
+    filter_stats: FilterStats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +131,47 @@ impl FailureStage {
             FailureStage::Line => "line",
             FailureStage::Finish => "finish",
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct FilterStats {
+    skipped_scopes: u64,
+    values: ValueFilterStats,
+}
+
+impl FilterStats {
+    fn record_skip(&mut self) {
+        self.skipped_scopes += 1;
+    }
+
+    fn values_mut(&mut self) -> &mut ValueFilterStats {
+        &mut self.values
+    }
+
+    fn reset(&mut self) {
+        self.skipped_scopes = 0;
+        self.values = ValueFilterStats::default();
+    }
+
+    fn summary_json(&self) -> serde_json::Value {
+        let mut redactions = serde_json::Map::new();
+        let mut drops = serde_json::Map::new();
+        for kind in ValueKind::ALL {
+            redactions.insert(
+                kind.label().to_string(),
+                json!(self.values.redacted_count(kind)),
+            );
+            drops.insert(
+                kind.label().to_string(),
+                json!(self.values.dropped_count(kind)),
+            );
+        }
+        json!({
+            "scopes_skipped": self.skipped_scopes,
+            "value_redactions": serde_json::Value::Object(redactions),
+            "value_drops": serde_json::Value::Object(drops),
+        })
     }
 }
 
@@ -249,6 +296,7 @@ impl RuntimeTracer {
         args: &[String],
         format: TraceEventsFileFormat,
         activation_path: Option<&Path>,
+        trace_filter: Option<Arc<TraceFilterEngine>>,
     ) -> Self {
         let mut writer = NonStreamingTraceWriter::new(program, args);
         writer.set_format(format);
@@ -267,6 +315,9 @@ impl RuntimeTracer {
             trace_id: Uuid::new_v4().to_string(),
             line_snapshots: Arc::new(LineSnapshotStore::new()),
             io_capture: None,
+            trace_filter,
+            scope_cache: HashMap::new(),
+            filter_stats: FilterStats::default(),
         }
     }
 
@@ -335,6 +386,44 @@ impl RuntimeTracer {
             }),
         );
         self.mark_event();
+    }
+
+    fn scope_resolution(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+    ) -> Option<Arc<ScopeResolution>> {
+        let engine = self.trace_filter.as_ref()?;
+        let code_id = code.id();
+
+        if let Some(existing) = self.scope_cache.get(&code_id) {
+            return Some(existing.clone());
+        }
+
+        match engine.resolve(py, code) {
+            Ok(resolution) => {
+                if resolution.exec() == ExecDecision::Trace {
+                    self.scope_cache.insert(code_id, Arc::clone(&resolution));
+                } else {
+                    self.scope_cache.remove(&code_id);
+                }
+                Some(resolution)
+            }
+            Err(err) => {
+                let message = err.to_string();
+                let error_code = err.code;
+                with_error_code(error_code, || {
+                    let _mute = ScopedMuteIoCapture::new();
+                    log::error!(
+                        "[RuntimeTracer] trace filter resolution failed for code id {}: {}",
+                        code_id,
+                        message
+                    );
+                });
+                record_dropped_event("filter_resolution_error");
+                None
+            }
+        }
     }
 
     fn build_io_metadata(&self, chunk: &IoChunk) -> String {
@@ -459,6 +548,7 @@ impl RuntimeTracer {
             enverr!(ErrorCode::Io, "failed to finalise trace metadata")
                 .with_context("source", err.to_string())
         })?;
+        self.append_filter_metadata()?;
         TraceWriter::finish_writing_trace_paths(&mut self.writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace paths")
                 .with_context("source", err.to_string())
@@ -468,6 +558,68 @@ impl RuntimeTracer {
                 .with_context("source", err.to_string())
         })?;
         Ok(())
+    }
+
+    fn append_filter_metadata(&self) -> RecorderResult<()> {
+        let Some(outputs) = &self.output_paths else {
+            return Ok(());
+        };
+        let Some(engine) = self.trace_filter.as_ref() else {
+            return Ok(());
+        };
+
+        let path = outputs.metadata();
+        let original = fs::read_to_string(path).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to read trace metadata")
+                .with_context("path", path.display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+
+        let mut metadata: serde_json::Value = serde_json::from_str(&original).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to parse trace metadata JSON")
+                .with_context("path", path.display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+
+        let filters = engine.summary();
+        let filters_json: Vec<serde_json::Value> = filters
+            .entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "path": entry.path.to_string_lossy(),
+                    "sha256": entry.sha256,
+                    "name": entry.name,
+                    "version": entry.version,
+                })
+            })
+            .collect();
+
+        if let serde_json::Value::Object(ref mut obj) = metadata {
+            obj.insert(
+                "trace_filter".to_string(),
+                json!({
+                    "filters": filters_json,
+                    "stats": self.filter_stats.summary_json(),
+                }),
+            );
+            let serialised = serde_json::to_string(&metadata).map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to serialise trace metadata")
+                    .with_context("path", path.display().to_string())
+                    .with_context("source", err.to_string())
+            })?;
+            fs::write(path, serialised).map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to write trace metadata")
+                    .with_context("path", path.display().to_string())
+                    .with_context("source", err.to_string())
+            })?;
+            Ok(())
+        } else {
+            Err(
+                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
+                    .with_context("path", path.display().to_string()),
+            )
+        }
     }
 
     fn ensure_function_id(
@@ -497,6 +649,22 @@ impl RuntimeTracer {
         if self.ignored_code_ids.contains(&code_id) {
             return ShouldTrace::SkipAndDisable;
         }
+
+        if let Some(resolution) = self.scope_resolution(py, code) {
+            match resolution.exec() {
+                ExecDecision::Skip => {
+                    self.scope_cache.remove(&code_id);
+                    self.filter_stats.record_skip();
+                    self.ignored_code_ids.insert(code_id);
+                    record_dropped_event("filter_scope_skip");
+                    return ShouldTrace::SkipAndDisable;
+                }
+                ExecDecision::Trace => {
+                    // already cached for future use
+                }
+            }
+        }
+
         let filename = match code.filename(py) {
             Ok(name) => name,
             Err(err) => {
@@ -505,6 +673,7 @@ impl RuntimeTracer {
                     log::error!("failed to resolve code filename: {err}");
                 });
                 record_dropped_event("filename_lookup_failed");
+                self.scope_cache.remove(&code_id);
                 self.ignored_code_ids.insert(code_id);
                 return ShouldTrace::SkipAndDisable;
             }
@@ -512,6 +681,7 @@ impl RuntimeTracer {
         if is_real_filename(filename) {
             ShouldTrace::Trace
         } else {
+            self.scope_cache.remove(&code_id);
             self.ignored_code_ids.insert(code_id);
             record_dropped_event("synthetic_filename");
             ShouldTrace::SkipAndDisable
@@ -558,8 +728,18 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_py_start", None);
 
+        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
+        let wants_telemetry = value_policy.is_some();
+
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            match capture_call_arguments(py, &mut self.writer, code) {
+            let mut telemetry_holder = if wants_telemetry {
+                Some(self.filter_stats.values_mut())
+            } else {
+                None
+            };
+            let telemetry = telemetry_holder.as_deref_mut();
+            match capture_call_arguments(py, &mut self.writer, code, value_policy, telemetry) {
                 Ok(args) => TraceWriter::register_call(&mut self.writer, fid, args),
                 Err(err) => {
                     let details = err.to_string();
@@ -609,6 +789,10 @@ impl Tracer for RuntimeTracer {
 
         self.flush_io_before_step(thread::current().id());
 
+        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
+        let wants_telemetry = value_policy.is_some();
+
         let line_value = Line(lineno as i64);
         let mut recorded_path: Option<(PathId, Line)> = None;
 
@@ -629,7 +813,20 @@ impl Tracer for RuntimeTracer {
         }
 
         let mut recorded: HashSet<String> = HashSet::new();
-        record_visible_scope(py, &mut self.writer, &snapshot, &mut recorded);
+        let mut telemetry_holder = if wants_telemetry {
+            Some(self.filter_stats.values_mut())
+        } else {
+            None
+        };
+        let telemetry = telemetry_holder.as_deref_mut();
+        record_visible_scope(
+            py,
+            &mut self.writer,
+            &snapshot,
+            &mut recorded,
+            value_policy,
+            telemetry,
+        );
 
         Ok(CallbackOutcome::Continue)
     }
@@ -656,7 +853,26 @@ impl Tracer for RuntimeTracer {
 
         self.flush_pending_io();
 
-        record_return_value(py, &mut self.writer, retval);
+        let scope_resolution = self.scope_cache.get(&code.id()).cloned();
+        let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
+        let wants_telemetry = value_policy.is_some();
+        let object_name = scope_resolution.as_ref().and_then(|res| res.object_name());
+
+        let mut telemetry_holder = if wants_telemetry {
+            Some(self.filter_stats.values_mut())
+        } else {
+            None
+        };
+        let telemetry = telemetry_holder.as_deref_mut();
+
+        record_return_value(
+            py,
+            &mut self.writer,
+            retval,
+            value_policy,
+            telemetry,
+            object_name,
+        );
         self.mark_event();
         if self.activation.handle_return_event(code.id()) {
             let _mute = ScopedMuteIoCapture::new();
@@ -692,6 +908,7 @@ impl Tracer for RuntimeTracer {
             }
         }
         self.ignored_code_ids.clear();
+        self.scope_cache.clear();
         Ok(())
     }
 
@@ -734,7 +951,9 @@ impl Tracer for RuntimeTracer {
             }
             self.ignored_code_ids.clear();
             self.function_ids.clear();
+            self.scope_cache.clear();
             self.line_snapshots.clear();
+            self.filter_stats.reset();
             return Ok(());
         }
 
@@ -743,6 +962,8 @@ impl Tracer for RuntimeTracer {
         self.finalise_writer().map_err(ffi::map_recorder_error)?;
         self.ignored_code_ids.clear();
         self.function_ids.clear();
+        self.scope_cache.clear();
+        self.filter_stats.reset();
         self.line_snapshots.clear();
         Ok(())
     }
@@ -753,6 +974,7 @@ mod tests {
     use super::*;
     use crate::monitoring::CallbackOutcome;
     use crate::policy;
+    use crate::trace_filter::config::TraceFilterConfig;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
     use runtime_tracing::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
@@ -760,6 +982,9 @@ mod tests {
     use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::ffi::CString;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Arc;
     use std::thread;
 
     thread_local! {
@@ -814,7 +1039,8 @@ mod tests {
     #[test]
     fn skips_synthetic_filename_events() {
         Python::with_gil(|py| {
-            let mut tracer = RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None);
+            let mut tracer =
+                RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None, None);
             ensure_test_module(py);
             let script = format!("{PRELUDE}\nsnapshot()\n");
             {
@@ -901,6 +1127,7 @@ result = compute()\n"
                 &[],
                 TraceEventsFileFormat::Json,
                 Some(script_path.as_path()),
+                None,
             );
 
             {
@@ -946,8 +1173,13 @@ result = compute()\n"
             let script = format!("{PRELUDE}\n\nsnapshot()\n");
             std::fs::write(&script_path, &script).expect("write script");
 
-            let mut tracer =
-                RuntimeTracer::new("snapshot_script.py", &[], TraceEventsFileFormat::Json, None);
+            let mut tracer = RuntimeTracer::new(
+                "snapshot_script.py",
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
             let store = tracer.line_snapshot_store();
 
             {
@@ -1020,6 +1252,7 @@ result = compute()\n"
                 script_path.to_string_lossy().as_ref(),
                 &[],
                 TraceEventsFileFormat::Json,
+                None,
                 None,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
@@ -1111,6 +1344,7 @@ result = compute()\n"
                 script_path.to_string_lossy().as_ref(),
                 &[],
                 TraceEventsFileFormat::Json,
+                None,
                 None,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
@@ -1216,6 +1450,7 @@ result = compute()\n"
                 script_path.to_string_lossy().as_ref(),
                 &[],
                 TraceEventsFileFormat::Json,
+                None,
                 None,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
@@ -1438,7 +1673,8 @@ def emit_return(value):
 
     fn run_traced_script(body: &str) -> Vec<Snapshot> {
         Python::with_gil(|py| {
-            let mut tracer = RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None);
+            let mut tracer =
+                RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None, None);
             ensure_test_module(py);
             let tmp = tempfile::tempdir().expect("create temp dir");
             let script_path = tmp.path().join("script.py");
@@ -1457,6 +1693,353 @@ def emit_return(value):
             }
             collect_snapshots(&tracer.writer.events)
         })
+    }
+
+    fn write_filter(path: &Path, contents: &str) {
+        fs::write(path, contents.trim_start()).expect("write filter");
+    }
+
+    #[test]
+    fn trace_filter_redacts_values() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let filters_dir = project_root.join(".codetracer");
+            fs::create_dir(&filters_dir).expect("create .codetracer");
+            let filter_path = filters_dir.join("filters.toml");
+            write_filter(
+                &filter_path,
+                r#"
+                [meta]
+                name = "redact"
+                version = 1
+
+                [scope]
+                default_exec = "trace"
+                default_value_action = "allow"
+
+                [[scope.rules]]
+                selector = "pkg:app.sec"
+                exec = "trace"
+                value_default = "allow"
+
+                [[scope.rules.value_patterns]]
+                selector = "arg:password"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:password"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:secret"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "global:shared_secret"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "ret:literal:app.sec.sensitive"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:internal"
+                action = "drop"
+                "#,
+            );
+            let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
+            let engine = Arc::new(TraceFilterEngine::new(config));
+
+            let app_dir = project_root.join("app");
+            fs::create_dir_all(&app_dir).expect("create app dir");
+            let script_path = app_dir.join("sec.py");
+            let body = r#"
+shared_secret = "initial"
+
+def sensitive(password):
+    secret = "token"
+    internal = "hidden"
+    public = "visible"
+    globals()['shared_secret'] = password
+    snapshot()
+    emit_return(password)
+    return password
+
+sensitive("s3cr3t")
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, script).expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                Some(engine),
+            );
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute filtered script");
+            }
+
+            let mut variable_names: Vec<String> = Vec::new();
+            for event in &tracer.writer.events {
+                if let TraceLowLevelEvent::VariableName(name) = event {
+                    variable_names.push(name.clone());
+                }
+            }
+            assert!(
+                !variable_names.iter().any(|name| name == "internal"),
+                "internal variable should not be recorded"
+            );
+
+            let password_index = variable_names
+                .iter()
+                .position(|name| name == "password")
+                .expect("password variable recorded");
+            let password_value = tracer
+                .writer
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    TraceLowLevelEvent::Value(record) if record.variable_id.0 == password_index => {
+                        Some(record.value.clone())
+                    }
+                    _ => None,
+                })
+                .expect("password value recorded");
+            match password_value {
+                ValueRecord::Error { ref msg, .. } => assert_eq!(msg, "<redacted>"),
+                ref other => panic!("expected password argument redacted, got {other:?}"),
+            }
+
+            let snapshots = collect_snapshots(&tracer.writer.events);
+            let snapshot = find_snapshot_with_vars(
+                &snapshots,
+                &["secret", "public", "shared_secret", "password"],
+            );
+            assert_var(
+                snapshot,
+                "secret",
+                SimpleValue::Raw("<redacted>".to_string()),
+            );
+            assert_var(
+                snapshot,
+                "public",
+                SimpleValue::String("visible".to_string()),
+            );
+            assert_var(
+                snapshot,
+                "shared_secret",
+                SimpleValue::Raw("<redacted>".to_string()),
+            );
+            assert_var(
+                snapshot,
+                "password",
+                SimpleValue::Raw("<redacted>".to_string()),
+            );
+            assert_no_variable(&snapshots, "internal");
+
+            let return_record = tracer
+                .writer
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    TraceLowLevelEvent::Return(record) => Some(record.clone()),
+                    _ => None,
+                })
+                .expect("return record");
+
+            match return_record.return_value {
+                ValueRecord::Error { ref msg, .. } => assert_eq!(msg, "<redacted>"),
+                ref other => panic!("expected redacted return value, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn trace_filter_metadata_includes_summary() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let filters_dir = project_root.join(".codetracer");
+            fs::create_dir(&filters_dir).expect("create .codetracer");
+            let filter_path = filters_dir.join("filters.toml");
+            write_filter(
+                &filter_path,
+                r#"
+                [meta]
+                name = "redact"
+                version = 1
+
+                [scope]
+                default_exec = "trace"
+                default_value_action = "allow"
+
+                [[scope.rules]]
+                selector = "pkg:app.sec"
+                exec = "trace"
+                value_default = "allow"
+
+                [[scope.rules.value_patterns]]
+                selector = "arg:password"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:password"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:secret"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "global:shared_secret"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "ret:literal:app.sec.sensitive"
+                action = "redact"
+
+                [[scope.rules.value_patterns]]
+                selector = "local:internal"
+                action = "drop"
+                "#,
+            );
+            let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
+            let engine = Arc::new(TraceFilterEngine::new(config));
+
+            let app_dir = project_root.join("app");
+            fs::create_dir_all(&app_dir).expect("create app dir");
+            let script_path = app_dir.join("sec.py");
+            let body = r#"
+shared_secret = "initial"
+
+def sensitive(password):
+    secret = "token"
+    internal = "hidden"
+    public = "visible"
+    globals()['shared_secret'] = password
+    snapshot()
+    emit_return(password)
+    return password
+
+sensitive("s3cr3t")
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, script).expect("write script");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+
+            let program = script_path.to_string_lossy().into_owned();
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                Some(engine),
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+
+            tracer.finish(py).expect("finish tracer");
+
+            let metadata_str = fs::read_to_string(outputs.metadata()).expect("read metadata");
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_str).expect("parse metadata");
+            let trace_filter = metadata
+                .get("trace_filter")
+                .and_then(|value| value.as_object())
+                .expect("trace_filter metadata");
+
+            let filters = trace_filter
+                .get("filters")
+                .and_then(|value| value.as_array())
+                .expect("filters array");
+            assert_eq!(filters.len(), 1);
+            let filter_entry = filters[0].as_object().expect("filter entry");
+            assert_eq!(
+                filter_entry.get("name").and_then(|v| v.as_str()),
+                Some("redact")
+            );
+
+            let stats = trace_filter
+                .get("stats")
+                .and_then(|value| value.as_object())
+                .expect("stats object");
+            assert_eq!(
+                stats.get("scopes_skipped").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            let value_redactions = stats
+                .get("value_redactions")
+                .and_then(|value| value.as_object())
+                .expect("value_redactions object");
+            assert_eq!(
+                value_redactions.get("argument").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            // Argument values currently surface through local snapshots; once call-record redaction wiring lands this count should rise above zero.
+            assert_eq!(
+                value_redactions.get("local").and_then(|v| v.as_u64()),
+                Some(2)
+            );
+            assert_eq!(
+                value_redactions.get("global").and_then(|v| v.as_u64()),
+                Some(1)
+            );
+            assert_eq!(
+                value_redactions.get("return").and_then(|v| v.as_u64()),
+                Some(1)
+            );
+            assert_eq!(
+                value_redactions.get("attribute").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            let value_drops = stats
+                .get("value_drops")
+                .and_then(|value| value.as_object())
+                .expect("value_drops object");
+            assert_eq!(
+                value_drops.get("argument").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+            assert_eq!(value_drops.get("local").and_then(|v| v.as_u64()), Some(1));
+            assert_eq!(value_drops.get("global").and_then(|v| v.as_u64()), Some(0));
+            assert_eq!(value_drops.get("return").and_then(|v| v.as_u64()), Some(0));
+            assert_eq!(
+                value_drops.get("attribute").and_then(|v| v.as_u64()),
+                Some(0)
+            );
+        });
     }
 
     fn assert_var(snapshot: &Snapshot, name: &str, expected: SimpleValue) {
@@ -1925,6 +2508,7 @@ snapshot()
                 &[],
                 TraceEventsFileFormat::Json,
                 None,
+                None,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
 
@@ -1957,6 +2541,7 @@ snapshot()
                 program_path.to_string_lossy().as_ref(),
                 &[],
                 TraceEventsFileFormat::Json,
+                None,
                 None,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
@@ -1999,6 +2584,7 @@ snapshot()
                 program_path.to_string_lossy().as_ref(),
                 &[],
                 TraceEventsFileFormat::Json,
+                None,
                 None,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
