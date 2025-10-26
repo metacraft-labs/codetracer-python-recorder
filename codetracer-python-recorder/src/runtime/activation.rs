@@ -103,10 +103,7 @@ impl ActivationController {
     }
 
     fn resume_if_needed(&mut self, code: &CodeObjectWrapper) {
-        if self.started
-            && self.suspended
-            && self.activation_code_id == Some(code.id())
-        {
+        if self.started && self.suspended && self.activation_code_id == Some(code.id()) {
             self.suspended = false;
         }
     }

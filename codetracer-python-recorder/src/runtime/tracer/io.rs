@@ -35,11 +35,7 @@ impl IoCoordinator {
     }
 
     /// Install the IO capture pipeline using the provided settings.
-    pub(crate) fn install(
-        &mut self,
-        py: Python<'_>,
-        settings: IoCaptureSettings,
-    ) -> PyResult<()> {
+    pub(crate) fn install(&mut self, py: Python<'_>, settings: IoCaptureSettings) -> PyResult<()> {
         self.pipeline = IoCapturePipeline::install(py, Arc::clone(&self.snapshots), settings)?;
         Ok(())
     }

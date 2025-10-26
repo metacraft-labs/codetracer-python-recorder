@@ -226,8 +226,11 @@ impl Tracer for RuntimeTracer {
                     log::error!("on_py_start: failed to capture args: {details}");
                 });
                 return Err(ffi::map_recorder_error(
-                    enverr!(ErrorCode::FrameIntrospectionFailed, "failed to capture call arguments")
-                        .with_context("details", details),
+                    enverr!(
+                        ErrorCode::FrameIntrospectionFailed,
+                        "failed to capture call arguments"
+                    )
+                    .with_context("details", details),
                 ));
             }
         }
@@ -582,9 +585,7 @@ impl RuntimeTracer {
         };
         let telemetry = telemetry_holder.as_deref_mut();
 
-        let candidate_name = capture_label
-            .map(|label| label as &str)
-            .or(object_name);
+        let candidate_name = capture_label.map(|label| label as &str).or(object_name);
 
         record_return_value(
             py,
@@ -597,11 +598,7 @@ impl RuntimeTracer {
         self.mark_event();
 
         if let Some(kind) = exit_kind {
-            if self
-                .lifecycle
-                .activation_mut()
-                .handle_exit(code.id(), kind)
-            {
+            if self.lifecycle.activation_mut().handle_exit(code.id(), kind) {
                 let _mute = ScopedMuteIoCapture::new();
                 log::debug!("[RuntimeTracer] deactivated on activation return");
             }

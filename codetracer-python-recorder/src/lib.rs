@@ -8,6 +8,7 @@ pub mod code_object;
 mod errors;
 mod ffi;
 mod logging;
+mod module_identity;
 pub mod monitoring;
 mod policy;
 mod runtime;
