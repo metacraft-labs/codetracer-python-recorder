@@ -4,9 +4,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 use std::sync::OnceLock;
 
-mod tracer;
+pub(crate) mod api;
+pub(crate) mod callbacks;
+pub(crate) mod install;
+pub mod tracer;
 
-pub use tracer::{flush_installed_tracer, install_tracer, uninstall_tracer, Tracer};
+pub use api::Tracer;
+pub use install::{flush_installed_tracer, install_tracer, uninstall_tracer};
 
 const MONITORING_TOOL_NAME: &str = "codetracer";
 
