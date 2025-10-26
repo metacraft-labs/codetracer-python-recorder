@@ -5,6 +5,8 @@ All notable changes to `codetracer-python-recorder` will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- Balanced call-stack handling for generators, coroutines, and unwinding frames by subscribing to `PY_YIELD`, `PY_UNWIND`, `PY_RESUME`, and `PY_THROW`, mapping resume/throw events to `TraceWriter::register_call`, yield/unwind to `register_return`, and capturing `PY_THROW` arguments as `exception` using the existing value encoder. Added Python + Rust integration tests that drive `.send()`/`.throw()` on coroutines and generators to guarantee the trace stays balanced and that exception payloads are recorded.
 
 ## [0.2.0] - 2025-10-17
 ### Added
