@@ -508,6 +508,7 @@ impl Tracer for RuntimeTracer {
                     .map_err(ffi::map_recorder_error)?;
             }
             self.function_ids.clear();
+            self.module_names.clear();
             self.io.clear_snapshots();
             self.filter.reset();
             self.lifecycle.reset_event_state();
@@ -521,6 +522,7 @@ impl Tracer for RuntimeTracer {
             .finalise(&mut self.writer, &self.filter)
             .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
+        self.module_names.clear();
         self.filter.reset();
         self.io.clear_snapshots();
         self.lifecycle.reset_event_state();

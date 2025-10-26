@@ -4,6 +4,7 @@ use super::io::IoCoordinator;
 use super::lifecycle::LifecycleController;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
+use crate::module_identity::{ModuleIdentityCache, ModuleNameHints};
 use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::runtime::line_snapshots::LineSnapshotStore;
@@ -12,7 +13,7 @@ use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::ThreadId;
@@ -26,6 +27,7 @@ pub struct RuntimeTracer {
     pub(super) function_ids: HashMap<usize, runtime_tracing::FunctionId>,
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
+    pub(super) module_names: ModuleIdentityCache,
 }
 
 impl RuntimeTracer {
@@ -46,6 +48,7 @@ impl RuntimeTracer {
             function_ids: HashMap::new(),
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
+            module_names: ModuleIdentityCache::new(),
         }
     }
 
@@ -101,21 +104,20 @@ impl RuntimeTracer {
         py: Python<'_>,
         code: &CodeObjectWrapper,
     ) -> PyResult<runtime_tracing::FunctionId> {
-        match self.function_ids.entry(code.id()) {
-            Entry::Occupied(entry) => Ok(*entry.get()),
-            Entry::Vacant(slot) => {
-                let name = code.qualname(py)?;
-                let filename = code.filename(py)?;
-                let first_line = code.first_line(py)?;
-                let function_id = TraceWriter::ensure_function_id(
-                    &mut self.writer,
-                    name,
-                    Path::new(filename),
-                    Line(first_line as i64),
-                );
-                Ok(*slot.insert(function_id))
-            }
+        if let Some(fid) = self.function_ids.get(&code.id()) {
+            return Ok(*fid);
         }
+        let name = self.function_name(py, code)?;
+        let filename = code.filename(py)?;
+        let first_line = code.first_line(py)?;
+        let function_id = TraceWriter::ensure_function_id(
+            &mut self.writer,
+            name.as_str(),
+            Path::new(filename),
+            Line(first_line as i64),
+        );
+        self.function_ids.insert(code.id(), function_id);
+        Ok(function_id)
     }
 
     pub(super) fn should_trace_code(
@@ -124,6 +126,34 @@ impl RuntimeTracer {
         code: &CodeObjectWrapper,
     ) -> TraceDecision {
         self.filter.decide(py, code)
+    }
+
+    fn function_name(&self, py: Python<'_>, code: &CodeObjectWrapper) -> PyResult<String> {
+        let qualname = code.qualname(py)?;
+        if qualname == "<module>" {
+            Ok(self
+                .derive_module_name(py, code)
+                .map(|module| format!("<{module}>"))
+                .unwrap_or_else(|| qualname.to_string()))
+        } else {
+            Ok(qualname.to_string())
+        }
+    }
+
+    fn derive_module_name(&self, py: Python<'_>, code: &CodeObjectWrapper) -> Option<String> {
+        let resolution = self.filter.cached_resolution(code.id());
+        if let Some(resolution) = resolution.as_ref() {
+            let hints = ModuleNameHints {
+                preferred: resolution.module_name(),
+                relative_path: resolution.relative_path(),
+                absolute_path: resolution.absolute_path(),
+                globals_name: None,
+            };
+            self.module_names.resolve_for_code(py, code, hints)
+        } else {
+            self.module_names
+                .resolve_for_code(py, code, ModuleNameHints::default())
+        }
     }
 }
 
@@ -1036,6 +1066,58 @@ sensitive("s3cr3t")
                 ValueRecord::Error { ref msg, .. } => assert_eq!(msg, "<redacted>"),
                 ref other => panic!("expected redacted return value, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn module_import_records_module_name() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+
+            let mut tracer =
+                RuntimeTracer::new("runner.py", &[], TraceEventsFileFormat::Json, None, None);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let pkg_root = project.path().join("lib");
+            let pkg_dir = pkg_root.join("my_pkg");
+            fs::create_dir_all(&pkg_dir).expect("create package dir");
+            fs::write(pkg_dir.join("__init__.py"), "\n").expect("write __init__");
+            fs::write(
+                pkg_dir.join("mod.py"),
+                "value = 1\nprint('imported module value', value)\n",
+            )
+            .expect("write module file");
+
+            let script = format!(
+                "import sys\nsys.path.insert(0, r\"{root}\")\nimport my_pkg.mod\n",
+                root = pkg_root.display()
+            );
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let script_c = CString::new(script).expect("script contains nul byte");
+                py.run(script_c.as_c_str(), None, None)
+                    .expect("execute module import");
+            }
+
+            let function_records: Vec<String> = tracer
+                .writer
+                .events
+                .iter()
+                .filter_map(|event| {
+                    if let TraceLowLevelEvent::Function(record) = event {
+                        Some(record.name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            assert!(
+                function_records.iter().any(|name| name == "<my_pkg.mod>"),
+                "expected module function name to be rewritten: {function_records:?}"
+            );
         });
     }
 

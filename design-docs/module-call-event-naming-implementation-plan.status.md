@@ -18,13 +18,13 @@
 
 ### WS1 – Shared Module Identity Helper
 - **Scope recap:** Extract and centralise module-name derivation (relative path stripping + `sys.modules` lookup) so both filters and the runtime tracer can reuse it with caching.
-- **Status:** _In Progress_
-- **Notes:** Created `src/module_identity.rs` housing `ModuleIdentityResolver`, a per-code `ModuleIdentityCache`, sanitisation helpers, and unit tests (covering `.py`/`.pyc`, package roots, and hint precedence). `TraceFilterEngine` now consumes the resolver instead of bespoke logic, and shared helpers (`module_from_relative`, `normalise_to_posix`, etc.) moved into the new module. `just dev` + `just test` succeed after the changeset; the cache will be hooked into `RuntimeTracer` during WS2.
+- **Status:** _Completed_
+- **Notes:** `src/module_identity.rs` now owns `ModuleIdentityResolver`, `ModuleIdentityCache`, sanitisation helpers, and unit tests covering `.py` vs `.pyc`, package roots, and hint precedence. `TraceFilterEngine` uses the shared resolver for all module lookups, keeping behaviour aligned between filtering and runtime components.
 
 ### WS2 – Runtime Tracer Integration
 - **Scope recap:** Detect module-level code (`co_qualname == "<module>"`) and rename call events to `<module-name>` using the shared resolver; plumb filter-derived names to avoid duplicate work.
-- **Status:** _Not Started_
-- **Notes:** Will require updates to `RuntimeTracer::ensure_function_id`, cache management, and potentially `capture_call_arguments` to surface `globals["__name__"]` when needed.
+- **Status:** _In Progress_
+- **Notes:** `RuntimeTracer` now owns a `ModuleIdentityCache`, rewrites module-level function names via shared hints, clears the cache between runs, and has a regression test (`module_import_records_module_name`) confirming `<my_pkg.mod>` call records. Remaining work: thread globals-based hints (if needed) and add higher-level integration tests / documentation (see WS3).
 
 ### WS3 – Testing, Tooling, and Docs
 - **Scope recap:** Add regression tests (Python + Rust) validating the new naming, update documentation/changelog, and refresh any snapshot expectations.
