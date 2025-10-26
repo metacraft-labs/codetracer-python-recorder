@@ -137,6 +137,7 @@ pub struct FilterSummaryEntry {
 pub struct TraceFilterConfig {
     pub(crate) default_exec: ExecDirective,
     pub(crate) default_value_action: ValueAction,
+    pub(crate) default_value_source: usize,
     pub(crate) io: IoConfig,
     pub(crate) rules: Vec<ScopeRule>,
     pub(crate) sources: Vec<FilterSource>,
@@ -151,6 +152,11 @@ impl TraceFilterConfig {
     /// Default value action applied before rule-specific overrides.
     pub fn default_value_action(&self) -> ValueAction {
         self.default_value_action
+    }
+
+    /// Source index of the definition that last set the default value action.
+    pub fn default_value_source(&self) -> usize {
+        self.default_value_source
     }
 
     /// IO capture configuration associated with the composed filter chain.

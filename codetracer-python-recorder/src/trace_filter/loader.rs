@@ -17,6 +17,7 @@ use std::path::{Component, Path, PathBuf};
 pub struct ConfigAggregator {
     default_exec: Option<ExecDirective>,
     default_value_action: Option<ValueAction>,
+    default_value_source: Option<usize>,
     io: Option<IoConfig>,
     rules: Vec<ScopeRule>,
     sources: Vec<FilterSource>,
@@ -57,12 +58,19 @@ impl ConfigAggregator {
                 "composed filters never set 'scope.default_value_action'"
             )
         })?;
+        let default_value_source = self.default_value_source.ok_or_else(|| {
+            usage!(
+                ErrorCode::InvalidPolicyValue,
+                "failed to record source for 'scope.default_value_action'"
+            )
+        })?;
 
         let io = self.io.unwrap_or_default();
 
         Ok(TraceFilterConfig {
             default_exec,
             default_value_action,
+            default_value_source,
             io,
             rules: self.rules,
             sources: self.sources,
@@ -100,6 +108,7 @@ impl ConfigAggregator {
         }
         if let Some(value_action) = defaults.value_action {
             self.default_value_action = Some(value_action);
+            self.default_value_source = Some(source_index);
         }
 
         if let Some(io) = parse_io(raw.io.as_ref(), path)? {
