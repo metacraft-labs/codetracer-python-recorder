@@ -28,8 +28,8 @@
 
 ### WS3 – Testing, Tooling, and Docs
 - **Scope recap:** Add regression tests (Python + Rust) validating the new naming, update documentation/changelog, and refresh any snapshot expectations.
-- **Status:** _In Progress_
-- **Notes:** New Rust + Python tests cover module-name derivation; README now documents the `<pkg.module>` behaviour. Remaining work: update changelog/other docs if required once feature is finalized.
+- **Status:** _Completed_
+- **Notes:** Added a Rust unit test plus an integration test in `tests/python/test_monitoring_events.py`, documented the behaviour in the README, and recorded the change in `CHANGELOG.md`. Snapshot consumers now rely on the `<pkg.module>` naming convention.
 
 ## Next Checkpoints
 1. Implement shared resolver scaffolding (WS1).

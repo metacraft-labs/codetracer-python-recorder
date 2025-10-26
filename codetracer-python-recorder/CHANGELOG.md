@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 - Balanced call-stack handling for generators, coroutines, and unwinding frames by subscribing to `PY_YIELD`, `PY_UNWIND`, `PY_RESUME`, and `PY_THROW`, mapping resume/throw events to `TraceWriter::register_call`, yield/unwind to `register_return`, and capturing `PY_THROW` arguments as `exception` using the existing value encoder. Added Python + Rust integration tests that drive `.send()`/`.throw()` on coroutines and generators to guarantee the trace stays balanced and that exception payloads are recorded.
 
+### Changed
+- Module-level call events now use the actual dotted module name (e.g., `<my_pkg.mod>` or `<boto3.session>`) instead of the generic `<module>` label. `RuntimeTracer` derives the name via the shared module-identity helper, caches the result per code object, and falls back to `<module>` only for synthetic or nameless frames. Added Rust + Python tests plus README documentation covering the new semantics.
+
 ## [0.2.0] - 2025-10-17
 ### Added
 - Added configurable trace filters backed by layered TOML files with glob/regex/literal selectors for packages, files, objects, and value domains, strict schema validation via `TraceFilterConfig::from_paths`, and explicit `allow`/`redact`/`drop` value policies summarised with SHA-256 digests.
