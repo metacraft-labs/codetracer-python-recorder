@@ -24,7 +24,11 @@
   - Verification: `just test codetracer-python-recorder --all-targets` (passes).
 
 ### WS2 – Call/Return Edge Helpers
-- **Status:** Not started (awaiting WS1 completion).
+- **Status:** _Completed_
+  - Added `RuntimeTracer::register_call_record` and `handle_return_edge` helpers so `PY_START`, `PY_RESUME`, `PY_THROW`, `PY_RETURN`, `PY_YIELD`, and `PY_UNWIND` share the same activation gating, filter, telemetry, and writer plumbing.
+  - `PY_RESUME` now emits call edges with empty argument vectors, `PY_THROW` records an `exception` argument encoded via the existing value encoder, and `PY_YIELD`/`PY_UNWIND` reuse the return helper (no disable sentinel for unwind).
+  - Python monitoring tests gained generator/yield/throw coverage to assert balanced trace output.
+  - Verification: `just dev test` (maturin develop + cargo nextest + pytest) passes.
 
 ### WS3 – Activation & Lifecycle Behaviour
 - **Status:** Not started.
@@ -33,6 +37,6 @@
 - **Status:** Not started.
 
 ## Next Checkpoints
-1. Modify `RuntimeTracer::interest` and related tests to assert the expanded mask.
-2. Update `design-docs/design-001.md` to document the event-to-writer mapping.
-3. Capture verification notes (e.g., `just test codetracer-python-recorder --all-targets`) once WS1 lands.
+1. Begin WS3 by teaching `ActivationController` about suspension/resume semantics.
+2. Plan and implement lifecycle tests ensuring activation gating stays consistent across yields/unwinds.
+3. Evaluate whether additional telemetry/logging is needed before landing WS3/WS4.

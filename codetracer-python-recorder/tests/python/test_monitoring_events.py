@@ -278,3 +278,118 @@ def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
     key_rec, val_rec = kv[0], kv[1]
     assert key_rec.get("kind") == "String" and key_rec.get("text") == "k", f"Unexpected kwargs key encoding: {key_rec}"
     assert val_rec.get("kind") == "Int" and int(val_rec.get("i")) == 60, f"Unexpected kwargs value encoding: {val_rec}"
+
+
+def test_generator_yield_resume_events_are_balanced(tmp_path: Path) -> None:
+    code = (
+        "def ticker():\n"
+        "    yield 'tick-one'\n"
+        "    yield 'tick-two'\n"
+        "    return 'tick-complete'\n\n"
+        "if __name__ == '__main__':\n"
+        "    g = ticker()\n"
+        "    try:\n"
+        "        next(g)\n"
+        "        next(g)\n"
+        "        next(g)\n"
+        "    except StopIteration:\n"
+        "        pass\n"
+    )
+    script = tmp_path / "script_generator.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+
+    ticker_fids = [
+        i
+        for i, f in enumerate(parsed.functions)
+        if f["name"] == "ticker" and f["path_id"] == script_path_id
+    ]
+    assert ticker_fids, "Expected ticker() to be registered"
+    ticker_fid = ticker_fids[0]
+
+    ticker_calls = [
+        call for call in parsed.call_records if int(call["function_id"]) == ticker_fid
+    ]
+    assert (
+        len(ticker_calls) == 3
+    ), f"Expected three call edges for ticker(), saw {len(ticker_calls)}"
+
+    string_returns = [
+        rv_value.get("text")
+        for rv in parsed.returns
+        if (rv_value := rv.get("return_value")) and rv_value.get("kind") == "String"
+    ]
+    seq = [value for value in string_returns if value in {"tick-one", "tick-two", "tick-complete"}]
+    assert seq == ["tick-one", "tick-two", "tick-complete"], f"Unexpected return order: {seq}"
+
+
+def test_generator_throw_records_exception_argument(tmp_path: Path) -> None:
+    code = (
+        "def worker():\n"
+        "    try:\n"
+        "        yield 'ready'\n"
+        "    except RuntimeError as err:\n"
+        "        return f'caught {err}'\n\n"
+        "if __name__ == '__main__':\n"
+        "    g = worker()\n"
+        "    next(g)\n"
+        "    try:\n"
+        "        g.throw(RuntimeError('boom'))\n"
+        "    except StopIteration:\n"
+        "        pass\n"
+    )
+    script = tmp_path / "script_throw.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+
+    worker_fids = [
+        i
+        for i, f in enumerate(parsed.functions)
+        if f["name"] == "worker" and f["path_id"] == script_path_id
+    ]
+    assert worker_fids, "Expected worker() to be registered"
+    worker_fid = worker_fids[0]
+
+    worker_calls = [
+        call for call in parsed.call_records if int(call["function_id"]) == worker_fid
+    ]
+    assert len(worker_calls) >= 2, "Expected multiple call records for worker()"
+
+    def arg_name(arg: Dict[str, Any]) -> str:
+        return parsed.varnames[int(arg["variable_id"])]
+
+    exception_calls = [
+        call
+        for call in worker_calls
+        if any(arg_name(arg) == "exception" for arg in call.get("args", []))
+    ]
+    assert exception_calls, "Expected PY_THROW to register an 'exception' argument"
+
+    assert any(
+        (rv_value := rv.get("return_value"))
+        and rv_value.get("kind") == "String"
+        and rv_value.get("text") == "caught boom"
+        for rv in parsed.returns
+    ), "Expected final return value for worker() to capture caught exception message"
