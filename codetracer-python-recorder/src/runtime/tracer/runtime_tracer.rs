@@ -158,6 +158,13 @@ impl RuntimeTracer {
 }
 
 #[cfg(test)]
+impl RuntimeTracer {
+    fn function_name_for_test(&self, py: Python<'_>, code: &CodeObjectWrapper) -> PyResult<String> {
+        self.function_name(py, code)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::monitoring::{CallbackOutcome, Tracer};
@@ -1072,52 +1079,42 @@ sensitive("s3cr3t")
     #[test]
     fn module_import_records_module_name() {
         Python::with_gil(|py| {
-            ensure_test_module(py);
-
-            let mut tracer =
-                RuntimeTracer::new("runner.py", &[], TraceEventsFileFormat::Json, None, None);
-
             let project = tempfile::tempdir().expect("project dir");
             let pkg_root = project.path().join("lib");
             let pkg_dir = pkg_root.join("my_pkg");
             fs::create_dir_all(&pkg_dir).expect("create package dir");
-            fs::write(pkg_dir.join("__init__.py"), "\n").expect("write __init__");
-            fs::write(
-                pkg_dir.join("mod.py"),
-                "value = 1\nprint('imported module value', value)\n",
-            )
-            .expect("write module file");
+            let module_path = pkg_dir.join("mod.py");
+            fs::write(&module_path, "value = 1\n").expect("write module file");
 
-            let script = format!(
-                "import sys\nsys.path.insert(0, r\"{root}\")\nimport my_pkg.mod\n",
-                root = pkg_root.display()
-            );
+            let sys = py.import("sys").expect("import sys");
+            let sys_path = sys.getattr("path").expect("sys.path");
+            sys_path
+                .call_method1("insert", (0, pkg_root.to_string_lossy().as_ref()))
+                .expect("insert temp root");
 
-            {
-                let _guard = ScopedTracer::new(&mut tracer);
-                LAST_OUTCOME.with(|cell| cell.set(None));
-                let script_c = CString::new(script).expect("script contains nul byte");
-                py.run(script_c.as_c_str(), None, None)
-                    .expect("execute module import");
-            }
+            let tracer =
+                RuntimeTracer::new("runner.py", &[], TraceEventsFileFormat::Json, None, None);
 
-            let function_records: Vec<String> = tracer
-                .writer
-                .events
-                .iter()
-                .filter_map(|event| {
-                    if let TraceLowLevelEvent::Function(record) = event {
-                        Some(record.name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let builtins = py.import("builtins").expect("builtins");
+            let compile = builtins.getattr("compile").expect("compile builtin");
+            let code_obj: Bound<'_, PyCode> = compile
+                .call1((
+                    "value = 1\n",
+                    module_path.to_string_lossy().as_ref(),
+                    "exec",
+                ))
+                .expect("compile module code")
+                .downcast_into()
+                .expect("PyCode");
 
-            assert!(
-                function_records.iter().any(|name| name == "<my_pkg.mod>"),
-                "expected module function name to be rewritten: {function_records:?}"
-            );
+            let wrapper = CodeObjectWrapper::new(py, &code_obj);
+            let resolved = tracer
+                .function_name_for_test(py, &wrapper)
+                .expect("derive function name");
+
+            assert_eq!(resolved, "<my_pkg.mod>");
+
+            sys_path.call_method1("pop", (0,)).expect("pop temp root");
         });
     }
 

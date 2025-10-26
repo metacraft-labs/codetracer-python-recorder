@@ -23,13 +23,13 @@
 
 ### WS2 – Runtime Tracer Integration
 - **Scope recap:** Detect module-level code (`co_qualname == "<module>"`) and rename call events to `<module-name>` using the shared resolver; plumb filter-derived names to avoid duplicate work.
-- **Status:** _In Progress_
-- **Notes:** `RuntimeTracer` now owns a `ModuleIdentityCache`, rewrites module-level function names via shared hints, clears the cache between runs, and has a regression test (`module_import_records_module_name`) confirming `<my_pkg.mod>` call records. Remaining work: thread globals-based hints (if needed) and add higher-level integration tests / documentation (see WS3).
+- **Status:** _Completed_
+- **Notes:** `RuntimeTracer` now rewrites module-level call events via `ModuleIdentityCache`, clears the cache alongside `function_ids`, and exposes a test hook to verify naming logic. Added a unit test (`module_import_records_module_name`) and a Python integration test (`test_module_imports_record_package_names`) that traces a real import to confirm `<pkg.mod>` shows up in `trace.json`.
 
 ### WS3 – Testing, Tooling, and Docs
 - **Scope recap:** Add regression tests (Python + Rust) validating the new naming, update documentation/changelog, and refresh any snapshot expectations.
-- **Status:** _Not Started_
-- **Notes:** Tests will likely live in `tests/python/test_monitoring_events.py` and a dedicated Rust module; docs update TBD.
+- **Status:** _In Progress_
+- **Notes:** New Rust + Python tests cover module-name derivation; README now documents the `<pkg.module>` behaviour. Remaining work: update changelog/other docs if required once feature is finalized.
 
 ## Next Checkpoints
 1. Implement shared resolver scaffolding (WS1).

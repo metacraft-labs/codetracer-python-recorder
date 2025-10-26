@@ -82,6 +82,12 @@ selector = "arg:literal:debug_payload"
 action = "drop"
 ```
 
+## Trace naming semantics
+
+- Module-level activations no longer appear as the ambiguous `<module>` label. When the recorder sees `co_qualname == "<module>"`, it derives the actual dotted package name (e.g., `<my_pkg.mod>` or `<boto3.session>`) using project roots, `sys.modules`, and frame metadata.
+- The angle-bracket convention remains for module entries so downstream tooling can distinguish top-level activations at a glance.
+- Traces will still emit `<module>` for synthetic filenames (`<stdin>`, `<string>`), frozen/importlib bootstrap frames, or exotic loaders that omit filenames entirely. This preserves previous behaviour when no reliable name exists.
+
 ## Packaging expectations
 
 Desktop installers add the wheel to `PYTHONPATH` before invoking the user’s

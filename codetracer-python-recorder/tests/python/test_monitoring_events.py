@@ -196,6 +196,32 @@ def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
     assert v1.get("text") == "x"
 
 
+def test_module_imports_record_package_names(tmp_path: Path) -> None:
+    pkg_root = tmp_path / "lib"
+    pkg_dir = pkg_root / "my_pkg"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+    (pkg_dir / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    runner = tmp_path / "runner.py"
+    runner.write_text(
+        f"import sys\nsys.path.insert(0, r\"{pkg_root}\")\nimport my_pkg.mod\n",
+        encoding="utf-8",
+    )
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=runner)
+    try:
+        runpy.run_path(str(runner), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    names = [f["name"] for f in parsed.functions]
+    assert any(name == "<my_pkg.mod>" for name in names), f"missing module name in {names}"
+
+
 def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
     # Arrange: write a script with a function using all Python argument kinds
     code = (
