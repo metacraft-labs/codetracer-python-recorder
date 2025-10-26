@@ -31,12 +31,16 @@
   - Verification: `just dev test` (maturin develop + cargo nextest + pytest) passes.
 
 ### WS3 – Activation & Lifecycle Behaviour
-- **Status:** Not started.
+- **Status:** _Completed_
+  - `ActivationController` now tracks a suspended state and exposes `handle_exit(code_id, ActivationExitKind)`, so `PY_YIELD` transitions into suspension without disabling the activation while `PY_RETURN`/`PY_UNWIND` mark completion.
+  - Resume events clear suspension via `should_process_event`, ensuring activation gating stays engaged until the generator/coroutine finishes.
+  - Added Rust unit tests covering the suspension/resume flow, and the runtime now routes return-edge handling through the new enum to keep lifecycle state consistent.
+  - Verification: `just dev test` passes end-to-end.
 
 ### WS4 – Testing & Validation
 - **Status:** Not started.
 
 ## Next Checkpoints
-1. Begin WS3 by teaching `ActivationController` about suspension/resume semantics.
-2. Plan and implement lifecycle tests ensuring activation gating stays consistent across yields/unwinds.
-3. Evaluate whether additional telemetry/logging is needed before landing WS3/WS4.
+1. Expand WS4 coverage per plan (async awaits, throw/resume, unwind) and update rust/python integration tests accordingly.
+2. Add rust-side assertions (e.g., `print_tracer`) to validate the expanded event mask.
+3. Document any telemetry updates or metadata changes before shipping the feature.

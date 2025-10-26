@@ -9,6 +9,7 @@ use crate::monitoring::{
     events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
 };
 use crate::policy::policy_snapshot;
+use crate::runtime::activation::ActivationExitKind;
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
@@ -338,7 +339,15 @@ impl Tracer for RuntimeTracer {
         _offset: i32,
         retval: &Bound<'_, PyAny>,
     ) -> CallbackResult {
-        self.handle_return_edge(py, code, "on_py_return", retval, None, true, true)
+        self.handle_return_edge(
+            py,
+            code,
+            "on_py_return",
+            retval,
+            None,
+            Some(ActivationExitKind::Completed),
+            true,
+        )
     }
 
     fn on_py_yield(
@@ -354,7 +363,7 @@ impl Tracer for RuntimeTracer {
             "on_py_yield",
             retval,
             Some("<yield>"),
-            false,
+            Some(ActivationExitKind::Suspended),
             false,
         )
     }
@@ -422,7 +431,7 @@ impl Tracer for RuntimeTracer {
             "on_py_unwind",
             exception,
             Some("<unwind>"),
-            true,
+            Some(ActivationExitKind::Completed),
             false,
         )
     }
@@ -536,7 +545,7 @@ impl RuntimeTracer {
         label: &'static str,
         retval: &Bound<'_, PyAny>,
         capture_label: Option<&'static str>,
-        deactivate_on_exit: bool,
+        exit_kind: Option<ActivationExitKind>,
         allow_disable: bool,
     ) -> CallbackResult {
         let is_active = self
@@ -587,14 +596,15 @@ impl RuntimeTracer {
         );
         self.mark_event();
 
-        if deactivate_on_exit
-            && self
+        if let Some(kind) = exit_kind {
+            if self
                 .lifecycle
                 .activation_mut()
-                .handle_return_event(code.id())
-        {
-            let _mute = ScopedMuteIoCapture::new();
-            log::debug!("[RuntimeTracer] deactivated on activation return");
+                .handle_exit(code.id(), kind)
+            {
+                let _mute = ScopedMuteIoCapture::new();
+                log::debug!("[RuntimeTracer] deactivated on activation return");
+            }
         }
 
         Ok(CallbackOutcome::Continue)
