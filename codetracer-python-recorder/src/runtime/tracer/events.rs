@@ -158,8 +158,16 @@ pub(super) fn suppress_events() -> bool {
 
 impl Tracer for RuntimeTracer {
     fn interest(&self, events: &MonitoringEvents) -> EventSet {
-        // Minimal set: function start, step lines, and returns
-        events_union(&[events.PY_START, events.LINE, events.PY_RETURN])
+        // Balanced call stack requires tracking yields, resumes, throws, and unwinds
+        events_union(&[
+            events.PY_START,
+            events.PY_RETURN,
+            events.PY_YIELD,
+            events.PY_UNWIND,
+            events.PY_RESUME,
+            events.PY_THROW,
+            events.LINE,
+        ])
     }
 
     fn on_py_start(

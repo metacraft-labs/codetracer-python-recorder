@@ -157,12 +157,14 @@ allowing tracers to implement just the methods they care about.
 
 Each bullet below represents a low-level operation translating a single `sys.monitoring` event into the `runtime_tracing` stream.
 
+To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RETURN`, `PY_YIELD`, `PY_UNWIND`, `PY_THROW`, and `LINE`. `PY_START`/`PY_RESUME`/`PY_THROW` map to `TraceWriter::register_call`, while `PY_RETURN`/`PY_YIELD`/`PY_UNWIND` map to `TraceWriter::register_return`.
+
 ### Control Flow
 - **PY_START** – Create a `Function` event for the code object and push a new activation ID onto the thread's stack.
   ```rs
   pub fn on_py_start(code: PyObject, instruction_offset: i32);
   ```
-- **PY_RESUME** – Emit an `Event` log noting resumption and update the current activation's state.
+- **PY_RESUME** – Emit `TraceWriter::register_call` for the suspended activation (empty argument vector; CPython does not expose the `send()` payload) and update the current activation's state.
   ```rs
   pub fn on_py_resume(code: PyObject, instruction_offset: i32);
   ```
@@ -171,7 +173,7 @@ Each bullet below represents a low-level operation translating a single `sys.mon
   pub struct ReturnRecord { pub activation: ActivationId, pub value: Option<ValueRecord> }
   pub fn on_py_return(code: PyObject, instruction_offset: i32, retval: *mut PyObject);
   ```
-- **PY_YIELD** – Record a `Return` event flagged as a yield and keep the activation on the stack for later resumes.
+- **PY_YIELD** – Call `TraceWriter::register_return` with the yielded value (subject to value-capture policy), mark it as a yield, and keep the activation on the stack for later resumes.
   ```rs
   pub fn on_py_yield(code: PyObject, instruction_offset: i32, retval: *mut PyObject);
   ```
@@ -179,11 +181,11 @@ Each bullet below represents a low-level operation translating a single `sys.mon
   ```rs
   pub fn on_stop_iteration(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
-- **PY_UNWIND** – Mark the beginning of stack unwinding and note the target handler in an `Event`.
+- **PY_UNWIND** – Treat as a return edge by calling `TraceWriter::register_return` with the active exception so the activation closes even when an exception propagates.
   ```rs
   pub fn on_py_unwind(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
-- **PY_THROW** – Emit an `Event` describing the thrown value and the target generator/coroutine.
+- **PY_THROW** – Emit `TraceWriter::register_call` for the resumed activation and include a single argument named `exception` whose value is the thrown object.
   ```rs
   pub fn on_py_throw(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
   ```
