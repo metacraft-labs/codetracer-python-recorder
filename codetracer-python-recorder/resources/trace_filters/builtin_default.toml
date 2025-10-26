@@ -34,6 +34,11 @@ exec = "skip"
 reason = "Skip builtins module instrumentation"
 
 [[scope.rules]]
+selector = 'pkg:glob:*_distutils_hack*'
+exec = "skip"
+reason = "Skip setuptools shim module"
+
+[[scope.rules]]
 selector = 'pkg:glob:*'
 
 [[scope.rules.value_patterns]]
