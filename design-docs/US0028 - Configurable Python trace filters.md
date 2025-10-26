@@ -159,7 +159,7 @@ Callers validate whether a parsed selector is legal in the current context (e.g.
 1. Initialize the execution policy to `scope.default_exec` (or the inherited value when composing filters).  
 2. Walk `scope.rules` from top to bottom. Each rule whose selector matches the current frame updates the execution policy (`trace` vs `skip`) and the active default for value capture. Later matching rules replace earlier decisions because the traversal never rewinds.  
 3. For value capture inside a scope, start from the applicable default (`scope.default_value_action`, overridden by the scope rule’s `value_default` when provided).  
-4. Apply each `value_patterns` entry in order. The first pattern whose selector matches the variable or payload sets the decision to `allow` (serialize), `redact` (replace with `<redacted>`), or `drop` (omit entirely) and stops further evaluation for that value.  
+4. Apply each `value_patterns` entry in order. The first pattern whose selector matches the variable or payload sets the decision to `allow` (serialize), `redact` (replace with `<redacted>`), or `drop` (omit entirely; return-value drops still emit a structural return edge with a `<dropped>` placeholder) and stops further evaluation for that value.  
 5. If no pattern matches, fall back to the current default value action.  
 
 ## Sample Filters (TOML)

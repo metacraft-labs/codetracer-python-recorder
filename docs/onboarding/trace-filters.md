@@ -17,6 +17,7 @@
   - Optional `value_default` override (`"allow"`/`"redact"`/`"drop"`).
   - Optional `reason` string stored in telemetry.
   - `[[scope.rules.value_patterns]]` entries that refine value capture by selector.
+- `drop` removes the payload for locals/globals/args/attrs entirely. When a `ret:*` selector resolves to `drop`, the recorder still emits the structural return event with a `<dropped>` placeholder so call/return pairs remain balanced.
 - Example:
   ```toml
   [meta]
