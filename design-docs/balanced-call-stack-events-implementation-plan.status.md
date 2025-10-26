@@ -38,12 +38,13 @@
   - Verification: `just dev test` passes end-to-end.
 
 ### WS4 – Testing & Validation
-- **Status:** _In progress_
-  - Added Python integration tests covering generator yield/resume sequences, `g.throw(...)` exception injection, coroutine awaits (`asyncio.run`) and plain exception unwinds to verify balanced call/return pairs and recorded payloads.
-  - The new coverage exercises the trace JSON to assert call counts, argument capture (including the synthetic `exception` arg), and recorded return values for unwind paths.
-  - TODO: extend coverage to async `send()`/`throw()` scenarios and consider rust-side assertions for the integration print tracer if further confidence is needed.
+- **Status:** _Completed_
+  - Added Python integration tests covering generator yield/resume sequences, `g.throw(...)` exception injection, coroutine awaits (`asyncio.run`), and plain exception unwinds to verify balanced call/return pairs and recorded payloads.
+  - Added `test_coroutine_send_and_throw_events_capture_resume_and_exception` to exercise coroutine `send()` and `throw()` paths, asserting the additional call edges plus the encoded `exception` argument and final return payloads.
+  - Extended `tests/rust/print_tracer.rs` with a focused scenario (`tracer_counts_resume_throw_and_unwind_events`) to prove that `PY_RESUME`, `PY_THROW`, `PY_YIELD`, and `PY_UNWIND` fire the expected number of times for a simple generator/unwind script.
+  - Verification: `just dev test` (maturin develop + cargo nextest + pytest) now passes end-to-end.
 
 ## Next Checkpoints
-1. Extend WS4 coverage to additional async edge cases (e.g., `send()`/`throw()` on coroutines) and consider verifying `print_tracer` output in Rust.
+1. Monitor nightly runs for regressions around generator/coroutine call balancing and expand coverage again if new CPython events appear.
 2. Document any telemetry/logging updates before shipping the feature.
-3. Prepare release notes / changelog once WS4 closes out.
+3. Prepare release notes / changelog entries summarising the balanced call-stack support once release packaging starts.

@@ -441,6 +441,102 @@ def test_coroutine_await_records_balanced_events(tmp_path: Path) -> None:
     ), "Expected coroutine return value 'done' to be recorded"
 
 
+def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: Path) -> None:
+    code = (
+        "import types\n\n"
+        "@types.coroutine\n"
+        "def checkpoint():\n"
+        "    payload = yield 'suspended'\n"
+        "    return payload\n\n"
+        "async def worker():\n"
+        "    try:\n"
+        "        payload = await checkpoint()\n"
+        "        return f'ok:{payload}'\n"
+        "    except RuntimeError as err:\n"
+        "        return f'err:{err}'\n\n"
+        "def drive_success():\n"
+        "    coro = worker()\n"
+        "    coro.send(None)\n"
+        "    try:\n"
+        "        coro.send('data')\n"
+        "    except StopIteration:\n"
+        "        pass\n\n"
+        "def drive_throw():\n"
+        "    coro = worker()\n"
+        "    coro.send(None)\n"
+        "    try:\n"
+        "        coro.throw(RuntimeError('boom'))\n"
+        "    except StopIteration:\n"
+        "        pass\n\n"
+        "if __name__ == '__main__':\n"
+        "    drive_success()\n"
+        "    drive_throw()\n"
+    )
+    script = tmp_path / "script_coroutine_send_throw.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+
+    worker_fids = [
+        i
+        for i, f in enumerate(parsed.functions)
+        if f["name"] == "worker" and f["path_id"] == script_path_id
+    ]
+    assert worker_fids, "Expected worker() coroutine to be registered"
+    worker_fid = worker_fids[0]
+
+    worker_calls = [
+        call for call in parsed.call_records if int(call["function_id"]) == worker_fid
+    ]
+    assert (
+        len(worker_calls) == 4
+    ), f"Expected two starts plus resume/throw edges, saw {len(worker_calls)}"
+
+    def arg_name(arg: Dict[str, Any]) -> str:
+        return parsed.varnames[int(arg["variable_id"])]
+
+    def decode_text(value: Dict[str, Any]) -> str:
+        if value.get("kind") == "String":
+            return value.get("text", "")
+        if value.get("kind") == "Raw":
+            return value.get("r", "")
+        return ""
+
+    exception_calls = [
+        arg
+        for call in worker_calls
+        for arg in call.get("args", [])
+        if arg_name(arg) == "exception"
+    ]
+    assert exception_calls, "Expected coroutine throw to record an exception argument"
+    assert any("boom" in decode_text(arg["value"]) for arg in exception_calls)
+
+    def recorded_strings() -> List[str]:
+        values: List[str] = []
+        for rv in parsed.returns:
+            rv_value = rv.get("return_value")
+            if not rv_value:
+                continue
+            text = decode_text(rv_value)
+            if text:
+                values.append(text)
+        return values
+
+    strings = recorded_strings()
+    assert "ok:data" in strings, f"Expected successful resume payload, saw {strings}"
+    assert "err:boom" in strings, f"Expected exception handling result, saw {strings}"
+
+
 def test_py_unwind_records_exception_return(tmp_path: Path) -> None:
     code = (
         "def explode():\n"
