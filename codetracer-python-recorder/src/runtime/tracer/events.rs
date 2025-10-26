@@ -269,7 +269,7 @@ impl Tracer for RuntimeTracer {
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
         ) {
-            return Ok(CallbackOutcome::DisableLocation);
+            return Ok(CallbackOutcome::Continue);
         }
         if !is_active {
             return Ok(CallbackOutcome::Continue);
@@ -383,7 +383,7 @@ impl Tracer for RuntimeTracer {
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
         ) {
-            return Ok(CallbackOutcome::DisableLocation);
+            return Ok(CallbackOutcome::Continue);
         }
         if !is_active {
             return Ok(CallbackOutcome::Continue);

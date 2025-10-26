@@ -38,9 +38,12 @@
   - Verification: `just dev test` passes end-to-end.
 
 ### WS4 – Testing & Validation
-- **Status:** Not started.
+- **Status:** _In progress_
+  - Added Python integration tests covering generator yield/resume sequences, `g.throw(...)` exception injection, coroutine awaits (`asyncio.run`) and plain exception unwinds to verify balanced call/return pairs and recorded payloads.
+  - The new coverage exercises the trace JSON to assert call counts, argument capture (including the synthetic `exception` arg), and recorded return values for unwind paths.
+  - TODO: extend coverage to async `send()`/`throw()` scenarios and consider rust-side assertions for the integration print tracer if further confidence is needed.
 
 ## Next Checkpoints
-1. Expand WS4 coverage per plan (async awaits, throw/resume, unwind) and update rust/python integration tests accordingly.
-2. Add rust-side assertions (e.g., `print_tracer`) to validate the expanded event mask.
-3. Document any telemetry updates or metadata changes before shipping the feature.
+1. Extend WS4 coverage to additional async edge cases (e.g., `send()`/`throw()` on coroutines) and consider verifying `print_tracer` output in Rust.
+2. Document any telemetry/logging updates before shipping the feature.
+3. Prepare release notes / changelog once WS4 closes out.

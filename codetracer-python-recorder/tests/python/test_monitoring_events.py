@@ -393,3 +393,79 @@ def test_generator_throw_records_exception_argument(tmp_path: Path) -> None:
         and rv_value.get("text") == "caught boom"
         for rv in parsed.returns
     ), "Expected final return value for worker() to capture caught exception message"
+
+
+def test_coroutine_await_records_balanced_events(tmp_path: Path) -> None:
+    code = (
+        "import asyncio\n\n"
+        "async def worker():\n"
+        "    await asyncio.sleep(0)\n"
+        "    return 'done'\n\n"
+        "if __name__ == '__main__':\n"
+        "    asyncio.run(worker())\n"
+    )
+    script = tmp_path / "script_async.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+
+    worker_fids = [
+        i
+        for i, f in enumerate(parsed.functions)
+        if f["name"] == "worker" and f["path_id"] == script_path_id
+    ]
+    assert worker_fids, "Expected worker() coroutine to be registered"
+    worker_fid = worker_fids[0]
+
+    worker_calls = [
+        call for call in parsed.call_records if int(call["function_id"]) == worker_fid
+    ]
+    # Expect initial PY_START and a later PY_RESUME call edge
+    assert len(worker_calls) >= 2, f"Expected multiple call edges for worker(), saw {len(worker_calls)}"
+
+    assert any(
+        (rv_value := rv.get("return_value"))
+        and rv_value.get("kind") == "String"
+        and rv_value.get("text") == "done"
+        for rv in parsed.returns
+    ), "Expected coroutine return value 'done' to be recorded"
+
+
+def test_py_unwind_records_exception_return(tmp_path: Path) -> None:
+    code = (
+        "def explode():\n"
+        "    raise ValueError('boom')\n\n"
+        "if __name__ == '__main__':\n"
+        "    try:\n"
+        "        explode()\n"
+        "    except ValueError:\n"
+        "        pass\n"
+    )
+    script = tmp_path / "script_unwind.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+
+    parsed = _parse_trace(out_dir)
+    assert any(
+        (rv_value := rv.get("return_value"))
+        and rv_value.get("kind") in {"Raw", "String"}
+        and "boom" in (rv_value.get("r") or rv_value.get("text", ""))
+        for rv in parsed.returns
+    ), "Expected unwind to record the exception message"
