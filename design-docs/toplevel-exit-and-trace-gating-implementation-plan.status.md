@@ -28,7 +28,10 @@
   - Verification: `just cargo-test` (workspace) and `just py-test` exercises the new Rust test (`finish_emits_toplevel_return_with_exit_code`) and Python integration tests (`test_exit_payloads`).
 
 ### WS3 – Unified Trace Gate Abstraction
-- **Status:** _Not Started_.
+- **Status:** _Completed_
+  - Added a single `evaluate_gate` helper so callbacks defer to shared activation+filter logic, ensuring consistent disable decisions and reducing duplicated guards.
+  - All tracer callbacks now consult the helper; return handlers pass through the same decision pipeline before emitting events.
+  - Verification: `just cargo-test` and `just py-test`.
 
 ### WS4 – Lifecycle & Metadata Updates
 - **Status:** _Not Started_.

@@ -5,6 +5,7 @@ use super::lifecycle::LifecycleController;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::module_identity::{ModuleIdentityCache, ModuleNameHints};
+use crate::monitoring::CallbackOutcome;
 use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::runtime::line_snapshots::LineSnapshotStore;
@@ -199,6 +200,29 @@ impl RuntimeTracer {
 
     pub(super) fn record_exit_status(&mut self, exit_code: Option<i32>) {
         self.session_exit.set_exit_code(exit_code);
+    }
+
+    pub(super) fn evaluate_gate(
+        &mut self,
+        py: Python<'_>,
+        code: &CodeObjectWrapper,
+        allow_disable: bool,
+    ) -> Option<CallbackOutcome> {
+        let is_active = self.lifecycle.activation_mut().should_process_event(py, code);
+        if matches!(
+            self.should_trace_code(py, code),
+            TraceDecision::SkipAndDisable
+        ) {
+            return Some(if allow_disable {
+                CallbackOutcome::DisableLocation
+            } else {
+                CallbackOutcome::Continue
+            });
+        }
+        if !is_active {
+            return Some(CallbackOutcome::Continue);
+        }
+        None
     }
 
     pub(super) fn ensure_function_id(
