@@ -73,9 +73,10 @@ pub fn start_tracing(
 }
 
 /// Stop tracing by resetting the global flag.
-#[pyfunction]
-pub fn stop_tracing() -> PyResult<()> {
+#[pyfunction(signature = (exit_code=None))]
+pub fn stop_tracing(exit_code: Option<i32>) -> PyResult<()> {
     ffi::wrap_pyfunction("stop_tracing", || {
+        let _ = exit_code;
         Python::with_gil(|py| {
             // Uninstall triggers finish() on tracer implementation.
             uninstall_tracer(py)?;

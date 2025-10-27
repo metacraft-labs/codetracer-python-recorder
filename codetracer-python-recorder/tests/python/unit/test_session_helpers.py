@@ -63,13 +63,13 @@ def clear_active_session() -> None:
 
 
 def test_trace_session_stop_clears_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    called = {"stop": False, "start": False}
+    called = {"stop_exit_codes": [], "start": False}
 
     def fake_start(*args, **kwargs) -> None:
         called["start"] = True
 
-    def fake_stop() -> None:
-        called["stop"] = True
+    def fake_stop(exit_code: int | None = None) -> None:
+        called["stop_exit_codes"].append(exit_code)
 
     monkeypatch.setattr(session, "_start_backend", fake_start)
     monkeypatch.setattr(session, "_stop_backend", fake_stop)
@@ -78,7 +78,7 @@ def test_trace_session_stop_clears_global(monkeypatch: pytest.MonkeyPatch) -> No
     session._active_session = session.TraceSession(path=Path("/tmp"), format="json")
     session.stop()
     assert session._active_session is None
-    assert called["stop"] is True
+    assert called["stop_exit_codes"] == [None]
 
 
 def test_trace_session_flush_noop_when_inactive(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,9 +107,9 @@ def test_trace_context_manager_starts_and_stops(monkeypatch: pytest.MonkeyPatch,
         trace_state["active"] = True
         calls["start"].append((Path(path), fmt, activation, filters))
 
-    def fake_stop() -> None:
+    def fake_stop(exit_code: int | None = None) -> None:
         trace_state["active"] = False
-        calls["stop"].append(True)
+        calls["stop"].append(exit_code)
 
     monkeypatch.setattr(session, "_start_backend", fake_start)
     monkeypatch.setattr(session, "_stop_backend", fake_stop)
@@ -124,7 +124,19 @@ def test_trace_context_manager_starts_and_stops(monkeypatch: pytest.MonkeyPatch,
         assert handle.format == "binary"
 
     assert calls["start"] == [(target, "binary", None, None)]
-    assert calls["stop"] == [True]
+    assert calls["stop"] == [None]
+
+
+def test_stop_forwards_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[int | None] = []
+
+    monkeypatch.setattr(session, "_is_tracing_backend", lambda: True)
+    monkeypatch.setattr(session, "_stop_backend", lambda code=None: captured.append(code))
+
+    session._active_session = session.TraceSession(path=Path("/tmp"), format="json")
+    session.stop(exit_code=123)
+    assert captured == [123]
+    assert session._active_session is None
 
 
 def test_normalize_trace_filter_handles_none() -> None:

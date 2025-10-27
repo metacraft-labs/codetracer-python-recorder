@@ -38,10 +38,17 @@ class TraceSession:
         self.path = path
         self.format = format
 
-    def stop(self) -> None:
-        """Stop this trace session."""
+    def stop(self, *, exit_code: int | None = None) -> None:
+        """Stop this trace session.
+
+        Parameters
+        ----------
+        exit_code:
+            Optional process exit status to forward to the recorder backend.
+            When ``None``, the session shutdown reason remains unspecified.
+        """
         if _active_session is self:
-            stop()
+            stop(exit_code=exit_code)
 
     def flush(self) -> None:
         """Flush buffered trace data for this session."""
@@ -51,6 +58,7 @@ class TraceSession:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - thin wrapper
+        # Exit codes are not tracked for context-managed sessions; report unknown.
         self.stop()
 
 
@@ -121,12 +129,18 @@ def start(
     return session
 
 
-def stop() -> None:
-    """Stop the active trace session if one is running."""
+def stop(*, exit_code: int | None = None) -> None:
+    """Stop the active trace session if one is running.
+
+    Parameters
+    ----------
+    exit_code:
+        Optional process exit status to forward to the backend.
+    """
     global _active_session
     if not _is_tracing_backend():
         return
-    _stop_backend()
+    _stop_backend(exit_code)
     _active_session = None
 
 
