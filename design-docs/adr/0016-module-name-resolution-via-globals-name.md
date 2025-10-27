@@ -46,3 +46,4 @@ Key points:
 
 - Update existing ADR 0013/0014 statuses once this ADR is accepted and the code lands.
 - Communicate the behavioural change to downstream teams who consume `<module>` events or rely on path-derived module names.
+- Default the `module_name_from_globals` policy to `true` after validation, but retain CLI/env toggles so teams can temporarily fall back to the legacy resolver during rollout.

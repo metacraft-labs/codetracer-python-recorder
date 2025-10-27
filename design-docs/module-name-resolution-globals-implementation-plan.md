@@ -43,8 +43,8 @@ This plan delivers ADR 0016 by retooling module-name derivation around `frame.f_
 - Document the phase-out of the resolver to guide downstream integrators.
 
 ### Stage 5 – Flip the Feature Flag
-- After validating in CI and canary environments, change the default for `module_name_from_globals` to `true`.
-- Remove the compatibility flag once usage data confirms no regressions.
+- Change the default for `module_name_from_globals` to `true` while leaving CLI/env toggles available for targeted opt-outs during rollout validation.
+- Schedule removal of the compatibility flag once usage data confirms no regressions.
 
 ## Testing Strategy
 - Rust unit tests covering `on_py_start` logic, especially fallback to `<module>` when `__name__` is absent.

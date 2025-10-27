@@ -166,6 +166,17 @@ mod tests {
     }
 
     #[test]
+    fn configure_policy_from_env_disables_module_name_from_globals() {
+        let _guard = EnvGuard;
+        reset_policy_for_tests();
+        std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "false");
+
+        configure_policy_from_env().expect("configure from env");
+        let snap = policy_snapshot();
+        assert!(!snap.module_name_from_globals);
+    }
+
+    #[test]
     fn parse_capture_io_handles_aliases() {
         assert_eq!(parse_capture_io("proxies+fd").unwrap(), (true, true));
         assert_eq!(parse_capture_io("proxies").unwrap(), (true, false));

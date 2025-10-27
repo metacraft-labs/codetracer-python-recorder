@@ -122,10 +122,11 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
     )
     parser.add_argument(
         "--module-name-from-globals",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
-            "Derive module names from the Python frame's __name__ attribute. "
-            "Intended for early opt-in while the feature flag is experimental."
+            "Derive module names from the Python frame's __name__ attribute (default: enabled). "
+            "Use '--no-module-name-from-globals' to fall back to the legacy resolver."
         ),
     )
 
@@ -189,8 +190,8 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
                 policy["io_capture_fd_fallback"] = True
             case other:  # pragma: no cover - argparse choices block this
                 parser.error(f"unsupported io-capture mode '{other}'")
-    if known.module_name_from_globals:
-        policy["module_name_from_globals"] = True
+    if known.module_name_from_globals is not None:
+        policy["module_name_from_globals"] = known.module_name_from_globals
 
     return RecorderCLIConfig(
         trace_dir=trace_dir,

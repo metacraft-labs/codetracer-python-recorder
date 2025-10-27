@@ -22,7 +22,7 @@
 
 ### Stage 1 – Capture `__name__` at `py_start`
 - **Status:** Completed  
-  `RuntimeTracer` now captures `frame.f_globals['__name__']` for `<module>` code when the feature flag is on, threads the hint through `FilterCoordinator`, and prefers it during both filter decisions and runtime naming. Added integration coverage ensuring opt-in sessions record `<__main__>` for scripts, plus unit updates for the new plumbing.
+  `RuntimeTracer` now captures `frame.f_globals['__name__']` for `<module>` code and threads the hint through `FilterCoordinator`, preferring it during both filter decisions and runtime naming. Added integration coverage ensuring sessions record `<__main__>` for scripts, plus unit updates for the new plumbing and opt-out cases.
 
 ### Stage 2 – Simplify Filter Engine
 - **Status:** Completed  
@@ -35,3 +35,7 @@
 ### Stage 4 – Documentation and Changelog
 - **Status:** Completed  
   Updated `codetracer-python-recorder/CHANGELOG.md` and README to describe globals-first module naming, refreshed ADR 0016 to Accepted, and revised the implementation plan to cover the documentation rollout so downstream teams understand the new semantics and feature flag.
+
+### Stage 5 – Flip the Feature Flag
+- **Status:** Completed  
+  Defaulted `module_name_from_globals` to `true` across the policy model, CLI, and environment/configuration pathways while keeping explicit overrides available for the legacy resolver during rollout validation.

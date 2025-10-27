@@ -42,7 +42,7 @@ mod tests {
         assert!(snap.log_file.is_none());
         assert!(snap.io_capture.line_proxies);
         assert!(!snap.io_capture.fd_fallback);
-        assert!(!snap.module_name_from_globals);
+        assert!(snap.module_name_from_globals);
     }
 
     #[test]

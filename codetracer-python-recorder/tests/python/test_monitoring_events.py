@@ -227,15 +227,13 @@ def test_module_name_follows_globals_policy(tmp_path: Path) -> None:
     script.write_text("VALUE = 1\n", encoding="utf-8")
 
     out_dir = ensure_trace_dir(tmp_path)
-    codetracer.configure_policy(module_name_from_globals=True)
-
     session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
     try:
         runpy.run_path(str(script), run_name="__main__")
     finally:
         codetracer.flush()
         codetracer.stop()
-        codetracer.configure_policy(module_name_from_globals=False)
+        codetracer.configure_policy(module_name_from_globals=True)
 
     parsed = _parse_trace(out_dir)
     names = [f["name"] for f in parsed.functions]

@@ -84,7 +84,7 @@ impl Default for RecorderPolicy {
             log_file: None,
             json_errors: false,
             io_capture: IoCapturePolicy::default(),
-            module_name_from_globals: false,
+            module_name_from_globals: true,
         }
     }
 }

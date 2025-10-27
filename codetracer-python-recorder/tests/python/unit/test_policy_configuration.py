@@ -18,7 +18,7 @@ def reset_policy() -> None:
         log_level="",
         log_file="",
         json_errors=False,
-        module_name_from_globals=False,
+        module_name_from_globals=True,
     )
     yield
     codetracer.configure_policy(
@@ -28,7 +28,7 @@ def reset_policy() -> None:
         log_level="",
         log_file="",
         json_errors=False,
-        module_name_from_globals=False,
+        module_name_from_globals=True,
     )
 
 

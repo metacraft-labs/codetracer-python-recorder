@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Balanced call-stack handling for generators, coroutines, and unwinding frames by subscribing to `PY_YIELD`, `PY_UNWIND`, `PY_RESUME`, and `PY_THROW`, mapping resume/throw events to `TraceWriter::register_call`, yield/unwind to `register_return`, and capturing `PY_THROW` arguments as `exception` using the existing value encoder. Added Python + Rust integration tests that drive `.send()`/`.throw()` on coroutines and generators to guarantee the trace stays balanced and that exception payloads are recorded.
 
 ### Changed
-- Module-level call events now prefer the frame's `__name__`, fall back to filter hints, `sys.path`, and package markers, and no longer depend on the legacy resolver/cache. This keeps `<__main__>` for direct scripts while package imports continue to emit `<pkg.mod>`. Updated Rust + Python tests and documentation to describe the new semantics and opt-in flag.
+- Module-level call events now prefer the frame's `__name__`, fall back to filter hints, `sys.path`, and package markers, and no longer depend on the legacy resolver/cache. The globals-derived naming flag now defaults to enabled so direct scripts record `<__main__>` while package imports emit `<pkg.mod>`, with CLI and environment overrides available for the legacy resolver.
 
 ## [0.2.0] - 2025-10-17
 ### Added

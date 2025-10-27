@@ -51,7 +51,7 @@ The pure-Python recorder does not perform advanced module-name derivation; all r
 3. The resulting `ScopeResolution` records the derived module name, relative and absolute paths, and the execution decision; the resolution is cached per code object.
 
 ### 5.3 Runtime naming
-1. When emitting events, `RuntimeTracer::function_name` first checks the stored module hint. If the globals-derived name exists, it wins; this keeps opt-in behaviour aligned with Python logging.
+1. When emitting events, `RuntimeTracer::function_name` first checks the stored module hint. If the globals-derived name exists, it wins; this keeps the default behaviour aligned with Python logging while still permitting explicit opt-outs.
 2. Absent a hint, the tracer falls back to the cached `ScopeResolution` module name, then to package detection via `module_name_from_packages`, and finally leaves `<module>` unchanged.
 3. The tracer no longer keeps a resolver cache, so the hot path is reduced to string comparisons and light filesystem checks.
 
