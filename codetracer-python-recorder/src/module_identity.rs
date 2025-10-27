@@ -737,9 +737,7 @@ mod tests {
             module
                 .setattr("__package__", py.None())
                 .expect("set __package__");
-            module
-                .setattr("__spec__", py.None())
-                .expect("set __spec__");
+            module.setattr("__spec__", py.None()).expect("set __spec__");
             modules
                 .set_item("__main__", module)
                 .expect("register __main__");

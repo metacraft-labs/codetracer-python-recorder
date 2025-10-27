@@ -23,6 +23,7 @@ pub(crate) struct FilterCoordinator {
     engine: Option<Arc<TraceFilterEngine>>,
     ignored_code_ids: HashSet<usize>,
     scope_cache: HashMap<usize, Arc<ScopeResolution>>,
+    module_name_hints: HashMap<usize, String>,
     stats: FilterStats,
 }
 
@@ -32,6 +33,7 @@ impl FilterCoordinator {
             engine,
             ignored_code_ids: HashSet::new(),
             scope_cache: HashMap::new(),
+            module_name_hints: HashMap::new(),
             stats: FilterStats::default(),
         }
     }
@@ -50,6 +52,21 @@ impl FilterCoordinator {
 
     pub(crate) fn values_mut(&mut self) -> &mut ValueFilterStats {
         self.stats.values_mut()
+    }
+
+    pub(crate) fn set_module_name_hint(&mut self, code_id: usize, hint: Option<String>) {
+        match hint {
+            Some(value) => {
+                self.module_name_hints.insert(code_id, value);
+            }
+            None => {
+                self.module_name_hints.remove(&code_id);
+            }
+        }
+    }
+
+    pub(crate) fn module_name_hint(&self, code_id: usize) -> Option<String> {
+        self.module_name_hints.get(&code_id).cloned()
     }
 
     pub(crate) fn clear_caches(&mut self) {
@@ -113,6 +130,17 @@ impl FilterCoordinator {
 
         match engine.resolve(py, code) {
             Ok(resolution) => {
+                let hint = self.module_name_hints.get(&code_id).cloned();
+                let resolution = if let Some(hint) = hint {
+                    if resolution.module_name() == Some(hint.as_str()) {
+                        resolution
+                    } else {
+                        Arc::new(resolution.clone_with_module_name(Some(hint)))
+                    }
+                } else {
+                    resolution
+                };
+
                 if resolution.exec() == ExecDecision::Trace {
                     self.scope_cache.insert(code_id, Arc::clone(&resolution));
                 } else {
@@ -140,6 +168,7 @@ impl FilterCoordinator {
     fn mark_ignored(&mut self, code_id: usize) {
         self.scope_cache.remove(&code_id);
         self.ignored_code_ids.insert(code_id);
+        self.module_name_hints.remove(&code_id);
     }
 }
 

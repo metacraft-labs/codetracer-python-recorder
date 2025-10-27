@@ -222,6 +222,26 @@ def test_module_imports_record_package_names(tmp_path: Path) -> None:
     assert any(name == "<my_pkg.mod>" for name in names), f"missing module name in {names}"
 
 
+def test_module_name_follows_globals_policy(tmp_path: Path) -> None:
+    script = tmp_path / "script_globals.py"
+    script.write_text("VALUE = 1\n", encoding="utf-8")
+
+    out_dir = ensure_trace_dir(tmp_path)
+    codetracer.configure_policy(module_name_from_globals=True)
+
+    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        codetracer.flush()
+        codetracer.stop()
+        codetracer.configure_policy(module_name_from_globals=False)
+
+    parsed = _parse_trace(out_dir)
+    names = [f["name"] for f in parsed.functions]
+    assert any(name == "<__main__>" for name in names), f"expected <__main__> in {names}"
+
+
 def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
     # Arrange: write a script with a function using all Python argument kinds
     code = (

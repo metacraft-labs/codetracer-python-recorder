@@ -19,3 +19,7 @@
 ### Stage 0 – Feature Flag and Compatibility Layer
 - **Status:** Completed  
   Added the `module_name_from_globals` policy flag with CLI flag, Python bindings, and the `CODETRACER_MODULE_NAME_FROM_GLOBALS` env hook. Regression tests cover CLI parsing, policy snapshots, and environment configuration.
+
+### Stage 1 – Capture `__name__` at `py_start`
+- **Status:** Completed  
+  `RuntimeTracer` now captures `frame.f_globals['__name__']` for `<module>` code when the feature flag is on, threads the hint through `FilterCoordinator`, and prefers it during both filter decisions and runtime naming. Added integration coverage ensuring opt-in sessions record `<__main__>` for scripts, plus unit updates for the new plumbing.

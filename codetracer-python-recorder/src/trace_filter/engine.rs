@@ -178,6 +178,20 @@ impl ScopeResolution {
     pub fn matched_rule_reason(&self) -> Option<&str> {
         self.matched_rule_reason.as_deref()
     }
+
+    pub(crate) fn clone_with_module_name(&self, module_name: Option<String>) -> ScopeResolution {
+        ScopeResolution {
+            exec: self.exec,
+            value_policy: Arc::clone(&self.value_policy),
+            module_name,
+            object_name: self.object_name.clone(),
+            relative_path: self.relative_path.clone(),
+            absolute_path: self.absolute_path.clone(),
+            matched_rule_index: self.matched_rule_index,
+            matched_rule_source: self.matched_rule_source,
+            matched_rule_reason: self.matched_rule_reason.clone(),
+        }
+    }
 }
 
 /// Runtime engine wrapping a compiled filter configuration.

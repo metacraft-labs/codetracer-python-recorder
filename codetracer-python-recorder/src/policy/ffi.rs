@@ -169,7 +169,7 @@ mod tests {
             None,
             None,
         )
-            .expect_err("invalid variant should error");
+        .expect_err("invalid variant should error");
         // Ensure the error maps through map_recorder_error by checking the display text.
         let message = Python::with_gil(|py| err.value(py).to_string());
         assert!(
