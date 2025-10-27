@@ -370,6 +370,7 @@ mod tests {
             Some(false),
             None,
             None,
+            Some(false),
         )
         .expect("reset recorder policy");
     }
@@ -593,6 +594,7 @@ result = compute()\n"
                 Some(false),
                 Some(true),
                 Some(false),
+                Some(false),
             )
             .expect("enable io capture proxies");
 
@@ -682,6 +684,7 @@ result = compute()\n"
                 Some(false),
                 Some(true),
                 Some(true),
+                Some(false),
             )
             .expect("enable io capture with fd fallback");
 
@@ -787,6 +790,7 @@ result = compute()\n"
                 None,
                 Some(false),
                 Some(true),
+                Some(false),
                 Some(false),
             )
             .expect("enable proxies without fd fallback");
@@ -2142,6 +2146,7 @@ snapshot()
                 Some(false),
                 None,
                 None,
+                Some(false),
             )
             .expect("enable require_trace policy");
 
@@ -2219,6 +2224,7 @@ snapshot()
                 Some(false),
                 None,
                 None,
+                Some(false),
             )
             .expect("enable keep_partial policy");
 

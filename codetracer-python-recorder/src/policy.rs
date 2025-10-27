@@ -7,7 +7,8 @@ mod model;
 #[allow(unused_imports)]
 pub use env::{
     configure_policy_from_env, ENV_CAPTURE_IO, ENV_JSON_ERRORS, ENV_KEEP_PARTIAL_TRACE,
-    ENV_LOG_FILE, ENV_LOG_LEVEL, ENV_ON_RECORDER_ERROR, ENV_REQUIRE_TRACE,
+    ENV_LOG_FILE, ENV_LOG_LEVEL, ENV_MODULE_NAME_FROM_GLOBALS, ENV_ON_RECORDER_ERROR,
+    ENV_REQUIRE_TRACE,
 };
 #[allow(unused_imports)]
 pub use ffi::{configure_policy_py, py_configure_policy_from_env, py_policy_snapshot};
@@ -41,6 +42,7 @@ mod tests {
         assert!(snap.log_file.is_none());
         assert!(snap.io_capture.line_proxies);
         assert!(!snap.io_capture.fd_fallback);
+        assert!(!snap.module_name_from_globals);
     }
 
     #[test]
@@ -55,6 +57,7 @@ mod tests {
         update.json_errors = Some(true);
         update.io_capture_line_proxies = Some(true);
         update.io_capture_fd_fallback = Some(true);
+        update.module_name_from_globals = Some(true);
 
         apply_policy_update(update);
 
@@ -67,6 +70,7 @@ mod tests {
         assert!(snap.json_errors);
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
+        assert!(snap.module_name_from_globals);
         reset_policy();
     }
 
@@ -81,6 +85,7 @@ mod tests {
         std::env::set_var(ENV_LOG_FILE, "/tmp/out.log");
         std::env::set_var(ENV_JSON_ERRORS, "yes");
         std::env::set_var(ENV_CAPTURE_IO, "proxies,fd");
+        std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "true");
 
         configure_policy_from_env().expect("configure from env");
 
@@ -95,6 +100,7 @@ mod tests {
         assert!(snap.json_errors);
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
+        assert!(snap.module_name_from_globals);
         reset_policy();
     }
 
@@ -156,6 +162,7 @@ mod tests {
                 ENV_LOG_FILE,
                 ENV_JSON_ERRORS,
                 ENV_CAPTURE_IO,
+                ENV_MODULE_NAME_FROM_GLOBALS,
             ] {
                 std::env::remove_var(key);
             }

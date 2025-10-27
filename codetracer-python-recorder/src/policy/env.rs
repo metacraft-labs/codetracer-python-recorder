@@ -19,6 +19,8 @@ pub const ENV_LOG_FILE: &str = "CODETRACER_LOG_FILE";
 pub const ENV_JSON_ERRORS: &str = "CODETRACER_JSON_ERRORS";
 /// Environment variable toggling IO capture strategies.
 pub const ENV_CAPTURE_IO: &str = "CODETRACER_CAPTURE_IO";
+/// Environment variable toggling globals-based module name resolution.
+pub const ENV_MODULE_NAME_FROM_GLOBALS: &str = "CODETRACER_MODULE_NAME_FROM_GLOBALS";
 
 /// Load policy overrides from environment variables.
 pub fn configure_policy_from_env() -> RecorderResult<()> {
@@ -58,6 +60,10 @@ pub fn configure_policy_from_env() -> RecorderResult<()> {
         let (line_proxies, fd_fallback) = parse_capture_io(&value)?;
         update.io_capture_line_proxies = Some(line_proxies);
         update.io_capture_fd_fallback = Some(fd_fallback);
+    }
+
+    if let Ok(value) = env::var(ENV_MODULE_NAME_FROM_GLOBALS) {
+        update.module_name_from_globals = Some(parse_bool(&value)?);
     }
 
     apply_policy_update(update);
@@ -141,6 +147,7 @@ mod tests {
         std::env::set_var(ENV_LOG_FILE, "/tmp/out.log");
         std::env::set_var(ENV_JSON_ERRORS, "yes");
         std::env::set_var(ENV_CAPTURE_IO, "proxies,fd");
+        std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "true");
 
         configure_policy_from_env().expect("configure from env");
         let snap = policy_snapshot();
@@ -155,6 +162,7 @@ mod tests {
         assert!(snap.json_errors);
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
+        assert!(snap.module_name_from_globals);
     }
 
     #[test]
@@ -182,6 +190,7 @@ mod tests {
                 ENV_LOG_FILE,
                 ENV_JSON_ERRORS,
                 ENV_CAPTURE_IO,
+                ENV_MODULE_NAME_FROM_GLOBALS,
             ] {
                 std::env::remove_var(key);
             }
