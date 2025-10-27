@@ -454,9 +454,12 @@ impl Tracer for RuntimeTracer {
 
         self.emit_session_exit(py);
 
+        let exit_summary = self.exit_summary();
+
         if self.lifecycle.encountered_failure() {
             if policy.keep_partial_trace {
-                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter) {
+                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter, &exit_summary)
+                {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
                             "failed to finalise partial trace after disable: {}",
@@ -489,7 +492,7 @@ impl Tracer for RuntimeTracer {
             .require_trace_or_fail(&policy)
             .map_err(ffi::map_recorder_error)?;
         self.lifecycle
-            .finalise(&mut self.writer, &self.filter)
+            .finalise(&mut self.writer, &self.filter, &exit_summary)
             .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
         self.module_names.clear();

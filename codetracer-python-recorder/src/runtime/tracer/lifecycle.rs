@@ -6,6 +6,8 @@ use crate::runtime::activation::ActivationController;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::tracer::filtering::FilterCoordinator;
+use crate::runtime::tracer::runtime_tracer::ExitSummary;
+use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
 use runtime_tracing::{NonStreamingTraceWriter, TraceWriter};
 use serde_json::{self, json};
@@ -105,12 +107,12 @@ impl LifecycleController {
         &mut self,
         writer: &mut NonStreamingTraceWriter,
         filter: &FilterCoordinator,
+        exit_summary: &ExitSummary,
     ) -> RecorderResult<()> {
         TraceWriter::finish_writing_trace_metadata(writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace metadata")
                 .with_context("source", err.to_string())
         })?;
-        self.append_filter_metadata(filter)?;
         TraceWriter::finish_writing_trace_paths(writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace paths")
                 .with_context("source", err.to_string())
@@ -119,6 +121,9 @@ impl LifecycleController {
             enverr!(ErrorCode::Io, "failed to finalise trace events")
                 .with_context("source", err.to_string())
         })?;
+        debug!("[Lifecycle] writing exit metadata: code={:?}, label={:?}", exit_summary.code, exit_summary.label);
+        self.append_filter_metadata(filter)?;
+        self.append_exit_metadata(exit_summary)?;
         Ok(())
     }
 
@@ -130,6 +135,49 @@ impl LifecycleController {
         self.output_paths = None;
         self.events_recorded = false;
         self.encountered_failure = false;
+    }
+
+    fn append_exit_metadata(&self, exit_summary: &ExitSummary) -> RecorderResult<()> {
+        let Some(outputs) = &self.output_paths else {
+            return Ok(());
+        };
+
+        let path = outputs.metadata();
+        let original = fs::read_to_string(path).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to read trace metadata")
+                .with_context("path", path.display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+
+        let mut metadata: serde_json::Value = serde_json::from_str(&original).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to parse trace metadata JSON")
+                .with_context("path", path.display().to_string())
+                .with_context("source", err.to_string())
+        })?;
+
+        if let serde_json::Value::Object(ref mut obj) = metadata {
+            let status = json!({
+                "code": exit_summary.code,
+                "label": exit_summary.label,
+            });
+            obj.insert("process_exit_status".to_string(), status);
+            let serialised = serde_json::to_string(&metadata).map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to serialise trace metadata")
+                    .with_context("path", path.display().to_string())
+                    .with_context("source", err.to_string())
+            })?;
+            fs::write(path, serialised).map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to write trace metadata")
+                    .with_context("path", path.display().to_string())
+                    .with_context("source", err.to_string())
+            })?;
+            Ok(())
+        } else {
+            Err(
+                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
+                    .with_context("path", path.display().to_string()),
+            )
+        }
     }
 
     fn append_filter_metadata(&self, filter: &FilterCoordinator) -> RecorderResult<()> {

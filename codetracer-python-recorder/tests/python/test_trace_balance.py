@@ -1,9 +1,12 @@
 import json
 import importlib.util
+import runpy
 from pathlib import Path
 from typing import List, Mapping
 
 import pytest
+
+import codetracer_python_recorder as codetracer
 
 from codetracer_python_recorder.trace_balance import (
     TraceBalanceError,
@@ -99,3 +102,79 @@ def test_cli_reports_success_for_balanced_trace(tmp_path: Path, capsys: pytest.C
 
     assert exit_code == 0
     assert "Balanced trace" in captured.out
+
+
+def test_activation_and_filter_skip_still_balances_trace(tmp_path: Path) -> None:
+    script = tmp_path / "app.py"
+    script.write_text(
+        """
+def side_effect():
+    for _ in range(3):
+        pass
+
+if __name__ == "__main__":
+    side_effect()
+""",
+        encoding="utf-8",
+    )
+
+    filter_file = tmp_path / "skip.toml"
+    filter_file.write_text(
+        """
+[meta]
+name = "skip-main"
+version = 1
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+[[scope.rules]]
+selector = "pkg:__main__"
+exec = "skip"
+value_default = "allow"
+""",
+        encoding="utf-8",
+    )
+
+    trace_dir = tmp_path / "trace"
+
+    session = codetracer.start(
+        trace_dir,
+        format="json",
+        start_on_enter=script,
+        trace_filter=[filter_file],
+    )
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        session.stop()
+
+    events = load_trace_events(trace_dir / "trace.json")
+    function_names: dict[int, str] = {}
+    next_function_id = 0
+    for event in events:
+        payload = event.get("Function")
+        if payload:
+            function_names[next_function_id] = payload.get("name", "")
+            next_function_id += 1
+
+    toplevel_ids = {fid for fid, name in function_names.items() if name == "<toplevel>"}
+    assert len(toplevel_ids) == 1, f"expected single toplevel function, saw {toplevel_ids}"
+
+    toplevel_call_count = sum(
+        1
+        for event in events
+        if "Call" in event and event["Call"].get("function_id") in toplevel_ids
+    )
+    assert toplevel_call_count == 1
+
+    exit_returns = [
+        event["Return"]
+        for event in events
+        if "Return" in event and event["Return"].get("return_value", {}).get("text") == "<exit>"
+    ]
+    assert len(exit_returns) == 1
+
+    script_names = {name for name in function_names.values() if name not in {"<toplevel>"}}
+    assert "side_effect" not in script_names

@@ -49,6 +49,10 @@ def test_cli_records_exit_code_in_toplevel_return(tmp_path: Path) -> None:
     assert exit_value["kind"] == "Int"
     assert exit_value["i"] == 3
 
+    metadata = json.loads((trace_dir / "trace_metadata.json").read_text(encoding="utf-8"))
+    status = metadata.get("process_exit_status")
+    assert status == {"code": 3, "label": None}
+
 
 def test_default_exit_payload_uses_placeholder(tmp_path: Path) -> None:
     trace_dir = tmp_path / "trace"
@@ -68,3 +72,7 @@ def test_default_exit_payload_uses_placeholder(tmp_path: Path) -> None:
     exit_value = _last_return_value(trace_dir)
     assert exit_value["kind"] == "String"
     assert exit_value["text"] == "<exit>"
+
+    metadata = json.loads((trace_dir / "trace_metadata.json").read_text(encoding="utf-8"))
+    status = metadata.get("process_exit_status")
+    assert status == {"code": None, "label": "<exit>"}

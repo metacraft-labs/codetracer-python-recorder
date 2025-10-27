@@ -28,6 +28,12 @@ enum ExitPayload {
     Text(Cow<'static, str>),
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExitSummary {
+    pub code: Option<i32>,
+    pub label: Option<String>,
+}
+
 impl ExitPayload {
     fn is_code(&self) -> bool {
         matches!(self, ExitPayload::Code(_))
@@ -93,6 +99,19 @@ impl SessionExitState {
 
     fn is_emitted(&self) -> bool {
         self.emitted
+    }
+
+    fn summary(&self) -> ExitSummary {
+        match &self.payload {
+            ExitPayload::Code(value) => ExitSummary {
+                code: Some(*value),
+                label: None,
+            },
+            ExitPayload::Text(text) => ExitSummary {
+                code: None,
+                label: Some(text.as_ref().to_string()),
+            },
+        }
     }
 }
 
@@ -200,6 +219,10 @@ impl RuntimeTracer {
 
     pub(super) fn record_exit_status(&mut self, exit_code: Option<i32>) {
         self.session_exit.set_exit_code(exit_code);
+    }
+
+    pub(super) fn exit_summary(&self) -> ExitSummary {
+        self.session_exit.summary()
     }
 
     pub(super) fn evaluate_gate(

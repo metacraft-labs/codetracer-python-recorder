@@ -34,10 +34,16 @@
   - Verification: `just cargo-test` and `just py-test`.
 
 ### WS4 – Lifecycle & Metadata Updates
-- **Status:** _Not Started_.
+- **Status:** _Completed_
+  - Metadata writer now records `process_exit_status` alongside filter info, and runtime emits a `<toplevel>` return before finalisation.
+  - Added regression coverage in Python for both exit code and default placeholder metadata values.
+  - Verification: `just cargo-test`, `just py-test`.
 
 ### WS5 – Validation & Parity Follow-Up
-- **Status:** _Not Started_.
+- **Status:** _Completed_
+- Added explicit tests verifying exit metadata plus activation/filter interplay keeps the trace balanced (`test_exit_payloads`, `test_trace_balance`).
+- Documented follow-up to mirror exit-status support in the pure-Python recorder before release.
+- Verification: `just cargo-test`, `just py-test`.
 
 ## Notes
 - API changes will require a minor version bump once runtime support lands; capture release planning tasks after WS2.
