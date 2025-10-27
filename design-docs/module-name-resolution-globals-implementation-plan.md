@@ -37,10 +37,10 @@ This plan delivers ADR 0016 by retooling module-name derivation around `frame.f_
 - Remove the `ModuleNameHints` plumbing and any resolver invocations.
 - Update the Python integration test `test_module_imports_record_package_names` to expect `<my_pkg.mod>` coming directly from `__name__`.
 
-### Stage 4 – Remove Legacy Resolver Module
-- Delete `src/module_identity.rs` and tidy references (Cargo module list, tests, exports).
-- Drop resolver-specific tests and replace them with focused coverage around globals-based extraction.
-- Update documentation and changelog to describe the new semantics. Reference ADR 0016 and mark ADR 0013 as superseded where appropriate.
+### Stage 4 – Documentation and Changelog
+- Update design docs, ADR status, and changelog entries to describe the new globals-based module naming.
+- Ensure the developer guide explains how `__name__` hints interplay with filter selectors and `<__main__>` behaviour.
+- Document the phase-out of the resolver to guide downstream integrators.
 
 ### Stage 5 – Flip the Feature Flag
 - After validating in CI and canary environments, change the default for `module_name_from_globals` to `true`.
@@ -61,4 +61,3 @@ This plan delivers ADR 0016 by retooling module-name derivation around `frame.f_
 - ADR 0016 updated to “Accepted” once the feature flag defaults to on.
 - Release notes highlight the new module-naming semantics and the opt-out flag during transition.
 - Telemetry or logging confirms we do not hit the fallback path excessively in real workloads.
-

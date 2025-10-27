@@ -1,6 +1,6 @@
 # ADR 0016 – Module Name Resolution via `__name__`
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2025-03-18
 - **Stakeholders:** Runtime team, Trace Filter maintainers
 - **Related Decisions:** ADR 0013 (Reliable Module Name Derivation), ADR 0014 (Module Call Event Naming)
@@ -46,4 +46,3 @@ Key points:
 
 - Update existing ADR 0013/0014 statuses once this ADR is accepted and the code lands.
 - Communicate the behavioural change to downstream teams who consume `<module>` events or rely on path-derived module names.
-

@@ -31,3 +31,7 @@
 ### Stage 3 – Runtime Naming Downstream
 - **Status:** Completed  
   `RuntimeTracer` no longer depends on `ModuleIdentityCache`; it prefers globals hints, otherwise reuses filter resolutions, `sys.path` roots, or package markers before falling back to `<module>`. The shared helpers in `module_identity.rs` were slimmed down accordingly, and updated unit/integration tests confirm the new flow.
+
+### Stage 4 – Documentation and Changelog
+- **Status:** Completed  
+  Updated `codetracer-python-recorder/CHANGELOG.md` and README to describe globals-first module naming, refreshed ADR 0016 to Accepted, and revised the implementation plan to cover the documentation rollout so downstream teams understand the new semantics and feature flag.
