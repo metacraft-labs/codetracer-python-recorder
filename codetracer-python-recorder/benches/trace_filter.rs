@@ -52,7 +52,7 @@ fn run_workload(engine: &TraceFilterEngine, dataset: &WorkloadDataset) {
         for &index in &dataset.event_indices {
             let code = dataset.codes[index].as_ref();
             let resolution = engine
-                .resolve(py, code)
+                .resolve(py, code, None)
                 .expect("trace filter resolution should succeed during benchmarking");
             let policy = resolution.value_policy();
             for name in dataset.locals.iter() {
@@ -66,7 +66,7 @@ fn prewarm_engine(engine: &TraceFilterEngine, dataset: &WorkloadDataset) {
     Python::with_gil(|py| {
         for code in &dataset.codes {
             let _ = engine
-                .resolve(py, code.as_ref())
+                .resolve(py, code.as_ref(), None)
                 .expect("prewarm resolution failed");
         }
     });

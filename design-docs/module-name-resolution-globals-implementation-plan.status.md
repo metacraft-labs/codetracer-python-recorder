@@ -23,3 +23,7 @@
 ### Stage 1 – Capture `__name__` at `py_start`
 - **Status:** Completed  
   `RuntimeTracer` now captures `frame.f_globals['__name__']` for `<module>` code when the feature flag is on, threads the hint through `FilterCoordinator`, and prefers it during both filter decisions and runtime naming. Added integration coverage ensuring opt-in sessions record `<__main__>` for scripts, plus unit updates for the new plumbing.
+
+### Stage 2 – Simplify Filter Engine
+- **Status:** Completed  
+  Removed the resolver dependency from `TraceFilterEngine`, teach it to accept globals-based hints, and added a package-structure fallback when relative paths are unavailable. Filtering decisions now rely on the new hint flow while keeping legacy behaviour intact for `module_name_from_globals` opt-out scenarios.

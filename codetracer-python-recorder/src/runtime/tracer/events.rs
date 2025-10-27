@@ -176,28 +176,20 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
-        if self.module_name_from_globals {
-            if let Ok(qualname) = code.qualname(py) {
-                if qualname == "<module>" {
-                    let globals_name = match capture_frame(py, code) {
-                        Ok(snapshot) => {
-                            let mapping = snapshot.globals().unwrap_or_else(|| snapshot.locals());
-                            mapping
-                                .get_item("__name__")
-                                .ok()
-                                .flatten()
-                                .and_then(|value| value.extract::<String>().ok())
-                                .map(|name| name.trim().to_string())
-                                .filter(|name| !name.is_empty())
-                        }
-                        Err(_) => None,
-                    };
-
-                    self.filter
-                        .set_module_name_hint(code.id(), globals_name.clone());
-                }
+        let globals_name = match capture_frame(py, code) {
+            Ok(snapshot) => {
+                let mapping = snapshot.globals().unwrap_or_else(|| snapshot.locals());
+                mapping
+                    .get_item("__name__")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.extract::<String>().ok())
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty())
             }
-        }
+            Err(_) => None,
+        };
+        self.filter.set_module_name_hint(code.id(), globals_name);
 
         if let Some(outcome) = self.evaluate_gate(py, code, true) {
             return Ok(outcome);

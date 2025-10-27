@@ -128,19 +128,9 @@ impl FilterCoordinator {
             return Some(existing.clone());
         }
 
-        match engine.resolve(py, code) {
+        let hint = self.module_name_hints.get(&code_id).map(|s| s.as_str());
+        match engine.resolve(py, code, hint) {
             Ok(resolution) => {
-                let hint = self.module_name_hints.get(&code_id).cloned();
-                let resolution = if let Some(hint) = hint {
-                    if resolution.module_name() == Some(hint.as_str()) {
-                        resolution
-                    } else {
-                        Arc::new(resolution.clone_with_module_name(Some(hint)))
-                    }
-                } else {
-                    resolution
-                };
-
                 if resolution.exec() == ExecDecision::Trace {
                     self.scope_cache.insert(code_id, Arc::clone(&resolution));
                 } else {
