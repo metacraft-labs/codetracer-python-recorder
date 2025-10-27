@@ -1388,7 +1388,11 @@ dropper()
                 "expected no variables captured, found {:?}",
                 variable_names
             );
-            assert_eq!(return_values.len(), 1, "return event should remain balanced");
+            assert_eq!(
+                return_values.len(),
+                1,
+                "return event should remain balanced"
+            );
             match &return_values[0] {
                 ValueRecord::Error { msg, .. } => assert_eq!(msg, "<dropped>"),
                 other => panic!("expected dropped sentinel return value, got {other:?}"),

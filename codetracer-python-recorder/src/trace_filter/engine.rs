@@ -243,21 +243,23 @@ impl TraceFilterEngine {
 
         let mut context = ScopeContext::derive(filename, self.config.sources());
         context.refresh_object_name(qualname);
-        let needs_module_name = context
-            .module_name
-            .as_ref()
-            .map(|name| !is_valid_module_name(name))
-            .unwrap_or(true);
-        if needs_module_name {
-            if let Some(absolute) = context.absolute_path.clone() {
-                if let Some(module) = self.resolve_module_name(py, &absolute) {
+        if let Some(absolute) = context.absolute_path.clone() {
+            if let Some(module) = self.resolve_module_name(py, &absolute) {
+                let replace = match context.module_name.as_deref() {
+                    None => true,
+                    Some(existing) => {
+                        !is_valid_module_name(existing)
+                            || (module == "__main__" && !existing.contains('.'))
+                    }
+                };
+                if replace {
                     context.update_module_name(module, qualname);
-                } else if context.module_name.is_none() {
-                    log::debug!(
-                        "[TraceFilter] unable to derive module name for '{}'; package selectors may not match",
-                        absolute
-                    );
                 }
+            } else if context.module_name.is_none() {
+                log::debug!(
+                    "[TraceFilter] unable to derive module name for '{}'; package selectors may not match",
+                    absolute
+                );
             }
         }
 
@@ -426,7 +428,7 @@ impl ScopeContext {
                 let stripped_owned = stripped.to_path_buf();
                 let better = match &best_match {
                     Some((_, current)) => {
-                        stripped_owned.components().count() >= current.components().count()
+                        stripped_owned.components().count() < current.components().count()
                     }
                     None => true,
                 };

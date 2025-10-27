@@ -1,6 +1,8 @@
 //! Shared helpers for deriving Python module names from filenames and module metadata.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::env;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
@@ -27,8 +29,9 @@ impl ModuleIdentityResolver {
 
     /// Construct a resolver from an explicit list of module roots. Visible for tests.
     pub fn from_roots(roots: Vec<String>) -> Self {
+        let module_roots = canonicalise_module_roots(roots);
         Self {
-            module_roots: Arc::from(roots),
+            module_roots,
             cache: DashMap::new(),
         }
     }
@@ -38,9 +41,24 @@ impl ModuleIdentityResolver {
         if let Some(entry) = self.cache.get(absolute) {
             return entry.clone();
         }
-        let resolved = module_name_from_roots(self.module_roots(), absolute)
-            .or_else(|| lookup_module_name(py, absolute));
-        self.cache.insert(absolute.to_string(), resolved.clone());
+        let mut path_candidate = module_name_from_roots(self.module_roots(), absolute);
+        if path_candidate
+            .as_ref()
+            .map(|name| is_filesystem_shaped_name(name, absolute))
+            .unwrap_or(true)
+        {
+            if let Some(heuristic) = module_name_from_heuristics(absolute) {
+                path_candidate = Some(heuristic);
+            }
+        }
+        let sys_candidate = lookup_module_name(py, absolute);
+        let (resolved, cacheable) = match (sys_candidate, path_candidate) {
+            (Some(preferred), _) => (Some(preferred), true),
+            (None, candidate) => (candidate, false),
+        };
+        if cacheable {
+            self.cache.insert(absolute.to_string(), resolved.clone());
+        }
         resolved
     }
 
@@ -84,6 +102,7 @@ impl ModuleIdentityCache {
             return entry.clone();
         }
 
+        let globals_name = hints.globals_name.and_then(sanitise_module_name);
         let mut resolved = hints
             .preferred
             .and_then(sanitise_module_name)
@@ -97,7 +116,18 @@ impl ModuleIdentityCache {
                     .absolute_path
                     .and_then(|absolute| self.resolver.resolve_absolute(py, absolute))
             })
-            .or_else(|| hints.globals_name.and_then(sanitise_module_name));
+            .or_else(|| globals_name.clone());
+
+        if let Some(globals) = globals_name.as_ref() {
+            if globals == "__main__"
+                && resolved
+                    .as_deref()
+                    .map(|candidate| candidate != "__main__")
+                    .unwrap_or(true)
+            {
+                resolved = Some(globals.clone());
+            }
+        }
 
         if resolved.is_none() && hints.absolute_path.is_none() {
             if let Ok(filename) = code.filename(py) {
@@ -153,11 +183,20 @@ impl<'a> ModuleNameHints<'a> {
 
 fn collect_module_roots(py: Python<'_>) -> Vec<String> {
     let mut roots = Vec::new();
+    let cwd = env::current_dir()
+        .ok()
+        .and_then(|dir| normalise_to_posix(dir.as_path()));
     if let Ok(sys) = py.import("sys") {
         if let Ok(path_obj) = sys.getattr("path") {
             if let Ok(path_list) = path_obj.downcast_into::<PyList>() {
                 for entry in path_list.iter() {
                     if let Ok(raw) = entry.extract::<String>() {
+                        if raw.is_empty() {
+                            if let Some(dir) = cwd.as_ref() {
+                                roots.push(dir.clone());
+                            }
+                            continue;
+                        }
                         if let Some(normalized) = normalise_to_posix(Path::new(&raw)) {
                             roots.push(normalized);
                         }
@@ -169,6 +208,38 @@ fn collect_module_roots(py: Python<'_>) -> Vec<String> {
     roots
 }
 
+fn canonicalise_module_roots(roots: Vec<String>) -> Arc<[String]> {
+    let mut canonical: Vec<String> = roots.into_iter().map(canonicalise_root).collect();
+    canonical.sort_by(|a, b| compare_roots(a, b));
+    canonical.dedup();
+    Arc::from(canonical)
+}
+
+fn canonicalise_root(mut root: String) -> String {
+    if root.is_empty() {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Some(normalized) = normalise_to_posix(cwd.as_path()) {
+                return normalized;
+            }
+        }
+        return "/".to_string();
+    }
+    while root.len() > 1 && root.ends_with('/') {
+        root.pop();
+    }
+    root
+}
+
+fn compare_roots(a: &str, b: &str) -> Ordering {
+    let len_a = a.len();
+    let len_b = b.len();
+    if len_a == len_b {
+        a.cmp(b)
+    } else {
+        len_b.cmp(&len_a)
+    }
+}
+
 pub(crate) fn module_name_from_roots(roots: &[String], absolute: &str) -> Option<String> {
     for base in roots {
         if let Some(relative) = strip_posix_prefix(absolute, base) {
@@ -178,6 +249,14 @@ pub(crate) fn module_name_from_roots(roots: &[String], absolute: &str) -> Option
         }
     }
     None
+}
+
+fn module_name_from_heuristics(absolute: &str) -> Option<String> {
+    let roots = heuristic_roots_for_absolute(absolute);
+    if roots.is_empty() {
+        return None;
+    }
+    module_name_from_roots(&roots, absolute)
 }
 
 fn lookup_module_name(py: Python<'_>, absolute: &str) -> Option<String> {
@@ -364,6 +443,69 @@ fn strip_posix_prefix<'a>(path: &'a str, base: &str) -> Option<&'a str> {
     }
 }
 
+fn module_from_absolute(absolute: &str) -> Option<String> {
+    let without_root = absolute.trim_start_matches('/');
+    let trimmed = trim_drive_prefix(without_root);
+    if trimmed.is_empty() {
+        return None;
+    }
+    module_from_relative(trimmed)
+}
+
+fn trim_drive_prefix(path: &str) -> &str {
+    if let Some((prefix, remainder)) = path.split_once('/') {
+        if prefix.ends_with(':') {
+            return remainder;
+        }
+    }
+    path
+}
+
+fn is_filesystem_shaped_name(candidate: &str, absolute: &str) -> bool {
+    module_from_absolute(absolute)
+        .as_deref()
+        .map(|path_like| path_like == candidate)
+        .unwrap_or(false)
+}
+
+fn heuristic_roots_for_absolute(absolute: &str) -> Vec<String> {
+    if let Some(project_root) = find_nearest_project_root(absolute) {
+        vec![project_root]
+    } else if let Some(parent) = Path::new(absolute)
+        .parent()
+        .and_then(|dir| normalise_to_posix(dir))
+    {
+        vec![parent]
+    } else {
+        Vec::new()
+    }
+}
+
+fn find_nearest_project_root(absolute: &str) -> Option<String> {
+    let mut current = Path::new(absolute).parent();
+    while let Some(dir) = current {
+        if has_project_marker(dir) {
+            return normalise_to_posix(dir);
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn has_project_marker(dir: &Path) -> bool {
+    const PROJECT_MARKER_FILES: &[&str] = &["pyproject.toml", "setup.cfg", "setup.py"];
+    const PROJECT_MARKER_DIRS: &[&str] = &[".git", ".hg", ".svn"];
+
+    PROJECT_MARKER_DIRS
+        .iter()
+        .map(|marker| dir.join(marker))
+        .any(|marker_dir| marker_dir.exists())
+        || PROJECT_MARKER_FILES
+            .iter()
+            .map(|marker| dir.join(marker))
+            .any(|marker_file| marker_file.exists())
+}
+
 /// Normalise a filesystem path to a POSIX-style string used by trace filters.
 pub fn normalise_to_posix(path: &Path) -> Option<String> {
     if path.as_os_str().is_empty() {
@@ -485,5 +627,139 @@ mod tests {
             module_from_relative("pkg/module/sub.py").as_deref(),
             Some("pkg.module.sub")
         );
+    }
+
+    #[test]
+    fn module_name_from_roots_prefers_specific_root_over_catch_all() {
+        Python::with_gil(|py| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let module_dir = tmp.path().join("pkg");
+            std::fs::create_dir_all(&module_dir).expect("mkdir");
+            let module_path = module_dir.join("mod.py");
+            std::fs::write(&module_path, "def foo():\n    return 1\n").expect("write");
+
+            let project_root = normalise_to_posix(tmp.path()).expect("normalize root");
+            let resolver =
+                ModuleIdentityResolver::from_roots(vec!["/".to_string(), project_root.clone()]);
+            let absolute_norm =
+                normalise_to_posix(module_path.as_path()).expect("normalize absolute");
+            let derived = module_name_from_roots(resolver.module_roots(), absolute_norm.as_str());
+
+            assert_eq!(derived.as_deref(), Some("pkg.mod"));
+
+            // suppress unused warnings
+            let _ = py;
+        });
+    }
+
+    #[test]
+    fn resolve_absolute_prefers_sys_modules_name_over_path_fallback() {
+        Python::with_gil(|py| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let module_dir = tmp.path().join("pkg");
+            std::fs::create_dir_all(&module_dir).expect("mkdir");
+            let module_path = module_dir.join("mod.py");
+            std::fs::write(&module_path, "def foo():\n    return 42\n").expect("write");
+
+            let module_path_str = module_path.to_string_lossy().to_string();
+            let module = load_module(
+                py,
+                "pkg.mod",
+                module_path_str.as_str(),
+                "def foo():\n    return 42\n",
+            )
+            .expect("load module");
+            let _code = get_code(&module, "foo");
+
+            let resolver = ModuleIdentityResolver::from_roots(vec!["/".to_string()]);
+            let absolute_norm =
+                normalise_to_posix(module_path.as_path()).expect("normalize absolute");
+            let resolved = resolver.resolve_absolute(py, absolute_norm.as_str());
+            assert_eq!(resolved.as_deref(), Some("pkg.mod"));
+
+            // clean up sys.modules to avoid cross-test contamination
+            if let Ok(sys) = py.import("sys") {
+                if let Ok(modules) = sys.getattr("modules") {
+                    let _ = modules.del_item("pkg.mod");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn resolve_absolute_uses_project_marker_root() {
+        Python::with_gil(|py| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let project_dir = tmp.path().join("project");
+            let tests_dir = project_dir.join("tests");
+            std::fs::create_dir_all(&tests_dir).expect("mkdir tests");
+            std::fs::create_dir(project_dir.join(".git")).expect("mkdir git");
+            let module_path = tests_dir.join("test_mod.py");
+            std::fs::write(&module_path, "def sample():\n    return 7\n").expect("write");
+
+            let resolver = ModuleIdentityResolver::from_roots(vec!["/".to_string()]);
+            let absolute_norm =
+                normalise_to_posix(module_path.as_path()).expect("normalize absolute");
+            let resolved = resolver.resolve_absolute(py, absolute_norm.as_str());
+
+            assert_eq!(resolved.as_deref(), Some("tests.test_mod"));
+        });
+    }
+
+    #[test]
+    fn resolve_absolute_returns_main_for_runpy_module() {
+        Python::with_gil(|py| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let script_path = tmp.path().join("cli.py");
+            std::fs::write(
+                &script_path,
+                "def entrypoint():\n    return 0\n\nif __name__ == '__main__':\n    entrypoint()\n",
+            )
+            .expect("write script");
+
+            let script_norm =
+                normalise_to_posix(script_path.as_path()).expect("normalize absolute path");
+
+            let sys = py.import("sys").expect("import sys");
+            let modules = sys.getattr("modules").expect("sys.modules");
+            let original_main = modules
+                .get_item("__main__")
+                .ok()
+                .map(|obj| obj.clone().unbind());
+
+            let module = PyModule::new(py, "__main__").expect("create module");
+            module
+                .setattr("__file__", script_path.to_string_lossy().as_ref())
+                .expect("set __file__");
+            module
+                .setattr("__name__", "__main__")
+                .expect("set __name__");
+            module
+                .setattr("__package__", py.None())
+                .expect("set __package__");
+            module
+                .setattr("__spec__", py.None())
+                .expect("set __spec__");
+            modules
+                .set_item("__main__", module)
+                .expect("register __main__");
+
+            let resolver = ModuleIdentityResolver::from_roots(vec!["/".to_string()]);
+            let resolved = resolver.resolve_absolute(py, script_norm.as_str());
+            assert_eq!(resolved.as_deref(), Some("__main__"));
+
+            match original_main {
+                Some(previous) => {
+                    modules
+                        .set_item("__main__", previous)
+                        .expect("restore __main__");
+                }
+                None => {
+                    modules
+                        .del_item("__main__")
+                        .expect("remove temporary __main__");
+                }
+            }
+        });
     }
 }
