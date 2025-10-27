@@ -22,7 +22,10 @@
   - Verification: `just dev` (editable build with `integration-test` feature) and `just py-test` (Python suites across both recorders) pass.
 
 ### WS2 – Runtime Exit State & `<toplevel>` Return Emission
-- **Status:** _Not Started_ (blocked on WS1 API plumbing).
+- **Status:** _Completed_
+  - `RuntimeTracer` now tracks a `SessionExitState`, emits the `<toplevel>` return during `finish`, and differentiates between explicit exit codes, default exits, and policy-driven disables.
+  - Added trait plumbing (`Tracer::set_exit_status`) plus installer wiring so `stop_tracing` can forward the exit code before teardown.
+  - Verification: `just cargo-test` (workspace) and `just py-test` exercises the new Rust test (`finish_emits_toplevel_return_with_exit_code`) and Python integration tests (`test_exit_payloads`).
 
 ### WS3 – Unified Trace Gate Abstraction
 - **Status:** _Not Started_.

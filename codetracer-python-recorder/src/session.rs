@@ -10,7 +10,12 @@ use recorder_errors::{usage, ErrorCode};
 
 use crate::ffi;
 use crate::logging::init_rust_logging_with_default;
-use crate::monitoring::{flush_installed_tracer, install_tracer, uninstall_tracer};
+use crate::monitoring::{
+    flush_installed_tracer,
+    install_tracer,
+    uninstall_tracer,
+    update_exit_status,
+};
 use crate::policy::policy_snapshot;
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
 use bootstrap::TraceSessionBootstrap;
@@ -76,8 +81,8 @@ pub fn start_tracing(
 #[pyfunction(signature = (exit_code=None))]
 pub fn stop_tracing(exit_code: Option<i32>) -> PyResult<()> {
     ffi::wrap_pyfunction("stop_tracing", || {
-        let _ = exit_code;
         Python::with_gil(|py| {
+            update_exit_status(py, exit_code)?;
             // Uninstall triggers finish() on tracer implementation.
             uninstall_tracer(py)?;
             ACTIVE.store(false, Ordering::SeqCst);

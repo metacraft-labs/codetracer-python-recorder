@@ -439,8 +439,17 @@ impl Tracer for RuntimeTracer {
         )
     }
 
+    fn set_exit_status(
+        &mut self,
+        _py: Python<'_>,
+        exit_code: Option<i32>,
+    ) -> PyResult<()> {
+        self.record_exit_status(exit_code);
+        Ok(())
+    }
+
     fn notify_failure(&mut self, _py: Python<'_>) -> PyResult<()> {
-        self.mark_failure();
+        self.mark_disabled();
         Ok(())
     }
 
@@ -483,6 +492,8 @@ impl Tracer for RuntimeTracer {
         if self.io.teardown(py, &mut self.writer) {
             self.mark_event();
         }
+
+        self.emit_session_exit(py);
 
         if self.lifecycle.encountered_failure() {
             if policy.keep_partial_trace {

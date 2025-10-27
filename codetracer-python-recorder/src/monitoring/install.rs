@@ -82,3 +82,11 @@ pub fn flush_installed_tracer(py: Python<'_>) -> PyResult<()> {
     }
     Ok(())
 }
+
+/// Provide the session exit status to the active tracer if one is installed.
+pub fn update_exit_status(py: Python<'_>, exit_code: Option<i32>) -> PyResult<()> {
+    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+        global.tracer.set_exit_status(py, exit_code)?;
+    }
+    Ok(())
+}

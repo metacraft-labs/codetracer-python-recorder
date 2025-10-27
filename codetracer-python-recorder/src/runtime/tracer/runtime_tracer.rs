@@ -9,14 +9,91 @@ use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::runtime::line_snapshots::LineSnapshotStore;
 use crate::runtime::output_paths::TraceOutputPaths;
+use crate::runtime::value_encoder::encode_value;
 use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyInt, PyString};
 use runtime_tracing::NonStreamingTraceWriter;
 use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::ThreadId;
+
+#[derive(Debug)]
+enum ExitPayload {
+    Code(i32),
+    Text(Cow<'static, str>),
+}
+
+impl ExitPayload {
+    fn is_code(&self) -> bool {
+        matches!(self, ExitPayload::Code(_))
+    }
+
+    #[cfg(test)]
+    fn is_text(&self, text: &str) -> bool {
+        matches!(self, ExitPayload::Text(current) if current.as_ref() == text)
+    }
+}
+
+#[derive(Debug)]
+struct SessionExitState {
+    payload: ExitPayload,
+    emitted: bool,
+}
+
+impl Default for SessionExitState {
+    fn default() -> Self {
+        Self {
+            payload: ExitPayload::Text(Cow::Borrowed("<exit>")),
+            emitted: false,
+        }
+    }
+}
+
+impl SessionExitState {
+    fn set_exit_code(&mut self, exit_code: Option<i32>) {
+        if self.can_override_with_code() {
+            self.payload = exit_code
+                .map(ExitPayload::Code)
+                .unwrap_or_else(|| ExitPayload::Text(Cow::Borrowed("<exit>")));
+        }
+    }
+
+    fn mark_disabled(&mut self) {
+        if !self.payload.is_code() {
+            self.payload = ExitPayload::Text(Cow::Borrowed("<disabled>"));
+        }
+    }
+
+    #[cfg(test)]
+    fn mark_failure(&mut self) {
+        if !self.payload.is_code() && !self.payload.is_text("<disabled>") {
+            self.payload = ExitPayload::Text(Cow::Borrowed("<failure>"));
+        }
+    }
+
+    fn can_override_with_code(&self) -> bool {
+        matches!(&self.payload, ExitPayload::Text(current) if current.as_ref() == "<exit>")
+    }
+
+    fn as_bound<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
+        match &self.payload {
+            ExitPayload::Code(value) => PyInt::new(py, *value).into_any(),
+            ExitPayload::Text(text) => PyString::new(py, text.as_ref()).into_any(),
+        }
+    }
+
+    fn mark_emitted(&mut self) {
+        self.emitted = true;
+    }
+
+    fn is_emitted(&self) -> bool {
+        self.emitted
+    }
+}
 
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
@@ -28,6 +105,7 @@ pub struct RuntimeTracer {
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
     pub(super) module_names: ModuleIdentityCache,
+    session_exit: SessionExitState,
 }
 
 impl RuntimeTracer {
@@ -49,6 +127,7 @@ impl RuntimeTracer {
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
             module_names: ModuleIdentityCache::new(),
+            session_exit: SessionExitState::default(),
         }
     }
 
@@ -78,6 +157,18 @@ impl RuntimeTracer {
         }
     }
 
+    pub(super) fn emit_session_exit(&mut self, py: Python<'_>) {
+        if self.session_exit.is_emitted() {
+            return;
+        }
+
+        self.flush_pending_io();
+        let value = self.session_exit.as_bound(py);
+        let record = encode_value(py, &mut self.writer, &value);
+        TraceWriter::register_return(&mut self.writer, record);
+        self.session_exit.mark_emitted();
+    }
+
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
@@ -95,8 +186,19 @@ impl RuntimeTracer {
         self.lifecycle.mark_event();
     }
 
+    #[cfg(test)]
     pub(super) fn mark_failure(&mut self) {
+        self.session_exit.mark_failure();
         self.lifecycle.mark_failure();
+    }
+
+    pub(super) fn mark_disabled(&mut self) {
+        self.session_exit.mark_disabled();
+        self.lifecycle.mark_failure();
+    }
+
+    pub(super) fn record_exit_status(&mut self, exit_code: Option<i32>) {
+        self.session_exit.set_exit_code(exit_code);
     }
 
     pub(super) fn ensure_function_id(
@@ -1323,6 +1425,45 @@ initializer("omega")
                 call_count, return_count,
                 "drop filters must keep call/return pairs balanced"
             );
+        });
+    }
+
+    #[test]
+    fn finish_emits_toplevel_return_with_exit_code() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+
+            let script_dir = tempfile::tempdir().expect("script dir");
+            let program_path = script_dir.path().join("program.py");
+            std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+
+            let mut tracer = RuntimeTracer::new(
+                program_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            tracer.record_exit_status(Some(7));
+
+            tracer.finish(py).expect("finish tracer");
+
+            let mut exit_value: Option<ValueRecord> = None;
+            for event in &tracer.writer.events {
+                if let TraceLowLevelEvent::Return(record) = event {
+                    exit_value = Some(record.return_value.clone());
+                }
+            }
+
+            let exit_value = exit_value.expect("expected toplevel return value");
+            match exit_value {
+                ValueRecord::Int { i, .. } => assert_eq!(i, 7),
+                other => panic!("expected integer exit value, got {other:?}"),
+            }
         });
     }
 
