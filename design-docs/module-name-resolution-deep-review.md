@@ -31,52 +31,35 @@ The current design assumes the reader understands the following basics:
 
 ## 4. Where the Logic Lives
 
-- `codetracer-python-recorder/src/module_identity.rs:18` – core resolver, caching, heuristics, and helpers (`normalise_to_posix`, `module_from_relative`, etc.).
-- `codetracer-python-recorder/src/trace_filter/engine.rs:183` – owns a `ModuleIdentityResolver` instance, builds `ScopeContext`, and stores resolved module names inside `ScopeResolution`.
-- `codetracer-python-recorder/src/runtime/tracer/runtime_tracer.rs:280` – turns `<module>` frames into `<{module}>` labels using `ModuleIdentityCache`.
-- `codetracer-python-recorder/src/runtime/tracer/filtering.rs:19` – captures filter outcomes and pipes their module hints back to the tracer.
-- Tests exercising the behaviour: Rust unit tests in `codetracer-python-recorder/src/module_identity.rs:551` and Python integration coverage in `codetracer-python-recorder/tests/python/test_monitoring_events.py:199`.
+- `codetracer-python-recorder/src/module_identity.rs` – lightweight helpers such as `module_from_relative`, `module_name_from_packages`, and `normalise_to_posix` that turn paths into dotted names.
+- `codetracer-python-recorder/src/trace_filter/engine.rs` – builds a `ScopeContext`, keeps relative/absolute paths, and applies package-aware heuristics whenever filters do not provide an explicit module hint.
+- `codetracer-python-recorder/src/runtime/tracer/runtime_tracer.rs` – turns `<module>` frames into `<{module}>` labels by preferring the globals-derived hint, falling back to filter resolutions, and finally to the on-disk package structure.
+- `codetracer-python-recorder/src/runtime/tracer/filtering.rs` – captures filter outcomes, stores module hints collected during `py_start`, and exposes them to the tracer.
+- Tests exercising the behaviour: Rust unit tests in `codetracer-python-recorder/src/module_identity.rs` and Python integration coverage in `codetracer-python-recorder/tests/python/test_monitoring_events.py`.
 
-The pure-Python recorder does not perform advanced module-name derivation; all of the reusable logic lives in the Rust-backed module.
+The pure-Python recorder does not perform advanced module-name derivation; all reusable logic lives in the Rust-backed module.
 
 ## 5. How the Algorithm Works End to End
 
-### 5.1 Building the resolver
-1. `ModuleIdentityResolver::new` snapshots `sys.path` under the GIL, normalises each entry to POSIX form, removes duplicates, and sorts by descending length so more specific roots win (`module_identity.rs:24`–`:227`).
-2. Each entry stays cached for the duration of the recorder session; mutations to `sys.path` after startup are not observed automatically.
+### 5.1 Capturing module hints
+1. `RuntimeTracer::on_py_start` grabs `frame.f_globals['__name__']` for `<module>` code objects and stores that value in `FilterCoordinator` before any gating decisions run.
+2. The hint is retained for the lifetime of the code object (and cleared once non-module frames arrive) so both the filter engine and the tracer can reuse it.
 
-### 5.2 Resolving an absolute filename
-Given a normalised absolute path (e.g., `/home/app/pkg/service.py`):
+### 5.2 Filter resolution
+1. `TraceFilterEngine::resolve` begins with configuration metadata: project-relative paths, activation roots, and module names supplied by filters.
+2. If no valid module name is present, the engine consults the incoming hint. Failing that, it walks up the filesystem looking for `__init__.py` packages (`module_name_from_packages`) and uses the file stem as a last resort.
+3. The resulting `ScopeResolution` records the derived module name, relative and absolute paths, and the execution decision; the resolution is cached per code object.
 
-1. **Path-based attempt** – `module_name_from_roots` strips each known root and converts the remainder into a dotted form (`pkg/service.py → pkg.service`). This is fast and succeeds for project code and site-packages that live under a `sys.path` entry (`module_identity.rs:229`–`:238`).
-2. **Heuristics** – if the first guess looks like a raw filesystem echo (meaning we probably matched a catch-all root like `/`), the resolver searches upward for project markers (`pyproject.toml`, `.git`, etc.) and retries with that directory as the root. Failing that, it uses the immediate parent directory (`module_identity.rs:240`–`:468`).
-3. **`sys.modules` sweep** – the resolver iterates through loaded modules, comparing `__spec__.origin`, `__file__`, or `__cached__` paths (normalised to POSIX) against the target filename, accounting for `.py` vs `.pyc` differences. Any valid dotted name wins over heuristic guesses (`module_identity.rs:248`–`:335`).
-4. The winning name (or lack thereof) is cached by absolute path in a `DashMap` so future lookups avoid repeated sys.modules scans (`module_identity.rs:54`–`:60`).
-
-### 5.3 Mapping code objects to module names
-
-`ModuleIdentityCache::resolve_for_code` accepts optional hints:
-
-1. **Preferred hint** – e.g., the filter engine’s stored module name. It is accepted only if it is a valid dotted identifier (`module_identity.rs:103`–`:116`).
-2. **Relative path** – converted via `module_from_relative` when supplied (`module_identity.rs:107`–`:110`).
-3. **Absolute path** – triggers the resolver described above (`module_identity.rs:112`–`:115`).
-4. **Globals-based hint** – a last resort using `frame.f_globals["__name__"]` when available (`module_identity.rs:116`).
-
-If no hints contain an absolute path, the cache will read `co_filename`, normalise it, and resolve it once (`module_identity.rs:118`–`:127`). Results (including failures) are memoised per `code_id`.
-
-### 5.4 Feeding results into the rest of the system
-
-1. The trace filter builds a `ScopeContext` for every new code object. It records project-relative paths and module names derived from configuration roots, then calls back into the resolver if the preliminary name is missing or invalid (`trace_filter/engine.rs:420`–`:471`).
-2. The resulting `ScopeResolution` is cached and exposed to the runtime tracer via `FilterCoordinator`, providing rich hints (`runtime/tracer/filtering.rs:43`).
-3. During execution, `RuntimeTracer::function_name` reaches into the shared cache to turn `<module>` qualnames into `<pkg.module>` labels. If every heuristic fails, it safely falls back to the original `<module>` string (`runtime_tracer.rs:280`–`:305`).
-4. Both subsystems reuse the same `ModuleIdentityResolver`, ensuring trace files and filtering decisions stay consistent.
+### 5.3 Runtime naming
+1. When emitting events, `RuntimeTracer::function_name` first checks the stored module hint. If the globals-derived name exists, it wins; this keeps opt-in behaviour aligned with Python logging.
+2. Absent a hint, the tracer falls back to the cached `ScopeResolution` module name, then to package detection via `module_name_from_packages`, and finally leaves `<module>` unchanged.
+3. The tracer no longer keeps a resolver cache, so the hot path is reduced to string comparisons and light filesystem checks.
 
 ## 6. Bugs, Risks, and Observations
 
-- **Prefix matching ignores path boundaries** – `strip_posix_prefix` checks `path.starts_with(base)` without verifying the next character is a separator. A root like `/opt/app` therefore incorrectly matches `/opt/application/module.py`, yielding the bogus module `lication.module`. When `sys.modules` lacks the correct entry (e.g., resolving a file before import), the resolver will cache this wrong answer (`module_identity.rs:410`–`:426`).
-- **Case sensitivity on Windows** – normalisation preserves whatever casing the OS returns. If `co_filename` and `sys.modules` report the same path with different casing, `equivalent_posix_paths` will not treat them as equal, causing the fallback to miss (`module_identity.rs:317`–`:324`). Consider lowercasing drive prefixes or using `Path::eq` semantics behind the GIL.
-- **`sys.path` mutations after startup** – the resolver snapshots roots once. If tooling modifies `sys.path` later (common in virtualenv activation scripts), we will never see the new prefix, so we fall back to heuristics or `sys.modules`. Documenting this behaviour or exposing a method to refresh the roots may avoid surprises.
-- **Project-marker heuristics hit the filesystem** – `has_project_marker` calls `exists()` for every parent directory when the fast path fails (`module_identity.rs:470`–`:493`). Because results are cached per file this is usually acceptable, but tracing thousands of unique `site-packages` files on network storage could still become expensive.
+- **Globals may remain `__main__` for direct scripts** – this is intentional and matches logging, but filter authors must target `pkg:__main__` when skipping script bodies.
+- **Package detection relies on `__init__.py`** – namespace packages without marker files produce the leaf module name only (e.g., `service.handler`). If this proves problematic we can detect `pyproject.toml`/`setup.cfg` to extend coverage.
+- **Filesystem traversal on first encounter** – the package walk performs existence checks until it finds the first non-package directory. Results are cached per code object so the overhead is modest, but tracing thousands of unique modules on slow filesystems could still be noticeable.
+- **Globals introspection can fail** – exotic frames that refuse `PyFrame_FastToLocalsWithError` leave the hint empty. We fall back to filesystem heuristics, but selectors relying solely on globals may miss until the module imports cleanly.
 
-Addressing the first two items would materially improve correctness; the latter two are design trade-offs worth monitoring.
-
+These trade-offs are significantly narrower than the previous resolver-based design and keep the module-name derivation consistent with Python's own conventions.

@@ -27,3 +27,7 @@
 ### Stage 2 – Simplify Filter Engine
 - **Status:** Completed  
   Removed the resolver dependency from `TraceFilterEngine`, teach it to accept globals-based hints, and added a package-structure fallback when relative paths are unavailable. Filtering decisions now rely on the new hint flow while keeping legacy behaviour intact for `module_name_from_globals` opt-out scenarios.
+
+### Stage 3 – Runtime Naming Downstream
+- **Status:** Completed  
+  `RuntimeTracer` no longer depends on `ModuleIdentityCache`; it prefers globals hints, otherwise reuses filter resolutions, `sys.path` roots, or package markers before falling back to `<module>`. The shared helpers in `module_identity.rs` were slimmed down accordingly, and updated unit/integration tests confirm the new flow.

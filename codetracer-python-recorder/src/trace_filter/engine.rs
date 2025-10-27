@@ -4,7 +4,9 @@
 //! and caches per-code-object resolutions so the hot tracing callbacks only pay a fast lookup.
 
 use crate::code_object::CodeObjectWrapper;
-use crate::module_identity::{is_valid_module_name, module_from_relative, normalise_to_posix};
+use crate::module_identity::{
+    is_valid_module_name, module_from_relative, module_name_from_packages, normalise_to_posix,
+};
 use crate::trace_filter::config::{
     ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction,
     ValuePattern,
@@ -489,39 +491,6 @@ fn normalise_relative(relative: PathBuf) -> String {
         }
     }
     components.join("/")
-}
-
-fn module_name_from_packages(path: &Path) -> Option<String> {
-    let mut segments: Vec<String> = Vec::new();
-    let mut current = path.parent();
-
-    while let Some(dir) = current {
-        let init = dir.join("__init__.py");
-        if init.exists() {
-            if let Some(name) = dir.file_name().and_then(|s| s.to_str()) {
-                if is_valid_module_name(name) {
-                    segments.push(name.to_string());
-                    current = dir.parent();
-                    continue;
-                }
-            }
-        }
-        break;
-    }
-
-    segments.reverse();
-
-    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        if stem != "__init__" && is_valid_module_name(stem) {
-            segments.push(stem.to_string());
-        }
-    }
-
-    if segments.is_empty() {
-        return None;
-    }
-
-    Some(segments.join("."))
 }
 
 fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {

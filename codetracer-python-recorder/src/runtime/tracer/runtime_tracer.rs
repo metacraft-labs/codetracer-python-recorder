@@ -4,7 +4,9 @@ use super::io::IoCoordinator;
 use super::lifecycle::LifecycleController;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
-use crate::module_identity::{ModuleIdentityCache, ModuleNameHints};
+use crate::module_identity::{
+    module_from_relative, module_name_from_packages, module_name_from_sys_path,
+};
 use crate::monitoring::CallbackOutcome;
 use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
@@ -124,7 +126,6 @@ pub struct RuntimeTracer {
     pub(super) function_ids: HashMap<usize, runtime_tracing::FunctionId>,
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
-    pub(super) module_names: ModuleIdentityCache,
     pub(super) module_name_from_globals: bool,
     session_exit: SessionExitState,
 }
@@ -148,7 +149,6 @@ impl RuntimeTracer {
             function_ids: HashMap::new(),
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
-            module_names: ModuleIdentityCache::new(),
             module_name_from_globals,
             session_exit: SessionExitState::default(),
         }
@@ -304,17 +304,35 @@ impl RuntimeTracer {
 
         let resolution = self.filter.cached_resolution(code.id());
         if let Some(resolution) = resolution.as_ref() {
-            let hints = ModuleNameHints {
-                preferred: resolution.module_name(),
-                relative_path: resolution.relative_path(),
-                absolute_path: resolution.absolute_path(),
-                globals_name: None,
-            };
-            self.module_names.resolve_for_code(py, code, hints)
-        } else {
-            self.module_names
-                .resolve_for_code(py, code, ModuleNameHints::default())
+            if let Some(name) = resolution.module_name() {
+                return Some(name.to_string());
+            }
+            if let Some(relative) = resolution.relative_path() {
+                if let Some(name) = module_from_relative(relative) {
+                    return Some(name);
+                }
+            }
+            if let Some(absolute) = resolution.absolute_path() {
+                if let Some(name) = module_name_from_sys_path(py, Path::new(absolute)) {
+                    return Some(name);
+                }
+                if let Some(name) = module_name_from_packages(Path::new(absolute)) {
+                    return Some(name);
+                }
+            }
         }
+
+        if let Ok(filename) = code.filename(py) {
+            let path = Path::new(filename);
+            if let Some(name) = module_name_from_sys_path(py, path) {
+                return Some(name);
+            }
+            if let Some(name) = module_name_from_packages(path) {
+                return Some(name);
+            }
+        }
+
+        None
     }
 }
 
