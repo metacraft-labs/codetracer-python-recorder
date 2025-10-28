@@ -121,7 +121,10 @@ impl LifecycleController {
             enverr!(ErrorCode::Io, "failed to finalise trace events")
                 .with_context("source", err.to_string())
         })?;
-        debug!("[Lifecycle] writing exit metadata: code={:?}, label={:?}", exit_summary.code, exit_summary.label);
+        debug!(
+            "[Lifecycle] writing exit metadata: code={:?}, label={:?}",
+            exit_summary.code, exit_summary.label
+        );
         self.append_filter_metadata(filter)?;
         self.append_exit_metadata(exit_summary)?;
         Ok(())

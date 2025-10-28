@@ -71,6 +71,7 @@ pub struct RecorderPolicy {
     pub log_file: Option<PathBuf>,
     pub json_errors: bool,
     pub io_capture: IoCapturePolicy,
+    pub module_name_from_globals: bool,
 }
 
 impl Default for RecorderPolicy {
@@ -83,6 +84,7 @@ impl Default for RecorderPolicy {
             log_file: None,
             json_errors: false,
             io_capture: IoCapturePolicy::default(),
+            module_name_from_globals: true,
         }
     }
 }
@@ -123,6 +125,9 @@ impl RecorderPolicy {
             // fd fallback requires proxies to be on.
             self.io_capture.fd_fallback = fd_fallback && self.io_capture.line_proxies;
         }
+        if let Some(module_name_from_globals) = update.module_name_from_globals {
+            self.module_name_from_globals = module_name_from_globals;
+        }
     }
 }
 
@@ -144,6 +149,7 @@ pub(crate) struct PolicyUpdate {
     pub(crate) json_errors: Option<bool>,
     pub(crate) io_capture_line_proxies: Option<bool>,
     pub(crate) io_capture_fd_fallback: Option<bool>,
+    pub(crate) module_name_from_globals: Option<bool>,
 }
 
 /// Snapshot the current policy.

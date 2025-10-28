@@ -156,3 +156,35 @@ def test_parse_args_enables_io_capture_fd_mirroring(tmp_path: Path) -> None:
         "io_capture_line_proxies": True,
         "io_capture_fd_fallback": True,
     }
+
+
+def test_parse_args_enables_module_name_from_globals(tmp_path: Path) -> None:
+    script = tmp_path / "entry.py"
+    _write_script(script)
+
+    config = _parse_args(
+        [
+            "--module-name-from-globals",
+            str(script),
+        ]
+    )
+
+    assert config.policy_overrides == {
+        "module_name_from_globals": True,
+    }
+
+
+def test_parse_args_disables_module_name_from_globals(tmp_path: Path) -> None:
+    script = tmp_path / "entry.py"
+    _write_script(script)
+
+    config = _parse_args(
+        [
+            "--no-module-name-from-globals",
+            str(script),
+        ]
+    )
+
+    assert config.policy_overrides == {
+        "module_name_from_globals": False,
+    }

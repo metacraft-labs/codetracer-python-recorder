@@ -176,6 +176,21 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
+        let globals_name = match capture_frame(py, code) {
+            Ok(snapshot) => {
+                let mapping = snapshot.globals().unwrap_or_else(|| snapshot.locals());
+                mapping
+                    .get_item("__name__")
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.extract::<String>().ok())
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty())
+            }
+            Err(_) => None,
+        };
+        self.filter.set_module_name_hint(code.id(), globals_name);
+
         if let Some(outcome) = self.evaluate_gate(py, code, true) {
             return Ok(outcome);
         }
@@ -398,11 +413,7 @@ impl Tracer for RuntimeTracer {
         )
     }
 
-    fn set_exit_status(
-        &mut self,
-        _py: Python<'_>,
-        exit_code: Option<i32>,
-    ) -> PyResult<()> {
+    fn set_exit_status(&mut self, _py: Python<'_>, exit_code: Option<i32>) -> PyResult<()> {
         self.record_exit_status(exit_code);
         Ok(())
     }
@@ -458,7 +469,9 @@ impl Tracer for RuntimeTracer {
 
         if self.lifecycle.encountered_failure() {
             if policy.keep_partial_trace {
-                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter, &exit_summary)
+                if let Err(err) =
+                    self.lifecycle
+                        .finalise(&mut self.writer, &self.filter, &exit_summary)
                 {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
@@ -481,7 +494,6 @@ impl Tracer for RuntimeTracer {
                     .map_err(ffi::map_recorder_error)?;
             }
             self.function_ids.clear();
-            self.module_names.clear();
             self.io.clear_snapshots();
             self.filter.reset();
             self.lifecycle.reset_event_state();
@@ -495,7 +507,6 @@ impl Tracer for RuntimeTracer {
             .finalise(&mut self.writer, &self.filter, &exit_summary)
             .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
-        self.module_names.clear();
         self.filter.reset();
         self.io.clear_snapshots();
         self.lifecycle.reset_event_state();

@@ -4,7 +4,9 @@ use super::io::IoCoordinator;
 use super::lifecycle::LifecycleController;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
-use crate::module_identity::{ModuleIdentityCache, ModuleNameHints};
+use crate::module_identity::{
+    module_from_relative, module_name_from_packages, module_name_from_sys_path,
+};
 use crate::monitoring::CallbackOutcome;
 use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
@@ -124,7 +126,7 @@ pub struct RuntimeTracer {
     pub(super) function_ids: HashMap<usize, runtime_tracing::FunctionId>,
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
-    pub(super) module_names: ModuleIdentityCache,
+    pub(super) module_name_from_globals: bool,
     session_exit: SessionExitState,
 }
 
@@ -135,6 +137,7 @@ impl RuntimeTracer {
         format: TraceEventsFileFormat,
         activation_path: Option<&Path>,
         trace_filter: Option<Arc<TraceFilterEngine>>,
+        module_name_from_globals: bool,
     ) -> Self {
         let mut writer = NonStreamingTraceWriter::new(program, args);
         writer.set_format(format);
@@ -146,7 +149,7 @@ impl RuntimeTracer {
             function_ids: HashMap::new(),
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
-            module_names: ModuleIdentityCache::new(),
+            module_name_from_globals,
             session_exit: SessionExitState::default(),
         }
     }
@@ -231,7 +234,10 @@ impl RuntimeTracer {
         code: &CodeObjectWrapper,
         allow_disable: bool,
     ) -> Option<CallbackOutcome> {
-        let is_active = self.lifecycle.activation_mut().should_process_event(py, code);
+        let is_active = self
+            .lifecycle
+            .activation_mut()
+            .should_process_event(py, code);
         if matches!(
             self.should_trace_code(py, code),
             TraceDecision::SkipAndDisable
@@ -290,19 +296,43 @@ impl RuntimeTracer {
     }
 
     fn derive_module_name(&self, py: Python<'_>, code: &CodeObjectWrapper) -> Option<String> {
+        if self.module_name_from_globals {
+            if let Some(name) = self.filter.module_name_hint(code.id()) {
+                return Some(name);
+            }
+        }
+
         let resolution = self.filter.cached_resolution(code.id());
         if let Some(resolution) = resolution.as_ref() {
-            let hints = ModuleNameHints {
-                preferred: resolution.module_name(),
-                relative_path: resolution.relative_path(),
-                absolute_path: resolution.absolute_path(),
-                globals_name: None,
-            };
-            self.module_names.resolve_for_code(py, code, hints)
-        } else {
-            self.module_names
-                .resolve_for_code(py, code, ModuleNameHints::default())
+            if let Some(name) = resolution.module_name() {
+                return Some(name.to_string());
+            }
+            if let Some(relative) = resolution.relative_path() {
+                if let Some(name) = module_from_relative(relative) {
+                    return Some(name);
+                }
+            }
+            if let Some(absolute) = resolution.absolute_path() {
+                if let Some(name) = module_name_from_sys_path(py, Path::new(absolute)) {
+                    return Some(name);
+                }
+                if let Some(name) = module_name_from_packages(Path::new(absolute)) {
+                    return Some(name);
+                }
+            }
         }
+
+        if let Ok(filename) = code.filename(py) {
+            let path = Path::new(filename);
+            if let Some(name) = module_name_from_sys_path(py, path) {
+                return Some(name);
+            }
+            if let Some(name) = module_name_from_packages(path) {
+                return Some(name);
+            }
+        }
+
+        None
     }
 }
 
@@ -370,6 +400,7 @@ mod tests {
             Some(false),
             None,
             None,
+            Some(false),
         )
         .expect("reset recorder policy");
     }
@@ -387,8 +418,14 @@ mod tests {
     #[test]
     fn skips_synthetic_filename_events() {
         Python::with_gil(|py| {
-            let mut tracer =
-                RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None, None);
+            let mut tracer = RuntimeTracer::new(
+                "test.py",
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+                false,
+            );
             ensure_test_module(py);
             let script = format!("{PRELUDE}\nsnapshot()\n");
             {
@@ -484,6 +521,7 @@ result = compute()\n"
                 TraceEventsFileFormat::Json,
                 Some(script_path.as_path()),
                 None,
+                false,
             );
 
             {
@@ -535,6 +573,7 @@ result = compute()\n"
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             let store = tracer.line_snapshot_store();
 
@@ -593,6 +632,7 @@ result = compute()\n"
                 Some(false),
                 Some(true),
                 Some(false),
+                Some(false),
             )
             .expect("enable io capture proxies");
 
@@ -610,6 +650,7 @@ result = compute()\n"
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
             tracer.begin(&outputs, 1).expect("begin tracer");
@@ -682,6 +723,7 @@ result = compute()\n"
                 Some(false),
                 Some(true),
                 Some(true),
+                Some(false),
             )
             .expect("enable io capture with fd fallback");
 
@@ -702,6 +744,7 @@ result = compute()\n"
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
             tracer.begin(&outputs, 1).expect("begin tracer");
@@ -788,6 +831,7 @@ result = compute()\n"
                 Some(false),
                 Some(true),
                 Some(false),
+                Some(false),
             )
             .expect("enable proxies without fd fallback");
 
@@ -808,6 +852,7 @@ result = compute()\n"
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
             tracer.begin(&outputs, 1).expect("begin tracer");
@@ -1062,8 +1107,14 @@ def start_call():
 
     fn run_traced_script(body: &str) -> Vec<Snapshot> {
         Python::with_gil(|py| {
-            let mut tracer =
-                RuntimeTracer::new("test.py", &[], TraceEventsFileFormat::Json, None, None);
+            let mut tracer = RuntimeTracer::new(
+                "test.py",
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+                false,
+            );
             ensure_test_module(py);
             let tmp = tempfile::tempdir().expect("create temp dir");
             let script_path = tmp.path().join("script.py");
@@ -1187,6 +1238,7 @@ sensitive("s3cr3t")
                 TraceEventsFileFormat::Json,
                 None,
                 Some(engine),
+                false,
             );
 
             {
@@ -1293,8 +1345,14 @@ sensitive("s3cr3t")
                 .call_method1("insert", (0, pkg_root.to_string_lossy().as_ref()))
                 .expect("insert temp root");
 
-            let tracer =
-                RuntimeTracer::new("runner.py", &[], TraceEventsFileFormat::Json, None, None);
+            let tracer = RuntimeTracer::new(
+                "runner.py",
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+                false,
+            );
 
             let builtins = py.import("builtins").expect("builtins");
             let compile = builtins.getattr("compile").expect("compile builtin");
@@ -1357,6 +1415,7 @@ dropper()
                 TraceEventsFileFormat::Json,
                 None,
                 Some(engine),
+                false,
             );
 
             {
@@ -1388,7 +1447,11 @@ dropper()
                 "expected no variables captured, found {:?}",
                 variable_names
             );
-            assert_eq!(return_values.len(), 1, "return event should remain balanced");
+            assert_eq!(
+                return_values.len(),
+                1,
+                "return event should remain balanced"
+            );
             match &return_values[0] {
                 ValueRecord::Error { msg, .. } => assert_eq!(msg, "<dropped>"),
                 other => panic!("expected dropped sentinel return value, got {other:?}"),
@@ -1440,6 +1503,7 @@ initializer("omega")
                 TraceEventsFileFormat::Json,
                 None,
                 Some(engine),
+                false,
             );
 
             {
@@ -1493,6 +1557,7 @@ initializer("omega")
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer.record_exit_status(Some(7));
@@ -1599,6 +1664,7 @@ sensitive("s3cr3t")
                 TraceEventsFileFormat::Json,
                 None,
                 Some(engine),
+                false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
 
@@ -2138,6 +2204,7 @@ snapshot()
                 Some(false),
                 None,
                 None,
+                Some(false),
             )
             .expect("enable require_trace policy");
 
@@ -2154,6 +2221,7 @@ snapshot()
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
 
@@ -2188,6 +2256,7 @@ snapshot()
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer.mark_failure();
@@ -2215,6 +2284,7 @@ snapshot()
                 Some(false),
                 None,
                 None,
+                Some(false),
             )
             .expect("enable keep_partial policy");
 
@@ -2231,6 +2301,7 @@ snapshot()
                 TraceEventsFileFormat::Json,
                 None,
                 None,
+                false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer.mark_failure();

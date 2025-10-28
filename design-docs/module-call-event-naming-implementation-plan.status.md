@@ -19,12 +19,12 @@
 ### WS1 – Shared Module Identity Helper
 - **Scope recap:** Extract and centralise module-name derivation (relative path stripping + `sys.modules` lookup) so both filters and the runtime tracer can reuse it with caching.
 - **Status:** _Completed_
-- **Notes:** `src/module_identity.rs` now owns `ModuleIdentityResolver`, `ModuleIdentityCache`, sanitisation helpers, and unit tests covering `.py` vs `.pyc`, package roots, and hint precedence. `TraceFilterEngine` uses the shared resolver for all module lookups, keeping behaviour aligned between filtering and runtime components.
+-- **Notes:** `src/module_identity.rs` now provides the lightweight helpers (`module_from_relative`, `module_name_from_packages`, etc.) that both the tracer and filter engine reuse when hints are missing, keeping naming consistent across components.
 
 ### WS2 – Runtime Tracer Integration
 - **Scope recap:** Detect module-level code (`co_qualname == "<module>"`) and rename call events to `<module-name>` using the shared resolver; plumb filter-derived names to avoid duplicate work.
 - **Status:** _Completed_
-- **Notes:** `RuntimeTracer` now rewrites module-level call events via `ModuleIdentityCache`, clears the cache alongside `function_ids`, and exposes a test hook to verify naming logic. Added a unit test (`module_import_records_module_name`) and a Python integration test (`test_module_imports_record_package_names`) that traces a real import to confirm `<pkg.mod>` shows up in `trace.json`.
+-- **Notes:** `RuntimeTracer` rewrites module-level call events using the globals-derived hint or the filter’s cached resolution, with integration tests (`module_import_records_module_name`, `test_module_imports_record_package_names`) confirming `<pkg.mod>` appears in `trace.json`.
 
 ### WS3 – Testing, Tooling, and Docs
 - **Scope recap:** Add regression tests (Python + Rust) validating the new naming, update documentation/changelog, and refresh any snapshot expectations.

@@ -11,10 +11,7 @@ use recorder_errors::{usage, ErrorCode};
 use crate::ffi;
 use crate::logging::init_rust_logging_with_default;
 use crate::monitoring::{
-    flush_installed_tracer,
-    install_tracer,
-    uninstall_tracer,
-    update_exit_status,
+    flush_installed_tracer, install_tracer, uninstall_tracer, update_exit_status,
 };
 use crate::policy::policy_snapshot;
 use crate::runtime::{RuntimeTracer, TraceOutputPaths};
@@ -65,6 +62,7 @@ pub fn start_tracing(
                 bootstrap.format(),
                 bootstrap.activation_path(),
                 bootstrap.trace_filter(),
+                policy.module_name_from_globals,
             );
             tracer.begin(&outputs, 1)?;
             tracer.install_io_capture(py, &policy)?;

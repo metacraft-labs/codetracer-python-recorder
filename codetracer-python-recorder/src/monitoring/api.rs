@@ -108,11 +108,7 @@ pub trait Tracer: Send + Any {
     }
 
     /// Provide the process exit status ahead of tracer teardown.
-    fn set_exit_status(
-        &mut self,
-        _py: Python<'_>,
-        _exit_code: Option<i32>,
-    ) -> PyResult<()> {
+    fn set_exit_status(&mut self, _py: Python<'_>, _exit_code: Option<i32>) -> PyResult<()> {
         Ok(())
     }
 

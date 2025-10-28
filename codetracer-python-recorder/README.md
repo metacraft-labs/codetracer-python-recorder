@@ -84,7 +84,8 @@ action = "drop"
 
 ## Trace naming semantics
 
-- Module-level activations no longer appear as the ambiguous `<module>` label. When the recorder sees `co_qualname == "<module>"`, it derives the actual dotted package name (e.g., `<my_pkg.mod>` or `<boto3.session>`) using project roots, `sys.modules`, and frame metadata.
+- Module-level activations no longer appear as the ambiguous `<module>` label. When the recorder sees `co_qualname == "<module>"`, it first reuses the frame's `__name__`, then falls back to trace-filter hints, `sys.path` roots, and package markers so scripts report `<__main__>` while real modules keep their dotted names (e.g., `<my_pkg.mod>` or `<boto3.session>`).
+- The globals-derived naming flow ships enabled by default; disable it temporarily with `--no-module-name-from-globals`, `codetracer.configure_policy(module_name_from_globals=False)`, or `CODETRACER_MODULE_NAME_FROM_GLOBALS=0` if you need to compare against the legacy resolver.
 - The angle-bracket convention remains for module entries so downstream tooling can distinguish top-level activations at a glance.
 - Traces will still emit `<module>` for synthetic filenames (`<stdin>`, `<string>`), frozen/importlib bootstrap frames, or exotic loaders that omit filenames entirely. This preserves previous behaviour when no reliable name exists.
 

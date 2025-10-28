@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 #[pyfunction(name = "configure_policy")]
-#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None, io_capture_line_proxies=None, io_capture_fd_fallback=None))]
+#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None, io_capture_line_proxies=None, io_capture_fd_fallback=None, module_name_from_globals=None))]
 pub fn configure_policy_py(
     on_recorder_error: Option<&str>,
     require_trace: Option<bool>,
@@ -21,6 +21,7 @@ pub fn configure_policy_py(
     json_errors: Option<bool>,
     io_capture_line_proxies: Option<bool>,
     io_capture_fd_fallback: Option<bool>,
+    module_name_from_globals: Option<bool>,
 ) -> PyResult<()> {
     let mut update = PolicyUpdate::default();
 
@@ -64,6 +65,10 @@ pub fn configure_policy_py(
         update.io_capture_fd_fallback = Some(value);
     }
 
+    if let Some(value) = module_name_from_globals {
+        update.module_name_from_globals = Some(value);
+    }
+
     apply_policy_update(update);
     Ok(())
 }
@@ -97,6 +102,10 @@ pub fn py_policy_snapshot(py: Python<'_>) -> PyResult<PyObject> {
         dict.set_item("log_file", py.None())?;
     }
     dict.set_item("json_errors", snapshot.json_errors)?;
+    dict.set_item(
+        "module_name_from_globals",
+        snapshot.module_name_from_globals,
+    )?;
 
     let io_dict = PyDict::new(py);
     io_dict.set_item("line_proxies", snapshot.io_capture.line_proxies)?;
@@ -123,6 +132,7 @@ mod tests {
             Some(true),
             Some(true),
             Some(true),
+            Some(true),
         )
         .expect("configure policy via PyO3 facade");
 
@@ -141,14 +151,25 @@ mod tests {
         assert!(snap.json_errors);
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
+        assert!(snap.module_name_from_globals);
         reset_policy_for_tests();
     }
 
     #[test]
     fn configure_policy_py_rejects_invalid_on_recorder_error() {
         reset_policy_for_tests();
-        let err = configure_policy_py(Some("unknown"), None, None, None, None, None, None, None)
-            .expect_err("invalid variant should error");
+        let err = configure_policy_py(
+            Some("unknown"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("invalid variant should error");
         // Ensure the error maps through map_recorder_error by checking the display text.
         let message = Python::with_gil(|py| err.value(py).to_string());
         assert!(
@@ -186,6 +207,7 @@ mod tests {
             Some(true),
             Some(false),
             Some(false),
+            Some(false),
         )
         .expect("configure policy");
 
@@ -218,6 +240,7 @@ mod tests {
                 super::super::env::ENV_LOG_FILE,
                 super::super::env::ENV_JSON_ERRORS,
                 super::super::env::ENV_CAPTURE_IO,
+                super::super::env::ENV_MODULE_NAME_FROM_GLOBALS,
             ] {
                 std::env::remove_var(key);
             }

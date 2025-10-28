@@ -4,7 +4,9 @@
 //! and caches per-code-object resolutions so the hot tracing callbacks only pay a fast lookup.
 
 use crate::code_object::CodeObjectWrapper;
-use crate::module_identity::{is_valid_module_name, normalise_to_posix, ModuleIdentityResolver};
+use crate::module_identity::{
+    is_valid_module_name, module_from_relative, module_name_from_packages, normalise_to_posix,
+};
 use crate::trace_filter::config::{
     ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction,
     ValuePattern,
@@ -188,7 +190,6 @@ pub struct TraceFilterEngine {
     default_value_source: usize,
     rules: Arc<[CompiledScopeRule]>,
     cache: DashMap<usize, Arc<ScopeResolution>>,
-    module_resolver: ModuleIdentityResolver,
 }
 
 impl TraceFilterEngine {
@@ -198,7 +199,6 @@ impl TraceFilterEngine {
         let default_value_action = config.default_value_action();
         let default_value_source = config.default_value_source();
         let rules = compile_rules(config.rules());
-        let module_resolver = ModuleIdentityResolver::new();
 
         TraceFilterEngine {
             config: Arc::new(config),
@@ -207,7 +207,6 @@ impl TraceFilterEngine {
             default_value_source,
             rules,
             cache: DashMap::new(),
-            module_resolver,
         }
     }
 
@@ -216,12 +215,13 @@ impl TraceFilterEngine {
         &self,
         py: Python<'py>,
         code: &CodeObjectWrapper,
+        module_hint: Option<&str>,
     ) -> RecorderResult<Arc<ScopeResolution>> {
         if let Some(entry) = self.cache.get(&code.id()) {
             return Ok(entry.clone());
         }
 
-        let resolution = Arc::new(self.resolve_uncached(py, code)?);
+        let resolution = Arc::new(self.resolve_uncached(py, code, module_hint)?);
         let entry = self
             .cache
             .entry(code.id())
@@ -233,6 +233,7 @@ impl TraceFilterEngine {
         &self,
         py: Python<'_>,
         code: &CodeObjectWrapper,
+        module_hint: Option<&str>,
     ) -> RecorderResult<ScopeResolution> {
         let filename = code
             .filename(py)
@@ -243,16 +244,26 @@ impl TraceFilterEngine {
 
         let mut context = ScopeContext::derive(filename, self.config.sources());
         context.refresh_object_name(qualname);
-        let needs_module_name = context
+
+        if let Some(hint) = module_hint {
+            if is_valid_module_name(hint) {
+                context.module_name = Some(hint.to_string());
+                context.refresh_object_name(qualname);
+            }
+        }
+
+        if context
             .module_name
             .as_ref()
             .map(|name| !is_valid_module_name(name))
-            .unwrap_or(true);
-        if needs_module_name {
-            if let Some(absolute) = context.absolute_path.clone() {
-                if let Some(module) = self.resolve_module_name(py, &absolute) {
-                    context.update_module_name(module, qualname);
-                } else if context.module_name.is_none() {
+            .unwrap_or(true)
+            && context.module_name.is_none()
+        {
+            if let Some(absolute) = context.absolute_path.as_deref() {
+                if let Some(module) = module_name_from_packages(Path::new(absolute)) {
+                    context.module_name = Some(module);
+                    context.refresh_object_name(qualname);
+                } else {
                     log::debug!(
                         "[TraceFilter] unable to derive module name for '{}'; package selectors may not match",
                         absolute
@@ -321,10 +332,6 @@ impl TraceFilterEngine {
     /// Return a summary of the filters that produced this engine.
     pub fn summary(&self) -> FilterSummary {
         self.config.summary()
-    }
-
-    fn resolve_module_name(&self, py: Python<'_>, absolute: &str) -> Option<String> {
-        self.module_resolver.resolve_absolute(py, absolute)
     }
 }
 
@@ -426,7 +433,7 @@ impl ScopeContext {
                 let stripped_owned = stripped.to_path_buf();
                 let better = match &best_match {
                     Some((_, current)) => {
-                        stripped_owned.components().count() >= current.components().count()
+                        stripped_owned.components().count() < current.components().count()
                     }
                     None => true,
                 };
@@ -447,7 +454,8 @@ impl ScopeContext {
 
         let module_name = relative_path
             .as_deref()
-            .and_then(|rel| crate::module_identity::module_from_relative(rel));
+            .and_then(|rel| module_from_relative(rel))
+            .filter(|name| is_valid_module_name(name));
 
         ScopeContext {
             module_name,
@@ -465,11 +473,6 @@ impl ScopeContext {
             (None, false) => Some(qualname.to_string()),
             (None, true) => None,
         };
-    }
-
-    fn update_module_name(&mut self, module: String, qualname: &str) {
-        self.module_name = Some(module);
-        self.refresh_object_name(qualname);
     }
 }
 
@@ -502,9 +505,8 @@ fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module_identity::module_name_from_roots;
     use crate::trace_filter::config::TraceFilterConfig;
-    use pyo3::types::{PyAny, PyCode, PyDict, PyList, PyModule};
+    use pyo3::types::{PyAny, PyCode, PyList, PyModule};
     use std::ffi::CString;
     use std::fs;
     use std::io::Write;
@@ -548,7 +550,7 @@ mod tests {
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
             let engine = TraceFilterEngine::new(config.clone());
 
-            let first = engine.resolve(py, &wrapper)?;
+            let first = engine.resolve(py, &wrapper, None)?;
             assert_eq!(first.exec(), ExecDecision::Trace);
             assert_eq!(first.matched_rule_index(), Some(0));
             assert_eq!(first.module_name(), Some("app.foo"));
@@ -567,7 +569,7 @@ mod tests {
                 ValueAction::Allow
             );
 
-            let second = engine.resolve(py, &wrapper)?;
+            let second = engine.resolve(py, &wrapper, None)?;
             assert!(Arc::ptr_eq(&first, &second));
             Ok(())
         })
@@ -603,7 +605,7 @@ mod tests {
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
 
             let engine = TraceFilterEngine::new(config);
-            let resolution = engine.resolve(py, &wrapper)?;
+            let resolution = engine.resolve(py, &wrapper, None)?;
 
             assert_eq!(resolution.exec(), ExecDecision::Trace);
             assert_eq!(resolution.matched_rule_index(), Some(1));
@@ -656,13 +658,6 @@ mod tests {
                 normalise_to_posix(Path::new(file_path.to_string_lossy().as_ref())).unwrap();
 
             let module = py.import("app.foo").expect("import app.foo");
-            let modules_any = sys.getattr("modules").expect("sys.modules");
-            let modules: Bound<'_, PyDict> =
-                modules_any.downcast_into::<PyDict>().expect("modules dict");
-            modules
-                .set_item("app.foo", module.as_any())
-                .expect("register module");
-
             let func: Bound<'_, PyAny> = module.getattr("foo").expect("get foo");
             let code_obj = func
                 .getattr("__code__")
@@ -674,18 +669,11 @@ mod tests {
             assert_eq!(recorded_filename, file_path.to_string_lossy());
 
             let engine = TraceFilterEngine::new(config.clone());
-            let expected_root =
-                normalise_to_posix(Path::new(project_root.to_string_lossy().as_ref())).unwrap();
-            let resolver_roots = engine.module_resolver.module_roots();
-            assert!(resolver_roots.iter().any(|root| root == &expected_root));
-            let derived_from_roots = module_name_from_roots(resolver_roots, absolute_path.as_str());
-            assert_eq!(derived_from_roots, Some("app.foo".to_string()));
-            let resolution = engine.resolve(py, &wrapper)?;
+            let resolution = engine.resolve(py, &wrapper, None)?;
             assert_eq!(resolution.absolute_path(), Some(absolute_path.as_str()));
             assert_eq!(resolution.module_name(), Some("app.foo"));
             assert_eq!(resolution.exec(), ExecDecision::Skip);
 
-            modules.del_item("app.foo").expect("remove module");
             sys_path.del_item(0).expect("restore sys.path");
             Ok(())
         })
@@ -711,7 +699,7 @@ mod tests {
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
 
             let engine = TraceFilterEngine::new(config);
-            let resolution = engine.resolve(py, &wrapper)?;
+            let resolution = engine.resolve(py, &wrapper, None)?;
 
             assert_eq!(resolution.exec(), ExecDecision::Skip);
             assert_eq!(resolution.relative_path(), Some("app/foo.py"));
