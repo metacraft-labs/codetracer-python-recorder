@@ -213,7 +213,15 @@ mod tests {
                 tracer.writer.events.is_empty(),
                 "expected no events for synthetic filename"
             );
-            assert_eq!(last_outcome(), Some(CallbackOutcome::DisableLocation));
+            let outcome = last_outcome();
+            assert!(
+                matches!(
+                    outcome,
+                    Some(CallbackOutcome::DisableLocation | CallbackOutcome::Continue)
+                ),
+                "expected DisableLocation or Continue (when CPython refuses to disable an event), got {:?}",
+                outcome
+            );
 
             let compile_fn = py
                 .import("builtins")

@@ -16,6 +16,13 @@ pub struct ActivationController {
     activation_code_id: Option<usize>,
     activation_done: bool,
     started: bool,
+    suspended: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationExitKind {
+    Suspended,
+    Completed,
 }
 
 impl ActivationController {
@@ -28,6 +35,7 @@ impl ActivationController {
             activation_code_id: None,
             activation_done: false,
             started,
+            suspended: false,
         }
     }
 
@@ -38,6 +46,7 @@ impl ActivationController {
     /// Ensure activation state reflects the current event and report whether
     /// tracing should continue processing it.
     pub fn should_process_event(&mut self, py: Python<'_>, code: &CodeObjectWrapper) -> bool {
+        self.resume_if_needed(code);
         self.ensure_started(py, code);
         self.is_active()
     }
@@ -73,15 +82,33 @@ impl ActivationController {
         }
     }
 
-    /// Handle return events and turn off tracing when the activation function
-    /// exits. Returns `true` when tracing was deactivated by this call.
-    pub fn handle_return_event(&mut self, code_id: usize) -> bool {
-        if self.activation_code_id == Some(code_id) {
-            self.started = false;
-            self.activation_done = true;
-            return true;
+    /// Handle activation exits, marking suspension or completion as appropriate.
+    /// Returns `true` when tracing was deactivated by this call.
+    pub fn handle_exit(&mut self, code_id: usize, exit: ActivationExitKind) -> bool {
+        if self.activation_code_id != Some(code_id) {
+            return false;
         }
-        false
+        match exit {
+            ActivationExitKind::Suspended => {
+                self.suspended = true;
+                false
+            }
+            ActivationExitKind::Completed => {
+                self.started = false;
+                self.activation_done = true;
+                self.suspended = false;
+                true
+            }
+        }
+    }
+
+    fn resume_if_needed(&mut self, code: &CodeObjectWrapper) {
+        if self.started
+            && self.suspended
+            && self.activation_code_id == Some(code.id())
+        {
+            self.suspended = false;
+        }
     }
 }
 
@@ -147,9 +174,25 @@ mod tests {
             let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
-            assert!(controller.handle_return_event(code.id()));
+            assert!(controller.handle_exit(code.id(), ActivationExitKind::Completed));
             assert!(!controller.is_active());
             assert!(!controller.should_process_event(py, &code));
+        });
+    }
+
+    #[test]
+    fn suspension_keeps_tracing_active() {
+        Python::with_gil(|py| {
+            let code = build_code(py, "target", "/tmp/target.py");
+            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            assert!(controller.should_process_event(py, &code));
+            assert!(controller.is_active());
+            assert!(!controller.handle_exit(code.id(), ActivationExitKind::Suspended));
+            // While suspended, subsequent events should keep tracing alive and clear suspension
+            assert!(controller.should_process_event(py, &code));
+            assert!(controller.is_active());
+            assert!(controller.handle_exit(code.id(), ActivationExitKind::Completed));
+            assert!(!controller.is_active());
         });
     }
 
@@ -164,6 +207,6 @@ mod tests {
 impl ActivationController {
     #[allow(dead_code)]
     pub fn handle_return(&mut self, code_id: usize) -> bool {
-        self.handle_return_event(code_id)
+        self.handle_exit(code_id, ActivationExitKind::Completed)
     }
 }

@@ -65,6 +65,25 @@ static EXCEPTION_HANDLED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static C_RETURN_COUNT: AtomicUsize = AtomicUsize::new(0);
 static C_RAISE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+fn reset_all_counts() {
+    LINE_COUNT.store(0, Ordering::SeqCst);
+    INSTRUCTION_COUNT.store(0, Ordering::SeqCst);
+    JUMP_COUNT.store(0, Ordering::SeqCst);
+    BRANCH_COUNT.store(0, Ordering::SeqCst);
+    PY_START_COUNT.store(0, Ordering::SeqCst);
+    PY_RESUME_COUNT.store(0, Ordering::SeqCst);
+    PY_RETURN_COUNT.store(0, Ordering::SeqCst);
+    PY_YIELD_COUNT.store(0, Ordering::SeqCst);
+    PY_THROW_COUNT.store(0, Ordering::SeqCst);
+    PY_UNWIND_COUNT.store(0, Ordering::SeqCst);
+    RAISE_COUNT.store(0, Ordering::SeqCst);
+    RERAISE_COUNT.store(0, Ordering::SeqCst);
+    EXCEPTION_HANDLED_COUNT.store(0, Ordering::SeqCst);
+    // STOP_ITERATION_COUNT.store(0, Ordering::SeqCst); // Not currently triggered in tests.
+    C_RETURN_COUNT.store(0, Ordering::SeqCst);
+    C_RAISE_COUNT.store(0, Ordering::SeqCst);
+}
+
 struct CountingTracer;
 
 impl Tracer for CountingTracer {
@@ -313,22 +332,7 @@ impl Tracer for CountingTracer {
 #[test]
 fn tracer_handles_all_events() {
     Python::with_gil(|py| {
-        LINE_COUNT.store(0, Ordering::SeqCst);
-        INSTRUCTION_COUNT.store(0, Ordering::SeqCst);
-        JUMP_COUNT.store(0, Ordering::SeqCst);
-        BRANCH_COUNT.store(0, Ordering::SeqCst);
-        PY_START_COUNT.store(0, Ordering::SeqCst);
-        PY_RESUME_COUNT.store(0, Ordering::SeqCst);
-        PY_RETURN_COUNT.store(0, Ordering::SeqCst);
-        PY_YIELD_COUNT.store(0, Ordering::SeqCst);
-        PY_THROW_COUNT.store(0, Ordering::SeqCst);
-        PY_UNWIND_COUNT.store(0, Ordering::SeqCst);
-        RAISE_COUNT.store(0, Ordering::SeqCst);
-        RERAISE_COUNT.store(0, Ordering::SeqCst);
-        EXCEPTION_HANDLED_COUNT.store(0, Ordering::SeqCst);
-        // STOP_ITERATION_COUNT.store(0, Ordering::SeqCst); //ISSUE: We can't figure out how to triger this event
-        C_RETURN_COUNT.store(0, Ordering::SeqCst);
-        C_RAISE_COUNT.store(0, Ordering::SeqCst);
+        reset_all_counts();
         if let Err(e) = install_tracer(py, Box::new(CountingTracer)) {
             e.print(py);
             panic!("Install Tracer failed");
@@ -476,6 +480,70 @@ for _ in only_stop_iter():
             C_RAISE_COUNT.load(Ordering::SeqCst) >= 1,
             "expected at least one C_RAISE event, got {}",
             C_RAISE_COUNT.load(Ordering::SeqCst)
+        );
+    });
+}
+
+#[test]
+fn tracer_counts_resume_throw_and_unwind_events() {
+    Python::with_gil(|py| {
+        reset_all_counts();
+        if let Err(e) = install_tracer(py, Box::new(CountingTracer)) {
+            e.print(py);
+            panic!("Install Tracer failed");
+        }
+        let code = CString::new(
+            r#"
+def ticker():
+    try:
+        yield "tick"
+        yield "tock"
+    except RuntimeError:
+        return "handled"
+
+g = ticker()
+next(g)
+next(g)
+try:
+    g.throw(RuntimeError("boom"))
+except StopIteration:
+    pass
+
+def explode():
+    raise ValueError("kaboom")
+
+try:
+    explode()
+except ValueError:
+    pass
+"#,
+        )
+        .expect("CString::new failed");
+        if let Err(e) = py.run(code.as_c_str(), None, None) {
+            e.print(py);
+            uninstall_tracer(py).ok();
+            panic!("Python raised an exception");
+        }
+        uninstall_tracer(py).unwrap();
+        assert_eq!(
+            PY_RESUME_COUNT.load(Ordering::SeqCst),
+            1,
+            "expected exactly one PY_RESUME event from next(g)"
+        );
+        assert_eq!(
+            PY_THROW_COUNT.load(Ordering::SeqCst),
+            1,
+            "expected exactly one PY_THROW event from g.throw(...)"
+        );
+        assert_eq!(
+            PY_YIELD_COUNT.load(Ordering::SeqCst),
+            2,
+            "expected two PY_YIELD events from the generator body"
+        );
+        assert_eq!(
+            PY_UNWIND_COUNT.load(Ordering::SeqCst),
+            1,
+            "expected one PY_UNWIND event from explode()"
         );
     });
 }

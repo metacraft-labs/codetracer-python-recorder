@@ -218,6 +218,27 @@ pub fn capture_call_arguments<'py>(
     Ok(args)
 }
 
+/// Encode a single argument with the current value policy, producing a call argument record.
+pub fn encode_named_argument<'py>(
+    py: Python<'py>,
+    writer: &mut NonStreamingTraceWriter,
+    value: &Bound<'py, PyAny>,
+    name: &str,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
+) -> Option<FullValueRecord> {
+    encode_with_policy(
+        py,
+        writer,
+        value,
+        policy,
+        ValueKind::Arg,
+        name,
+        telemetry.as_deref_mut(),
+    )
+    .map(|encoded| TraceWriter::arg(writer, name, encoded))
+}
+
 /// Record all visible variables from the provided frame snapshot into the writer.
 pub fn record_visible_scope(
     py: Python<'_>,
