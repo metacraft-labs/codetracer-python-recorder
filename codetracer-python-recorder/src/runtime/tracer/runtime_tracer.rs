@@ -151,6 +151,9 @@ mod tests {
         static LAST_OUTCOME: Cell<Option<CallbackOutcome>> = Cell::new(None);
     }
 
+    const BUILTIN_TRACE_FILTER: &str =
+        include_str!("../../../resources/trace_filters/builtin_default.toml");
+
     struct ScopedTracer;
 
     impl ScopedTracer {
@@ -1033,6 +1036,94 @@ sensitive("s3cr3t")
                 ValueRecord::Error { ref msg, .. } => assert_eq!(msg, "<redacted>"),
                 ref other => panic!("expected redacted return value, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn user_drop_default_overrides_builtin_allowance() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let filters_dir = project_root.join(".codetracer");
+            fs::create_dir(&filters_dir).expect("create .codetracer");
+            let drop_filter_path = filters_dir.join("drop-filter.toml");
+            write_filter(
+                &drop_filter_path,
+                r#"
+                [meta]
+                name = "drop-all"
+                version = 1
+
+                [scope]
+                default_exec = "trace"
+                default_value_action = "drop"
+                "#,
+            );
+
+            let config = TraceFilterConfig::from_inline_and_paths(
+                &[("builtin-default", BUILTIN_TRACE_FILTER)],
+                &[drop_filter_path.clone()],
+            )
+            .expect("load filter chain");
+            let engine = Arc::new(TraceFilterEngine::new(config));
+
+            let app_dir = project_root.join("app");
+            fs::create_dir_all(&app_dir).expect("create app dir");
+            let script_path = app_dir.join("dropper.py");
+            let body = r#"
+def dropper():
+    secret = "token"
+    public = 42
+    snapshot()
+    emit_return(secret)
+    return secret
+
+dropper()
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, script).expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                Some(engine),
+            );
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute dropper script");
+            }
+
+            let mut variable_names: Vec<String> = Vec::new();
+            let mut return_events = 0usize;
+            for event in &tracer.writer.events {
+                match event {
+                    TraceLowLevelEvent::VariableName(name) => variable_names.push(name.clone()),
+                    TraceLowLevelEvent::Return(_) => return_events += 1,
+                    _ => {}
+                }
+            }
+            assert!(
+                variable_names.is_empty(),
+                "expected no variables captured, found {:?}",
+                variable_names
+            );
+            assert_eq!(
+                return_events, 0,
+                "return value should be dropped instead of recorded"
+            );
         });
     }
 

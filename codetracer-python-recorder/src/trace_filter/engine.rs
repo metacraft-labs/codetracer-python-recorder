@@ -185,6 +185,7 @@ pub struct TraceFilterEngine {
     config: Arc<TraceFilterConfig>,
     default_exec: ExecDecision,
     default_value_action: ValueAction,
+    default_value_source: usize,
     rules: Arc<[CompiledScopeRule]>,
     cache: DashMap<usize, Arc<ScopeResolution>>,
 }
@@ -194,12 +195,14 @@ impl TraceFilterEngine {
     pub fn new(config: TraceFilterConfig) -> Self {
         let default_exec = config.default_exec().into();
         let default_value_action = config.default_value_action();
+        let default_value_source = config.default_value_source();
         let rules = compile_rules(config.rules());
 
         TraceFilterEngine {
             config: Arc::new(config),
             default_exec,
             default_value_action,
+            default_value_source,
             rules,
             cache: DashMap::new(),
         }
@@ -239,6 +242,7 @@ impl TraceFilterEngine {
 
         let mut exec = self.default_exec;
         let mut value_default = self.default_value_action;
+        let mut value_default_source = self.default_value_source;
         let mut patterns: Arc<[CompiledValuePattern]> = Arc::from(Vec::new());
         let mut matched_rule_index = None;
         let mut matched_rule_source = context.source_id;
@@ -251,15 +255,32 @@ impl TraceFilterEngine {
                 }
                 if let Some(rule_value) = rule.value_default {
                     value_default = rule_value;
+                    value_default_source = rule.source_id;
                 }
-                if !rule.value_patterns.is_empty() {
-                    patterns = rule.value_patterns.clone();
-                }
+                patterns = rule.value_patterns.clone();
                 matched_rule_index = Some(rule.index);
                 matched_rule_source = Some(rule.source_id);
                 matched_rule_reason = rule.reason.clone();
             }
         }
+
+        let patterns = if value_default == ValueAction::Drop {
+            if patterns
+                .iter()
+                .all(|pattern| pattern.source_id >= value_default_source)
+            {
+                patterns
+            } else {
+                let filtered: Vec<CompiledValuePattern> = patterns
+                    .iter()
+                    .filter(|pattern| pattern.source_id >= value_default_source)
+                    .cloned()
+                    .collect();
+                filtered.into()
+            }
+        } else {
+            patterns
+        };
 
         let value_policy = Arc::new(ValuePolicy::new(value_default, patterns));
 
