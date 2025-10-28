@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 - Module-level call events now prefer the frame's `__name__`, fall back to filter hints, `sys.path`, and package markers, and no longer depend on the legacy resolver/cache. The globals-derived naming flag now defaults to enabled so direct scripts record `<__main__>` while package imports emit `<pkg.mod>`, with CLI and environment overrides available for the legacy resolver.
+- The CLI now exits with `0` when recording succeeds regardless of the traced script’s status, records a warning when suppressing non-zero script exits, and exposes `--propagate-script-exit` / `CODETRACER_PROPAGATE_SCRIPT_EXIT` / `configure_policy(propagate_script_exit=True)` to restore passthrough semantics.
 
 ## [0.2.0] - 2025-10-17
 ### Added
