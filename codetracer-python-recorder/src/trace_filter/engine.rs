@@ -4,6 +4,7 @@
 //! and caches per-code-object resolutions so the hot tracing callbacks only pay a fast lookup.
 
 use crate::code_object::CodeObjectWrapper;
+use crate::module_identity::{is_valid_module_name, normalise_to_posix, ModuleIdentityResolver};
 use crate::trace_filter::config::{
     ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction,
     ValuePattern,
@@ -11,9 +12,7 @@ use crate::trace_filter::config::{
 use crate::trace_filter::selector::{Selector, SelectorKind};
 use dashmap::DashMap;
 use pyo3::{prelude::*, PyErr};
-use pyo3::types::{PyDict, PyList};
 use recorder_errors::{target, ErrorCode, RecorderResult};
-use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -189,8 +188,7 @@ pub struct TraceFilterEngine {
     default_value_source: usize,
     rules: Arc<[CompiledScopeRule]>,
     cache: DashMap<usize, Arc<ScopeResolution>>,
-    module_cache: DashMap<String, Option<String>>,
-    module_roots: Arc<[String]>,
+    module_resolver: ModuleIdentityResolver,
 }
 
 impl TraceFilterEngine {
@@ -200,7 +198,7 @@ impl TraceFilterEngine {
         let default_value_action = config.default_value_action();
         let default_value_source = config.default_value_source();
         let rules = compile_rules(config.rules());
-        let module_roots = Python::with_gil(|py| collect_module_roots(py));
+        let module_resolver = ModuleIdentityResolver::new();
 
         TraceFilterEngine {
             config: Arc::new(config),
@@ -209,8 +207,7 @@ impl TraceFilterEngine {
             default_value_source,
             rules,
             cache: DashMap::new(),
-            module_cache: DashMap::new(),
-            module_roots: module_roots.into(),
+            module_resolver,
         }
     }
 
@@ -327,14 +324,7 @@ impl TraceFilterEngine {
     }
 
     fn resolve_module_name(&self, py: Python<'_>, absolute: &str) -> Option<String> {
-        if let Some(entry) = self.module_cache.get(absolute) {
-            return entry.value().clone();
-        }
-        let resolved = module_name_from_roots(&self.module_roots, absolute)
-            .or_else(|| lookup_module_name(py, absolute));
-        self.module_cache
-            .insert(absolute.to_string(), resolved.clone());
-        resolved
+        self.module_resolver.resolve_absolute(py, absolute)
     }
 }
 
@@ -457,7 +447,7 @@ impl ScopeContext {
 
         let module_name = relative_path
             .as_deref()
-            .and_then(|rel| module_from_relative(rel).map(|cow| cow.into_owned()));
+            .and_then(|rel| crate::module_identity::module_from_relative(rel));
 
         ScopeContext {
             module_name,
@@ -483,230 +473,6 @@ impl ScopeContext {
     }
 }
 
-fn lookup_module_name(py: Python<'_>, absolute: &str) -> Option<String> {
-    let sys = py.import("sys").ok()?;
-    let modules_obj = match sys.getattr("modules") {
-        Ok(value) => value,
-        Err(_) => return None,
-    };
-    let modules: Bound<'_, PyDict> = match modules_obj.downcast_into::<PyDict>() {
-        Ok(dict) => dict,
-        Err(_) => return None,
-    };
-    let mut best: Option<(usize, String)> = None;
-    'modules: for (name_obj, module_obj) in modules.iter() {
-        let module_name: String = match name_obj.extract() {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        if module_obj.is_none() {
-            continue;
-        }
-        for candidate in module_candidate_paths(&module_obj) {
-            if equivalent_posix_paths(&candidate, absolute) {
-                let preferred = preferred_module_name(&module_name, &module_obj);
-                let score = module_name_score(&preferred);
-                let update = match best {
-                    Some((best_score, _)) => score < best_score,
-                    None => true,
-                };
-                if update {
-                    best = Some((score, preferred));
-                    if score == 0 {
-                        break 'modules;
-                    }
-                }
-            }
-        }
-    }
-    best.map(|(_, name)| name)
-}
-
-fn collect_module_roots(py: Python<'_>) -> Vec<String> {
-    let mut roots = Vec::new();
-    if let Ok(sys) = py.import("sys") {
-        if let Ok(path_obj) = sys.getattr("path") {
-            if let Ok(path_list) = path_obj.downcast_into::<PyList>() {
-                for entry in path_list.iter() {
-                    if let Ok(raw) = entry.extract::<String>() {
-                        if let Some(normalized) = normalise_to_posix(Path::new(&raw)) {
-                            roots.push(normalized);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    roots
-}
-
-fn module_name_from_roots(roots: &[String], absolute: &str) -> Option<String> {
-    for base in roots {
-        if let Some(relative) = strip_posix_prefix(absolute, base) {
-            if let Some(name) = relative_str_to_module(relative) {
-                return Some(name);
-            }
-        }
-    }
-    None
-}
-
-fn module_candidate_paths(module: &Bound<'_, PyAny>) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Ok(spec) = module.getattr("__spec__") {
-        if let Some(origin) = extract_normalised_spec_origin(&spec) {
-            candidates.push(origin);
-        }
-    }
-    if let Some(file) = extract_normalised_attr(module, "__file__") {
-        candidates.push(file);
-    }
-    if let Some(cached) = extract_normalised_attr(module, "__cached__") {
-        candidates.push(cached);
-    }
-    candidates
-}
-
-fn extract_normalised_attr(module: &Bound<'_, PyAny>, attr: &str) -> Option<String> {
-    let value = module.getattr(attr).ok()?;
-    extract_normalised_path(&value)
-}
-
-fn extract_normalised_spec_origin(spec: &Bound<'_, PyAny>) -> Option<String> {
-    if spec.is_none() {
-        return None;
-    }
-    let origin = spec.getattr("origin").ok()?;
-    extract_normalised_path(&origin)
-}
-
-fn extract_normalised_path(value: &Bound<'_, PyAny>) -> Option<String> {
-    if value.is_none() {
-        return None;
-    }
-    let raw: String = value.extract().ok()?;
-    normalise_to_posix(Path::new(raw.as_str()))
-}
-
-fn equivalent_posix_paths(candidate: &str, target: &str) -> bool {
-    if candidate == target {
-        return true;
-    }
-    if candidate.ends_with(".pyc") && target.ends_with(".py") {
-        return candidate.trim_end_matches('c') == target;
-    }
-    false
-}
-
-fn preferred_module_name(default: &str, module: &Bound<'_, PyAny>) -> String {
-    if let Ok(spec) = module.getattr("__spec__") {
-        if let Ok(name) = spec.getattr("name") {
-            if let Ok(raw) = name.extract::<String>() {
-                if !raw.is_empty() {
-                    return raw;
-                }
-            }
-        }
-    }
-    if let Ok(name_attr) = module.getattr("__name__") {
-        if let Ok(raw) = name_attr.extract::<String>() {
-            if !raw.is_empty() {
-                return raw;
-            }
-        }
-    }
-    default.to_string()
-}
-
-fn module_name_score(name: &str) -> usize {
-    if name
-        .split('.')
-        .all(|segment| !segment.is_empty() && segment.chars().all(is_identifier_char))
-    {
-        0
-    } else {
-        1
-    }
-}
-
-fn is_identifier_char(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphanumeric()
-}
-
-fn is_valid_module_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .split('.')
-            .all(|segment| !segment.is_empty() && segment.chars().all(is_identifier_char))
-}
-
-fn strip_posix_prefix<'a>(path: &'a str, base: &str) -> Option<&'a str> {
-    if base.is_empty() {
-        return None;
-    }
-    if base == "/" {
-        return path.strip_prefix('/');
-    }
-    if path.starts_with(base) {
-        let mut remainder = &path[base.len()..];
-        if remainder.starts_with('/') {
-            remainder = &remainder[1..];
-        }
-        if remainder.is_empty() {
-            None
-        } else {
-            Some(remainder)
-        }
-    } else {
-        None
-    }
-}
-
-fn relative_str_to_module(relative: &str) -> Option<String> {
-    let mut parts: Vec<&str> = relative
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return None;
-    }
-    let last = parts.pop().expect("non-empty");
-    if let Some(stem) = last.strip_suffix(".py") {
-        if stem != "__init__" {
-            parts.push(stem);
-        }
-    } else {
-        parts.push(last);
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    Some(parts.join("."))
-}
-
-fn normalise_to_posix(path: &Path) -> Option<String> {
-    if path.as_os_str().is_empty() {
-        return None;
-    }
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => parts.push(part.to_string_lossy()),
-            Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_string_lossy()),
-            Component::RootDir => parts.push(Cow::Borrowed("")),
-            Component::CurDir => continue,
-            Component::ParentDir => {
-                parts.push(Cow::Borrowed(".."));
-            }
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
-    }
-}
-
 fn normalise_relative(relative: PathBuf) -> String {
     let mut components = Vec::new();
     for component in relative.components() {
@@ -724,27 +490,6 @@ fn normalise_relative(relative: PathBuf) -> String {
     components.join("/")
 }
 
-fn module_from_relative(relative: &str) -> Option<Cow<'_, str>> {
-    if relative.is_empty() {
-        return None;
-    }
-    let trimmed = relative.trim_start_matches("./");
-    let without_suffix = trimmed.strip_suffix(".py").unwrap_or(trimmed);
-    if without_suffix.is_empty() {
-        return None;
-    }
-    let mut parts: Vec<&str> = without_suffix.split('/').collect();
-    if let Some(last) = parts.last().copied() {
-        if last == "__init__" {
-            parts.pop();
-        }
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    Some(Cow::Owned(parts.join(".")))
-}
-
 fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {
     target!(
         ErrorCode::FrameIntrospectionFailed,
@@ -757,8 +502,9 @@ fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module_identity::module_name_from_roots;
     use crate::trace_filter::config::TraceFilterConfig;
-    use pyo3::types::{PyAny, PyCode, PyDict, PyModule};
+    use pyo3::types::{PyAny, PyCode, PyDict, PyList, PyModule};
     use std::ffi::CString;
     use std::fs;
     use std::io::Write;
@@ -901,9 +647,8 @@ mod tests {
             fs::write(app_dir.join("__init__.py"), "\n").expect("write __init__");
             let sys = py.import("sys").expect("import sys");
             let sys_path_any = sys.getattr("path").expect("sys.path");
-            let sys_path: Bound<'_, PyList> = sys_path_any
-                .downcast_into::<PyList>()
-                .expect("path list");
+            let sys_path: Bound<'_, PyList> =
+                sys_path_any.downcast_into::<PyList>().expect("path list");
             sys_path
                 .insert(0, project_root.to_string_lossy().to_string())
                 .expect("insert project root");
@@ -912,9 +657,8 @@ mod tests {
 
             let module = py.import("app.foo").expect("import app.foo");
             let modules_any = sys.getattr("modules").expect("sys.modules");
-            let modules: Bound<'_, PyDict> = modules_any
-                .downcast_into::<PyDict>()
-                .expect("modules dict");
+            let modules: Bound<'_, PyDict> =
+                modules_any.downcast_into::<PyDict>().expect("modules dict");
             modules
                 .set_item("app.foo", module.as_any())
                 .expect("register module");
@@ -932,15 +676,12 @@ mod tests {
             let engine = TraceFilterEngine::new(config.clone());
             let expected_root =
                 normalise_to_posix(Path::new(project_root.to_string_lossy().as_ref())).unwrap();
-            assert!(engine.module_roots.iter().any(|root| root == &expected_root));
-            let derived_from_roots =
-                module_name_from_roots(&engine.module_roots, absolute_path.as_str());
+            let resolver_roots = engine.module_resolver.module_roots();
+            assert!(resolver_roots.iter().any(|root| root == &expected_root));
+            let derived_from_roots = module_name_from_roots(resolver_roots, absolute_path.as_str());
             assert_eq!(derived_from_roots, Some("app.foo".to_string()));
             let resolution = engine.resolve(py, &wrapper)?;
-            assert_eq!(
-                resolution.absolute_path(),
-                Some(absolute_path.as_str())
-            );
+            assert_eq!(resolution.absolute_path(), Some(absolute_path.as_str()));
             assert_eq!(resolution.module_name(), Some("app.foo"));
             assert_eq!(resolution.exec(), ExecDecision::Skip);
 
