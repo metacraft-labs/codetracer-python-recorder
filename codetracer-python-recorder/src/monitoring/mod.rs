@@ -10,7 +10,12 @@ pub(crate) mod install;
 pub mod tracer;
 
 pub use api::Tracer;
-pub use install::{flush_installed_tracer, install_tracer, uninstall_tracer};
+pub use install::{
+    flush_installed_tracer,
+    install_tracer,
+    uninstall_tracer,
+    update_exit_status,
+};
 
 const MONITORING_TOOL_NAME: &str = "codetracer";
 

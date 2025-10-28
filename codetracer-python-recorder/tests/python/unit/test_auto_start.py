@@ -38,7 +38,7 @@ def test_auto_start_resolves_filter_chain(tmp_path: Path, monkeypatch: pytest.Mo
         state["active"] = True
         captured_filters.append(filters)
 
-    def fake_stop_backend() -> None:
+    def fake_stop_backend(exit_code: int | None = None) -> None:
         state["active"] = False
 
     monkeypatch.setenv(auto_start.ENV_TRACE_PATH, str(trace_dir))

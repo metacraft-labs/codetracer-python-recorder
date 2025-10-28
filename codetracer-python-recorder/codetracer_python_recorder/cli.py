@@ -287,7 +287,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         try:
             flush()
         finally:
-            stop()
+            stop(exit_code=exit_code)
             sys.argv = old_argv
 
     _serialise_metadata(trace_dir, script=script_path)

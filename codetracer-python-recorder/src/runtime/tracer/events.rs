@@ -1,6 +1,5 @@
 //! Event handling pipeline for `RuntimeTracer`.
 
-use super::filtering::TraceDecision;
 use super::runtime_tracer::RuntimeTracer;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
@@ -177,18 +176,8 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
-        let is_active = self
-            .lifecycle
-            .activation_mut()
-            .should_process_event(py, code);
-        if matches!(
-            self.should_trace_code(py, code),
-            TraceDecision::SkipAndDisable
-        ) {
-            return Ok(CallbackOutcome::Continue);
-        }
-        if !is_active {
-            return Ok(CallbackOutcome::Continue);
+        if let Some(outcome) = self.evaluate_gate(py, code, true) {
+            return Ok(outcome);
         }
 
         if should_inject_failure(FailureStage::PyStart) {
@@ -244,18 +233,8 @@ impl Tracer for RuntimeTracer {
         code: &CodeObjectWrapper,
         _offset: i32,
     ) -> CallbackResult {
-        let is_active = self
-            .lifecycle
-            .activation_mut()
-            .should_process_event(py, code);
-        if matches!(
-            self.should_trace_code(py, code),
-            TraceDecision::SkipAndDisable
-        ) {
-            return Ok(CallbackOutcome::Continue);
-        }
-        if !is_active {
-            return Ok(CallbackOutcome::Continue);
+        if let Some(outcome) = self.evaluate_gate(py, code, false) {
+            return Ok(outcome);
         }
 
         log_event(py, code, "on_py_resume", None);
@@ -264,18 +243,8 @@ impl Tracer for RuntimeTracer {
     }
 
     fn on_line(&mut self, py: Python<'_>, code: &CodeObjectWrapper, lineno: u32) -> CallbackResult {
-        let is_active = self
-            .lifecycle
-            .activation_mut()
-            .should_process_event(py, code);
-        if matches!(
-            self.should_trace_code(py, code),
-            TraceDecision::SkipAndDisable
-        ) {
-            return Ok(CallbackOutcome::Continue);
-        }
-        if !is_active {
-            return Ok(CallbackOutcome::Continue);
+        if let Some(outcome) = self.evaluate_gate(py, code, false) {
+            return Ok(outcome);
         }
 
         if should_inject_failure(FailureStage::Line) {
@@ -378,18 +347,8 @@ impl Tracer for RuntimeTracer {
         _offset: i32,
         exception: &Bound<'_, PyAny>,
     ) -> CallbackResult {
-        let is_active = self
-            .lifecycle
-            .activation_mut()
-            .should_process_event(py, code);
-        if matches!(
-            self.should_trace_code(py, code),
-            TraceDecision::SkipAndDisable
-        ) {
-            return Ok(CallbackOutcome::Continue);
-        }
-        if !is_active {
-            return Ok(CallbackOutcome::Continue);
+        if let Some(outcome) = self.evaluate_gate(py, code, false) {
+            return Ok(outcome);
         }
 
         log_event(py, code, "on_py_throw", None);
@@ -439,8 +398,17 @@ impl Tracer for RuntimeTracer {
         )
     }
 
+    fn set_exit_status(
+        &mut self,
+        _py: Python<'_>,
+        exit_code: Option<i32>,
+    ) -> PyResult<()> {
+        self.record_exit_status(exit_code);
+        Ok(())
+    }
+
     fn notify_failure(&mut self, _py: Python<'_>) -> PyResult<()> {
-        self.mark_failure();
+        self.mark_disabled();
         Ok(())
     }
 
@@ -484,9 +452,14 @@ impl Tracer for RuntimeTracer {
             self.mark_event();
         }
 
+        self.emit_session_exit(py);
+
+        let exit_summary = self.exit_summary();
+
         if self.lifecycle.encountered_failure() {
             if policy.keep_partial_trace {
-                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter) {
+                if let Err(err) = self.lifecycle.finalise(&mut self.writer, &self.filter, &exit_summary)
+                {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
                             "failed to finalise partial trace after disable: {}",
@@ -519,7 +492,7 @@ impl Tracer for RuntimeTracer {
             .require_trace_or_fail(&policy)
             .map_err(ffi::map_recorder_error)?;
         self.lifecycle
-            .finalise(&mut self.writer, &self.filter)
+            .finalise(&mut self.writer, &self.filter, &exit_summary)
             .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
         self.module_names.clear();
@@ -553,22 +526,8 @@ impl RuntimeTracer {
         exit_kind: Option<ActivationExitKind>,
         allow_disable: bool,
     ) -> CallbackResult {
-        let is_active = self
-            .lifecycle
-            .activation_mut()
-            .should_process_event(py, code);
-        if matches!(
-            self.should_trace_code(py, code),
-            TraceDecision::SkipAndDisable
-        ) {
-            return Ok(if allow_disable {
-                CallbackOutcome::DisableLocation
-            } else {
-                CallbackOutcome::Continue
-            });
-        }
-        if !is_active {
-            return Ok(CallbackOutcome::Continue);
+        if let Some(outcome) = self.evaluate_gate(py, code, allow_disable) {
+            return Ok(outcome);
         }
 
         log_event(py, code, label, None);
