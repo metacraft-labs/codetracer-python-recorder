@@ -51,6 +51,7 @@
   - `file` – source path relative to the project root (POSIX separators).
   - `obj` – module-qualified object (`package.module.func`).
   - `local`, `global`, `arg`, `ret`, `attr` – value-level selectors.
+- Module names normally come from stripping the project root off the code object path. When a filter is inlined (e.g., the builtin defaults) and no filesystem prefix matches, the recorder falls back to `sys.modules`: it scans loaded modules, compares their `__spec__.origin` / `__file__` against the code’s absolute path, and caches the result. This keeps builtin package skips (like `_distutils_hack`) effective even though the filter lives inside the recorder wheel.
 - Match types (second segment in `kind:match:pattern`):
   - `glob` *(default)* – wildcard matching with `/` treated as a separator.
   - `regex` – Rust/RE2-style regular expressions; invalid patterns log a single warning and fall back to configuration errors.
