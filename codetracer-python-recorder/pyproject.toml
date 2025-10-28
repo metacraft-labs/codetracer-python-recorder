@@ -1,6 +1,6 @@
 [project]
 name = "codetracer-python-recorder"
-version = "0.2.0"
+version = "0.3.0"
 description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)"
 authors = [{name = "Metacraft Labs Ltd"}]
 license = {file = "LICENSE"}

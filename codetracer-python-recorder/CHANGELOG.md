@@ -5,6 +5,8 @@ All notable changes to `codetracer-python-recorder` will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.0] - 2025-10-28
 ### Added
 - Balanced call-stack handling for generators, coroutines, and unwinding frames by subscribing to `PY_YIELD`, `PY_UNWIND`, `PY_RESUME`, and `PY_THROW`, mapping resume/throw events to `TraceWriter::register_call`, yield/unwind to `register_return`, and capturing `PY_THROW` arguments as `exception` using the existing value encoder. Added Python + Rust integration tests that drive `.send()`/`.throw()` on coroutines and generators to guarantee the trace stays balanced and that exception payloads are recorded.
 
@@ -34,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Support for generating `trace_metadata.json` and `trace_paths.json` artefacts compatible with the Codetracer db-backend importer.
 - Cross-platform packaging targeting CPython 3.12 and 3.13 on Linux (manylinux2014 `x86_64`/`aarch64`), macOS universal2, and Windows `amd64`.
 
-[Unreleased]: https://github.com/metacraft-labs/cpr-main/compare/recorder-v0.2.0...HEAD
+[Unreleased]: https://github.com/metacraft-labs/cpr-main/compare/recorder-v0.3.0...HEAD
+[0.3.0]: https://github.com/metacraft-labs/cpr-main/compare/recorder-v0.2.0...recorder-v0.3.0
 [0.2.0]: https://github.com/metacraft-labs/cpr-main/compare/recorder-v0.1.0...recorder-v0.2.0
 [0.1.0]: https://github.com/metacraft-labs/cpr-main/releases/tag/recorder-v0.1.0

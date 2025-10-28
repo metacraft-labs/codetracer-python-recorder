@@ -16,7 +16,7 @@ source = { editable = "codetracer-pure-python-recorder" }
 
 [[package]]
 name = "codetracer-python-recorder"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "codetracer-python-recorder" }
 
 [[package]]
