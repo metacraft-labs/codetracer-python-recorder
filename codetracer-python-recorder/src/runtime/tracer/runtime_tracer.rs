@@ -179,7 +179,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::CString;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::thread;
 
@@ -717,6 +717,30 @@ result = compute()\n"
     }
 
     #[pyfunction]
+    fn capture_py_start(py: Python<'_>, code: Bound<'_, PyCode>, offset: i32) -> PyResult<()> {
+        ffi::wrap_pyfunction("test_capture_py_start", || {
+            ACTIVE_TRACER.with(|cell| -> PyResult<()> {
+                let ptr = cell.get();
+                if ptr.is_null() {
+                    panic!("No active RuntimeTracer for capture_py_start");
+                }
+                unsafe {
+                    let tracer = &mut *ptr;
+                    let wrapper = CodeObjectWrapper::new(py, &code);
+                    match tracer.on_py_start(py, &wrapper, offset) {
+                        Ok(outcome) => {
+                            LAST_OUTCOME.with(|cell| cell.set(Some(outcome)));
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            })?;
+            Ok(())
+        })
+    }
+
+    #[pyfunction]
     fn capture_line(py: Python<'_>, code: Bound<'_, PyCode>, lineno: u32) -> PyResult<()> {
         ffi::wrap_pyfunction("test_capture_line", || {
             ACTIVE_TRACER.with(|cell| -> PyResult<()> {
@@ -770,7 +794,7 @@ result = compute()\n"
 
     const PRELUDE: &str = r#"
 import inspect
-from test_tracer import capture_line, capture_return_event
+from test_tracer import capture_line, capture_return_event, capture_py_start
 
 def snapshot(line=None):
     frame = inspect.currentframe().f_back
@@ -786,6 +810,10 @@ def emit_return(value):
     frame = inspect.currentframe().f_back
     capture_return_event(frame.f_code, value)
     return value
+
+def start_call():
+    frame = inspect.currentframe().f_back
+    capture_py_start(frame.f_code, frame.f_lasti)
 "#;
 
     #[derive(Debug, Clone, PartialEq)]
@@ -863,8 +891,13 @@ def emit_return(value):
     fn ensure_test_module(py: Python<'_>) {
         let module = PyModule::new(py, "test_tracer").expect("create module");
         module
+            .add_function(
+                wrap_pyfunction!(capture_py_start, &module).expect("wrap capture_py_start"),
+            )
+            .expect("add py_start capture function");
+        module
             .add_function(wrap_pyfunction!(capture_line, &module).expect("wrap capture_line"))
-            .expect("add function");
+            .expect("add line capture function");
         module
             .add_function(
                 wrap_pyfunction!(capture_return_event, &module).expect("wrap capture_return_event"),
@@ -904,6 +937,25 @@ def emit_return(value):
 
     fn write_filter(path: &Path, contents: &str) {
         fs::write(path, contents.trim_start()).expect("write filter");
+    }
+
+    fn install_drop_everything_filter(project_root: &Path) -> PathBuf {
+        let filters_dir = project_root.join(".codetracer");
+        fs::create_dir(&filters_dir).expect("create .codetracer");
+        let drop_filter_path = filters_dir.join("drop-filter.toml");
+        write_filter(
+            &drop_filter_path,
+            r#"
+            [meta]
+            name = "drop-all"
+            version = 1
+
+            [scope]
+            default_exec = "trace"
+            default_value_action = "drop"
+            "#,
+        );
+        drop_filter_path
     }
 
     #[test]
@@ -1125,21 +1177,7 @@ sensitive("s3cr3t")
 
             let project = tempfile::tempdir().expect("project dir");
             let project_root = project.path();
-            let filters_dir = project_root.join(".codetracer");
-            fs::create_dir(&filters_dir).expect("create .codetracer");
-            let drop_filter_path = filters_dir.join("drop-filter.toml");
-            write_filter(
-                &drop_filter_path,
-                r#"
-                [meta]
-                name = "drop-all"
-                version = 1
-
-                [scope]
-                default_exec = "trace"
-                default_value_action = "drop"
-                "#,
-            );
+            let drop_filter_path = install_drop_everything_filter(project_root);
 
             let config = TraceFilterConfig::from_inline_and_paths(
                 &[("builtin-default", BUILTIN_TRACE_FILTER)],
@@ -1186,11 +1224,13 @@ dropper()
             }
 
             let mut variable_names: Vec<String> = Vec::new();
-            let mut return_events = 0usize;
+            let mut return_values: Vec<ValueRecord> = Vec::new();
             for event in &tracer.writer.events {
                 match event {
                     TraceLowLevelEvent::VariableName(name) => variable_names.push(name.clone()),
-                    TraceLowLevelEvent::Return(_) => return_events += 1,
+                    TraceLowLevelEvent::Return(record) => {
+                        return_values.push(record.return_value.clone())
+                    }
                     _ => {}
                 }
             }
@@ -1199,9 +1239,89 @@ dropper()
                 "expected no variables captured, found {:?}",
                 variable_names
             );
+            assert_eq!(return_values.len(), 1, "return event should remain balanced");
+            match &return_values[0] {
+                ValueRecord::Error { msg, .. } => assert_eq!(msg, "<dropped>"),
+                other => panic!("expected dropped sentinel return value, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn drop_filters_keep_call_return_pairs_balanced() {
+        Python::with_gil(|py| {
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let drop_filter_path = install_drop_everything_filter(project_root);
+
+            let config = TraceFilterConfig::from_inline_and_paths(
+                &[("builtin-default", BUILTIN_TRACE_FILTER)],
+                &[drop_filter_path.clone()],
+            )
+            .expect("load filter chain");
+            let engine = Arc::new(TraceFilterEngine::new(config));
+
+            let app_dir = project_root.join("app");
+            fs::create_dir_all(&app_dir).expect("create app dir");
+            let script_path = app_dir.join("classes.py");
+            let body = r#"
+def initializer(label):
+    start_call()
+    return emit_return(label.upper())
+
+class Alpha:
+    TOKEN = initializer("alpha")
+
+class Beta:
+    TOKEN = initializer("beta")
+
+class Gamma:
+    TOKEN = initializer("gamma")
+
+initializer("omega")
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, script).expect("write script");
+
+            let mut tracer = RuntimeTracer::new(
+                script_path.to_string_lossy().as_ref(),
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                Some(engine),
+            );
+
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute classes script");
+            }
+
+            let mut call_count = 0usize;
+            let mut return_count = 0usize;
+            for event in &tracer.writer.events {
+                match event {
+                    TraceLowLevelEvent::Call(_) => call_count += 1,
+                    TraceLowLevelEvent::Return(_) => return_count += 1,
+                    _ => {}
+                }
+            }
+            assert!(
+                call_count >= 4,
+                "expected at least four call events, saw {call_count}"
+            );
             assert_eq!(
-                return_events, 0,
-                "return value should be dropped instead of recorded"
+                call_count, return_count,
+                "drop filters must keep call/return pairs balanced"
             );
         });
     }

@@ -19,6 +19,7 @@ use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
 
 const REDACTED_SENTINEL: &str = "<redacted>";
+const DROPPED_SENTINEL: &str = "<dropped>";
 
 const VALUE_KIND_COUNT: usize = 5;
 
@@ -50,6 +51,14 @@ fn redacted_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
     let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Redacted");
     ValueRecord::Error {
         msg: REDACTED_SENTINEL.to_string(),
+        type_id: ty,
+    }
+}
+
+fn dropped_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
+    let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Dropped");
+    ValueRecord::Error {
+        msg: DROPPED_SENTINEL.to_string(),
         type_id: ty,
     }
 }
@@ -322,8 +331,7 @@ pub fn record_return_value(
         ValueKind::Return,
         name,
         telemetry.as_deref_mut(),
-    );
-    if let Some(encoded) = encoded {
-        TraceWriter::register_return(writer, encoded);
-    }
+    )
+    .unwrap_or_else(|| dropped_value(writer));
+    TraceWriter::register_return(writer, encoded);
 }
