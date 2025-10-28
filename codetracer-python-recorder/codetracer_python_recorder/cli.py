@@ -11,7 +11,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from . import flush, start, stop
+from . import flush, policy_snapshot, start, stop
 from .auto_start import ENV_TRACE_FILTER
 from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, normalize_format
 
@@ -129,6 +129,15 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
             "Use '--no-module-name-from-globals' to fall back to the legacy resolver."
         ),
     )
+    parser.add_argument(
+        "--propagate-script-exit",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Mirror the traced script's exit status when the recorder succeeds (default: disabled). "
+            "Use '--no-propagate-script-exit' to force a zero exit status."
+        ),
+    )
 
     known, remainder = parser.parse_known_args(argv)
     pending: list[str] = list(remainder)
@@ -192,6 +201,8 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
                 parser.error(f"unsupported io-capture mode '{other}'")
     if known.module_name_from_globals is not None:
         policy["module_name_from_globals"] = known.module_name_from_globals
+    if known.propagate_script_exit is not None:
+        policy["propagate_script_exit"] = known.propagate_script_exit
 
     return RecorderCLIConfig(
         trace_dir=trace_dir,
@@ -286,7 +297,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         sys.argv = old_argv
         return 1
 
+    snapshot = policy_snapshot()
+    propagate_script_exit = bool(snapshot.get("propagate_script_exit"))
+
     exit_code: int | None = None
+    recorder_failed = False
     try:
         try:
             runpy.run_path(str(script_path), run_name="__main__")
@@ -297,13 +312,35 @@ def main(argv: Iterable[str] | None = None) -> int:
     finally:
         try:
             flush()
+        except Exception as exc:
+            recorder_failed = True
+            sys.stderr.write(f"Failed to flush Codetracer session: {exc}\n")
         finally:
-            stop(exit_code=exit_code)
-            sys.argv = old_argv
+            try:
+                stop(exit_code=exit_code)
+            except Exception as exc:
+                recorder_failed = True
+                sys.stderr.write(f"Failed to stop Codetracer session: {exc}\n")
+            finally:
+                sys.argv = old_argv
 
     _serialise_metadata(trace_dir, script=script_path)
 
-    return exit_code if exit_code is not None else 0
+    script_exit_code = exit_code if exit_code is not None else 0
+
+    if recorder_failed:
+        return 1
+
+    if propagate_script_exit:
+        return script_exit_code
+
+    if script_exit_code != 0:
+        sys.stderr.write(
+            f"Script exited with status {script_exit_code}; returning 0. "
+            "Use '--propagate-script-exit' to mirror the script exit code.\n"
+        )
+
+    return 0
 
 
 __all__ = ("main", "RecorderCLIConfig")

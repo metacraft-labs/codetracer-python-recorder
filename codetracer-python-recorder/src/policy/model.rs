@@ -72,6 +72,7 @@ pub struct RecorderPolicy {
     pub json_errors: bool,
     pub io_capture: IoCapturePolicy,
     pub module_name_from_globals: bool,
+    pub propagate_script_exit: bool,
 }
 
 impl Default for RecorderPolicy {
@@ -85,6 +86,7 @@ impl Default for RecorderPolicy {
             json_errors: false,
             io_capture: IoCapturePolicy::default(),
             module_name_from_globals: true,
+            propagate_script_exit: false,
         }
     }
 }
@@ -128,6 +130,9 @@ impl RecorderPolicy {
         if let Some(module_name_from_globals) = update.module_name_from_globals {
             self.module_name_from_globals = module_name_from_globals;
         }
+        if let Some(propagate_script_exit) = update.propagate_script_exit {
+            self.propagate_script_exit = propagate_script_exit;
+        }
     }
 }
 
@@ -150,6 +155,7 @@ pub(crate) struct PolicyUpdate {
     pub(crate) io_capture_line_proxies: Option<bool>,
     pub(crate) io_capture_fd_fallback: Option<bool>,
     pub(crate) module_name_from_globals: Option<bool>,
+    pub(crate) propagate_script_exit: Option<bool>,
 }
 
 /// Snapshot the current policy.

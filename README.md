@@ -41,12 +41,13 @@ All subclasses carry the same attributes, so existing handlers can migrate by ca
 
 `python -m codetracer_python_recorder` returns:
 
-- `0` when tracing and the target script succeed.
-- The script's own exit code when it calls `sys.exit()`.
-- `1` when a `RecorderError` bubbles out of startup or shutdown.
-- `2` when the CLI arguments are incomplete.
+- `0` when the recorder finishes cleanly, even if the traced script exits non-zero. The script's status is still recorded in `trace_metadata.json`, and a warning on stderr highlights the suppressed status.
+- `1` when a `RecorderError` bubbles out of startup or shutdown (policy failures, `require_trace`, flush/stop issues).
+- `2` when the CLI arguments are incomplete or invalid.
 
-Pass `--codetracer-json-errors` (or set the policy via `configure_policy(json_errors=True)`) to stream a one-line JSON trailer on stderr. The payload includes `run_id`, `trace_id`, `error_code`, `error_kind`, `message`, and the `context` map so downstream tooling can log failures without scraping text.
+Opt into mirroring the script's exit code with `--propagate-script-exit` (or `CODETRACER_PROPAGATE_SCRIPT_EXIT=true`). Use `--no-propagate-script-exit` to force suppression, even if the environment enables mirroring.
+
+Pass `--json-errors` (or set the policy via `configure_policy(json_errors=True)`) to stream a one-line JSON trailer on stderr. The payload includes `run_id`, `trace_id`, `error_code`, `error_kind`, `message`, and the `context` map so downstream tooling can log failures without scraping text.
 
 ### IO capture configuration
 
