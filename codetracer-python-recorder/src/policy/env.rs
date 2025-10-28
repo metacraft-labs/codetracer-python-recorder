@@ -21,6 +21,8 @@ pub const ENV_JSON_ERRORS: &str = "CODETRACER_JSON_ERRORS";
 pub const ENV_CAPTURE_IO: &str = "CODETRACER_CAPTURE_IO";
 /// Environment variable toggling globals-based module name resolution.
 pub const ENV_MODULE_NAME_FROM_GLOBALS: &str = "CODETRACER_MODULE_NAME_FROM_GLOBALS";
+/// Environment variable toggling whether the recorder mirrors script exit codes.
+pub const ENV_PROPAGATE_SCRIPT_EXIT: &str = "CODETRACER_PROPAGATE_SCRIPT_EXIT";
 
 /// Load policy overrides from environment variables.
 pub fn configure_policy_from_env() -> RecorderResult<()> {
@@ -64,6 +66,10 @@ pub fn configure_policy_from_env() -> RecorderResult<()> {
 
     if let Ok(value) = env::var(ENV_MODULE_NAME_FROM_GLOBALS) {
         update.module_name_from_globals = Some(parse_bool(&value)?);
+    }
+
+    if let Ok(value) = env::var(ENV_PROPAGATE_SCRIPT_EXIT) {
+        update.propagate_script_exit = Some(parse_bool(&value)?);
     }
 
     apply_policy_update(update);
@@ -148,6 +154,7 @@ mod tests {
         std::env::set_var(ENV_JSON_ERRORS, "yes");
         std::env::set_var(ENV_CAPTURE_IO, "proxies,fd");
         std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "true");
+        std::env::set_var(ENV_PROPAGATE_SCRIPT_EXIT, "true");
 
         configure_policy_from_env().expect("configure from env");
         let snap = policy_snapshot();
@@ -163,6 +170,7 @@ mod tests {
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
         assert!(snap.module_name_from_globals);
+        assert!(snap.propagate_script_exit);
     }
 
     #[test]
@@ -170,10 +178,12 @@ mod tests {
         let _guard = EnvGuard;
         reset_policy_for_tests();
         std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "false");
+        std::env::set_var(ENV_PROPAGATE_SCRIPT_EXIT, "false");
 
         configure_policy_from_env().expect("configure from env");
         let snap = policy_snapshot();
         assert!(!snap.module_name_from_globals);
+        assert!(!snap.propagate_script_exit);
     }
 
     #[test]
@@ -202,6 +212,7 @@ mod tests {
                 ENV_JSON_ERRORS,
                 ENV_CAPTURE_IO,
                 ENV_MODULE_NAME_FROM_GLOBALS,
+                ENV_PROPAGATE_SCRIPT_EXIT,
             ] {
                 std::env::remove_var(key);
             }

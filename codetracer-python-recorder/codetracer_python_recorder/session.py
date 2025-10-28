@@ -89,7 +89,8 @@ def start(
     policy:
         Optional mapping of runtime policy overrides forwarded to
         :func:`configure_policy` before tracing begins. Keys match the policy
-        keyword arguments (``on_recorder_error``, ``require_trace``, etc.).
+        keyword arguments (``on_recorder_error``, ``require_trace``,
+        ``propagate_script_exit``, etc.).
     apply_env_policy:
         When ``True`` (default), refresh policy settings from environment
         variables via :func:`configure_policy_from_env` prior to applying

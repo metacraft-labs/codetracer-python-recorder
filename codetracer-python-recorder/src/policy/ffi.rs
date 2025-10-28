@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 #[pyfunction(name = "configure_policy")]
-#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None, io_capture_line_proxies=None, io_capture_fd_fallback=None, module_name_from_globals=None))]
+#[pyo3(signature = (on_recorder_error=None, require_trace=None, keep_partial_trace=None, log_level=None, log_file=None, json_errors=None, io_capture_line_proxies=None, io_capture_fd_fallback=None, module_name_from_globals=None, propagate_script_exit=None))]
 pub fn configure_policy_py(
     on_recorder_error: Option<&str>,
     require_trace: Option<bool>,
@@ -22,6 +22,7 @@ pub fn configure_policy_py(
     io_capture_line_proxies: Option<bool>,
     io_capture_fd_fallback: Option<bool>,
     module_name_from_globals: Option<bool>,
+    propagate_script_exit: Option<bool>,
 ) -> PyResult<()> {
     let mut update = PolicyUpdate::default();
 
@@ -69,6 +70,10 @@ pub fn configure_policy_py(
         update.module_name_from_globals = Some(value);
     }
 
+    if let Some(value) = propagate_script_exit {
+        update.propagate_script_exit = Some(value);
+    }
+
     apply_policy_update(update);
     Ok(())
 }
@@ -106,6 +111,7 @@ pub fn py_policy_snapshot(py: Python<'_>) -> PyResult<PyObject> {
         "module_name_from_globals",
         snapshot.module_name_from_globals,
     )?;
+    dict.set_item("propagate_script_exit", snapshot.propagate_script_exit)?;
 
     let io_dict = PyDict::new(py);
     io_dict.set_item("line_proxies", snapshot.io_capture.line_proxies)?;
@@ -133,6 +139,7 @@ mod tests {
             Some(true),
             Some(true),
             Some(true),
+            Some(true),
         )
         .expect("configure policy via PyO3 facade");
 
@@ -152,6 +159,7 @@ mod tests {
         assert!(snap.io_capture.line_proxies);
         assert!(snap.io_capture.fd_fallback);
         assert!(snap.module_name_from_globals);
+        assert!(snap.propagate_script_exit);
         reset_policy_for_tests();
     }
 
@@ -160,6 +168,7 @@ mod tests {
         reset_policy_for_tests();
         let err = configure_policy_py(
             Some("unknown"),
+            None,
             None,
             None,
             None,
@@ -208,6 +217,7 @@ mod tests {
             Some(false),
             Some(false),
             Some(false),
+            Some(true),
         )
         .expect("configure policy");
 
@@ -223,6 +233,11 @@ mod tests {
             assert!(
                 dict.contains("io_capture").expect("check io_capture key"),
                 "expected io_capture in snapshot"
+            );
+            assert!(
+                dict.contains("propagate_script_exit")
+                    .expect("check propagate_script_exit key"),
+                "expected propagate_script_exit in snapshot"
             );
         });
         reset_policy_for_tests();
@@ -241,6 +256,7 @@ mod tests {
                 super::super::env::ENV_JSON_ERRORS,
                 super::super::env::ENV_CAPTURE_IO,
                 super::super::env::ENV_MODULE_NAME_FROM_GLOBALS,
+                super::super::env::ENV_PROPAGATE_SCRIPT_EXIT,
             ] {
                 std::env::remove_var(key);
             }
