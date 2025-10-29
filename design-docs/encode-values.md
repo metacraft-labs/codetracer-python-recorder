@@ -40,8 +40,11 @@ source of truth when implementing or reviewing value-handling changes.
 | `Error { msg, type_id }` | Failure to encode or repr.                                                          |
 | `Tuple { elements, type_id }` | Fixed-length positional records.                                                |
 | `Sequence { elements, is_slice, type_id }` | Variable-length collections (lists, sets, ranges, etc.).          |
-| `Struct { field_names, field_values, type_id }` | Named records (dataclasses, enums, etc.).                     |
-| `Reference { target_id, type_id }` | Identifies a previously emitted object.                                     |
+| `Struct { field_values, type_id }` | Named records (dataclasses, enums, etc.); field names live in `TypeSpecificInfo::Struct`. |
+| `Variant { discriminator, contents, type_id }` | Tagged unions (future use).                                      |
+| `Reference { dereferenced, address, mutable, type_id }` | Identifies a previously emitted object and preserves aliasing. |
+| `Cell { place }`       | Trace cell reference (mutation support).                                               |
+| `BigInt { b, negative, type_id }` | Arbitrary-size integers stored as big-endian bytes.                          |
 
 > _Note:_ Some variants (e.g., `Float`, `Struct`, `Reference`) are not yet used
 > in the current implementation. They are included here to document the desired
@@ -68,20 +71,22 @@ source of truth when implementing or reviewing value-handling changes.
   ```text
   ValueRecord::Struct {
       type_id: ensure(TypeKind::Struct, "builtins.int"),
-      field_names: ["sign", "digits"],
       field_values: [
           ValueRecord::Int { i: -1 | 1 },
           ValueRecord::String { text: "<decimal digits>" },
       ],
   }
   ```
-  `sign` is -1 or 1. `digits` contains the absolute value in base-10.
+  `sign` is -1 or 1. `digits` contains the absolute value in base-10. Attach
+  `TypeSpecificInfo::Struct { fields: ["sign", "digits"] }` when registering the
+  type so downstream tools can recover field names.
 - **Floats** — Emit `ValueRecord::Float`. Preserve `NaN`/`±Inf` verbatim; replay
   tooling should handle special values.
 - **Complex** — Encode as a tuple of two floats with type name `builtins.complex`.
-- **Decimals/Fractions** — Use `ValueRecord::Struct` with components:
-  - `decimal.Decimal`: fields `["sign", "exponent", "digits"]`.
-  - `fractions.Fraction`: fields `["numerator", "denominator"]` as integers.
+- **Decimals/Fractions** — Use `ValueRecord::Struct` with component values:
+  - `decimal.Decimal`: `field_values` store sign, exponent, and digits.
+  - `fractions.Fraction`: `field_values` store numerator and denominator.
+  Record descriptive field names in the associated `TypeSpecificInfo::Struct`.
 
 ## Text & Binary
 
@@ -91,7 +96,6 @@ source of truth when implementing or reviewing value-handling changes.
   ```text
   ValueRecord::Struct {
       type_id: ensure(TypeKind::Struct, "codetracer.string-preview"),
-      field_names: ["preview", "total_length", "truncated"],
       field_values: [
           ValueRecord::String { text: "<preview>" },
           ValueRecord::Int { i: original_len },
@@ -99,6 +103,7 @@ source of truth when implementing or reviewing value-handling changes.
       ],
   }
   ```
+  Register the struct type with metadata fields `["preview", "total_length", "truncated"]`.
 - **Bytes/Bytearray/MemoryView** — Base64-encode the first
   `BINARY_PREVIEW_BYTES` bytes and store inside `ValueRecord::Raw { r }` with
   type name `builtins.bytes` (or `builtins.bytearray`). Emit metadata struct:
@@ -117,8 +122,9 @@ source of truth when implementing or reviewing value-handling changes.
 - **Deque/Range/Other Iterables** — Materialise up to `ITERABLE_PREVIEW_COUNT`
   items. Mark `is_slice` when truncated and record the exhaustion metadata.
 - **References** — When encountering an object already in the seen-map, emit
-  `ValueRecord::Reference { target_id, type_id }`. `target_id` is the numeric id
-  assigned during the first emission.
+  `ValueRecord::Reference { dereferenced, address, mutable, type_id }`. Use the
+  object's `id()` for `address`, set `mutable` when further mutations are
+  expected, and reuse the previously encoded representation for `dereferenced`.
 
 ## Mappings
 
@@ -133,10 +139,12 @@ source of truth when implementing or reviewing value-handling changes.
 
 ## Structured Objects
 
-- **Dataclasses/attrs/NamedTuple** — Encode as `ValueRecord::Struct` with field
-  names derived from the class definition. Respect `init=False`/`repr=False`
-  flags by omitting suppressed fields.
-- **Enums** — Emit structs with fields `["name", "value"]`.
+- **Dataclasses/attrs/NamedTuple** — Encode as `ValueRecord::Struct`, storing
+  field values in definition order. Respect `init=False`/`repr=False` flags by
+  omitting suppressed fields, and populate `TypeSpecificInfo::Struct` with the
+  corresponding field names.
+- **Enums** — Emit structs whose `field_values` include the member name and raw
+  value; register metadata fields `["name", "value"]`.
 - **SimpleNamespace / objects with `__dict__`** — Enumerate attributes,
   excluding private names (`__*__`) by default. Order fields lexicographically.
 - **Slots-based objects** — Use `dir()`/`__slots__` metadata to gather fields,
@@ -150,7 +158,6 @@ source of truth when implementing or reviewing value-handling changes.
   ```text
   ValueRecord::Struct {
       type_id: ensure(TypeKind::Struct, "datetime.datetime"),
-      field_names: ["isoformat", "timestamp", "tzinfo"],
       field_values: [
           ValueRecord::String { text: dt.isoformat() },
           ValueRecord::Float { f: dt.timestamp() },
@@ -158,6 +165,7 @@ source of truth when implementing or reviewing value-handling changes.
       ],
   }
   ```
+  Register metadata fields `["isoformat", "timestamp", "tzinfo"]` with the struct type.
 - Truncate microseconds if policy requires but always report the original value.
 
 ## Errors & Fallback
@@ -175,8 +183,8 @@ source of truth when implementing or reviewing value-handling changes.
 Golden fixtures for this contract live under
 `codetracer-python-recorder/tests/data/values/`. Each fixture stores the Python
 code snippet, the captured value, and the expected `ValueRecord` JSON structure.
-Both unit tests and integration tests must load these fixtures to prevent
-regressions.
+Rust unit tests load these fixtures to prevent regressions; other tooling can
+reuse them as needed.
 
 ## Status Tracking
 

@@ -105,3 +105,246 @@ pub fn encode_value<'py>(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::encode_value;
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+    use runtime_tracing::{
+        Line, NonStreamingTraceWriter, TraceLowLevelEvent, TraceWriter, TypeId, TypeRecord,
+        TypeSpecificInfo, ValueRecord,
+    };
+    use serde::Deserialize;
+    use serde_json::{self, json, Value};
+    use std::ffi::CString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Debug, Deserialize)]
+    struct FixtureFile {
+        cases: Vec<FixtureCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct FixtureCase {
+        name: String,
+        code: String,
+        expr: String,
+        expected: Value,
+        #[serde(default)]
+        source: Option<String>,
+    }
+
+    impl FixtureCase {
+        fn context(&self) -> String {
+            match &self.source {
+                Some(src) => format!("{}::{}", src, self.name),
+                None => self.name.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn value_encoding_fixtures_match_contract() {
+        let cases = load_fixture_cases();
+        assert!(
+            !cases.is_empty(),
+            "expected at least one fixture case; add tests/data/values/*.json"
+        );
+
+        Python::with_gil(|py| {
+            for case in cases {
+                let globals = PyDict::new(py);
+                let code_cstr =
+                    CString::new(case.code.as_str()).unwrap_or_else(|err| {
+                        panic!("invalid code for {}: {}", case.context(), err);
+                    });
+                py.run(code_cstr.as_c_str(), None, Some(&globals))
+                    .unwrap_or_else(|err| panic!("setup failed for {}: {}", case.context(), err));
+                let expr_cstr =
+                    CString::new(case.expr.as_str()).unwrap_or_else(|err| {
+                        panic!("invalid expr for {}: {}", case.context(), err);
+                    });
+                let value = py
+                    .eval(expr_cstr.as_c_str(), Some(&globals), Some(&globals))
+                    .unwrap_or_else(|err| panic!("expr failed for {}: {}", case.context(), err));
+
+                let mut writer = NonStreamingTraceWriter::new("<fixture>", &[]);
+                writer.start(Path::new("<fixture>"), Line(1));
+
+                let record = encode_value(py, &mut writer, &value);
+                let type_records = collect_type_records(&writer.events);
+                let actual = canonicalize(&record, &type_records);
+                if actual != case.expected {
+                    panic!(
+                        "value mismatch for {}\nexpected: {}\nactual: {}",
+                        case.context(),
+                        serde_json::to_string_pretty(&case.expected).unwrap(),
+                        serde_json::to_string_pretty(&actual).unwrap()
+                    );
+                }
+            }
+        });
+    }
+
+    fn load_fixture_cases() -> Vec<FixtureCase> {
+        let mut cases = Vec::new();
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/values");
+        if !base.exists() {
+            return cases;
+        }
+        let entries = fs::read_dir(&base)
+            .unwrap_or_else(|err| panic!("failed to read fixture dir {}: {}", base.display(), err));
+        for entry in entries {
+            let entry = entry.expect("failed to read fixture directory entry");
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {}", path.display(), err));
+            let mut file: FixtureFile = serde_json::from_str(&contents)
+                .unwrap_or_else(|err| panic!("invalid JSON in {}: {}", path.display(), err));
+            let source = path
+                .file_name()
+                .and_then(|name| name.to_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| path.display().to_string());
+            for mut case in file.cases.drain(..) {
+                case.source = Some(source.clone());
+                cases.push(case);
+            }
+        }
+        cases
+    }
+
+    fn collect_type_records(events: &[TraceLowLevelEvent]) -> Vec<TypeRecord> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                TraceLowLevelEvent::Type(record) => Some(record.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn type_name(types: &[TypeRecord], type_id: TypeId) -> String {
+        types
+            .get(type_id.0)
+            .map(|record| record.lang_type.clone())
+            .unwrap_or_else(|| format!("#{}", type_id.0))
+    }
+
+    fn canonicalize(value: &ValueRecord, types: &[TypeRecord]) -> Value {
+        match value {
+            ValueRecord::None { type_id } => {
+                json!({"kind": "None", "type": type_name(types, *type_id)})
+            }
+            ValueRecord::Bool { b, type_id } => {
+                json!({"kind": "Bool", "type": type_name(types, *type_id), "b": b})
+            }
+            ValueRecord::Int { i, type_id } => {
+                json!({"kind": "Int", "type": type_name(types, *type_id), "i": i})
+            }
+            ValueRecord::Float { f, type_id } => {
+                json!({"kind": "Float", "type": type_name(types, *type_id), "f": f})
+            }
+            ValueRecord::String { text, type_id } => json!({
+                "kind": "String",
+                "type": type_name(types, *type_id),
+                "text": text,
+            }),
+            ValueRecord::Raw { r, type_id } => json!({
+                "kind": "Raw",
+                "type": type_name(types, *type_id),
+                "r": r,
+            }),
+            ValueRecord::Error { msg, type_id } => json!({
+                "kind": "Error",
+                "type": type_name(types, *type_id),
+                "msg": msg,
+            }),
+            ValueRecord::Sequence {
+                elements,
+                is_slice,
+                type_id,
+            } => json!({
+                "kind": "Sequence",
+                "type": type_name(types, *type_id),
+                "is_slice": is_slice,
+                "elements": elements.iter().map(|elem| canonicalize(elem, types)).collect::<Vec<_>>(),
+            }),
+            ValueRecord::Tuple { elements, type_id } => json!({
+                "kind": "Tuple",
+                "type": type_name(types, *type_id),
+                "elements": elements.iter().map(|elem| canonicalize(elem, types)).collect::<Vec<_>>(),
+            }),
+            ValueRecord::Struct {
+                field_values,
+                type_id,
+            } => {
+                let fields = types
+                    .get(type_id.0)
+                    .and_then(|record| match &record.specific_info {
+                        TypeSpecificInfo::Struct { fields } => Some(fields),
+                        _ => None,
+                    });
+                let values = field_values
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, val)| {
+                        let mut entry = serde_json::Map::new();
+                        if let Some(fields) = fields {
+                            if let Some(field) = fields.get(idx) {
+                                entry.insert("name".to_string(), Value::String(field.name.clone()));
+                            }
+                        }
+                        entry.insert("value".to_string(), canonicalize(val, types));
+                        Value::Object(entry)
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "kind": "Struct",
+                    "type": type_name(types, *type_id),
+                    "fields": values,
+                })
+            }
+            ValueRecord::Variant {
+                discriminator,
+                contents,
+                type_id,
+            } => json!({
+                "kind": "Variant",
+                "type": type_name(types, *type_id),
+                "discriminator": discriminator,
+                "contents": canonicalize(contents, types),
+            }),
+            ValueRecord::Reference {
+                dereferenced,
+                address,
+                mutable,
+                type_id,
+            } => json!({
+                "kind": "Reference",
+                "type": type_name(types, *type_id),
+                "address": address,
+                "mutable": mutable,
+                "dereferenced": canonicalize(dereferenced, types),
+            }),
+            ValueRecord::Cell { place } => json!({
+                "kind": "Cell",
+                "place": place.0,
+            }),
+            ValueRecord::BigInt {
+                b,
+                negative,
+                type_id,
+            } => json!({
+                "kind": "BigInt",
+                "type": type_name(types, *type_id),
+                "negative": negative,
+                "digits": b.iter().map(|byte| Value::from(*byte)).collect::<Vec<_>>(),
+            }),
+        }
+    }
+}

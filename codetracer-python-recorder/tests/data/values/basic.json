@@ -1,0 +1,145 @@
+{
+  "cases": [
+    {
+      "name": "none_literal",
+      "code": "value = None",
+      "expr": "value",
+      "expected": {
+        "kind": "None",
+        "type": "None"
+      }
+    },
+    {
+      "name": "bool_true",
+      "code": "value = True",
+      "expr": "value",
+      "expected": {
+        "kind": "Bool",
+        "type": "Bool",
+        "b": true
+      }
+    },
+    {
+      "name": "int_small",
+      "code": "value = 42",
+      "expr": "value",
+      "expected": {
+        "kind": "Int",
+        "type": "Int",
+        "i": 42
+      }
+    },
+    {
+      "name": "string_text",
+      "code": "value = 'hello world'",
+      "expr": "value",
+      "expected": {
+        "kind": "String",
+        "type": "String",
+        "text": "hello world"
+      }
+    },
+    {
+      "name": "tuple_mixed",
+      "code": "value = ('alpha', 7)",
+      "expr": "value",
+      "expected": {
+        "kind": "Tuple",
+        "type": "Tuple",
+        "elements": [
+          {
+            "kind": "String",
+            "type": "String",
+            "text": "alpha"
+          },
+          {
+            "kind": "Int",
+            "type": "Int",
+            "i": 7
+          }
+        ]
+      }
+    },
+    {
+      "name": "list_numbers",
+      "code": "value = [1, 2, 3]",
+      "expr": "value",
+      "expected": {
+        "kind": "Sequence",
+        "type": "List",
+        "is_slice": false,
+        "elements": [
+          {
+            "kind": "Int",
+            "type": "Int",
+            "i": 1
+          },
+          {
+            "kind": "Int",
+            "type": "Int",
+            "i": 2
+          },
+          {
+            "kind": "Int",
+            "type": "Int",
+            "i": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "dict_mixed_keys",
+      "code": "value = {'a': 1, 2: 'b'}",
+      "expr": "value",
+      "expected": {
+        "kind": "Sequence",
+        "type": "Dict",
+        "is_slice": false,
+        "elements": [
+          {
+            "kind": "Tuple",
+            "type": "Tuple",
+            "elements": [
+              {
+                "kind": "String",
+                "type": "String",
+                "text": "a"
+              },
+              {
+                "kind": "Int",
+                "type": "Int",
+                "i": 1
+              }
+            ]
+          },
+          {
+            "kind": "Tuple",
+            "type": "Tuple",
+            "elements": [
+              {
+                "kind": "Int",
+                "type": "Int",
+                "i": 2
+              },
+              {
+                "kind": "String",
+                "type": "String",
+                "text": "b"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "custom_repr_raw",
+      "code": "class ReprObj:\\n    def __repr__(self):\\n        return '<ReprObj>'\\nvalue = ReprObj()",
+      "expr": "value",
+      "expected": {
+        "kind": "Raw",
+        "type": "Object",
+        "r": "<ReprObj>"
+      }
+    }
+  ]
+}
