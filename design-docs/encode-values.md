@@ -183,8 +183,14 @@ source of truth when implementing or reviewing value-handling changes.
 Golden fixtures for this contract live under
 `codetracer-python-recorder/tests/data/values/`. Each fixture stores the Python
 code snippet, the captured value, and the expected `ValueRecord` JSON structure.
-Rust unit tests load these fixtures to prevent regressions; other tooling can
-reuse them as needed.
+Rust unit tests load these fixtures (`cargo test value_encoding_fixtures_match_contract`)
+to prevent regressions; other tooling can reuse them as needed. The
+`integration-test` feature exposes a Python helper
+(`codetracer_python_recorder.codetracer_python_recorder.encode_value_fixture`)
+that powers the parity check in
+`codetracer-python-recorder/tests/python/unit/test_value_encoding_contract.py`.
+Running `just dev test` executes both harnesses so the Rust library and the
+published wheel stay aligned with the documented shapes.
 
 ## Status Tracking
 

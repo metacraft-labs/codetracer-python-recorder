@@ -39,5 +39,12 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     m.add_function(wrap_pyfunction!(policy::configure_policy_py, m)?)?;
     m.add_function(wrap_pyfunction!(policy::py_configure_policy_from_env, m)?)?;
     m.add_function(wrap_pyfunction!(policy::py_policy_snapshot, m)?)?;
+    #[cfg(feature = "integration-test")]
+    {
+        m.add_function(wrap_pyfunction!(
+            runtime::value_encoder::encode_value_fixture_for_tests,
+            m
+        )?)?;
+    }
     Ok(())
 }

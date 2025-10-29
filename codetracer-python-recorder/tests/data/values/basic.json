@@ -133,7 +133,7 @@
     },
     {
       "name": "custom_repr_raw",
-      "code": "class ReprObj:\\n    def __repr__(self):\\n        return '<ReprObj>'\\nvalue = ReprObj()",
+      "code": "class ReprObj:\n    def __repr__(self):\n        return '<ReprObj>'\nvalue = ReprObj()",
       "expr": "value",
       "expected": {
         "kind": "Raw",

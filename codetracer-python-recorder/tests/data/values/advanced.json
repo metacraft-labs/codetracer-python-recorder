@@ -1,0 +1,110 @@
+{
+  "cases": [
+    {
+      "name": "nested_structures",
+      "code": "value = {\"nums\": [1, [2, 3]], \"inner\": {\"a\": True}}",
+      "expr": "value",
+      "expected": {
+        "kind": "Sequence",
+        "type": "Dict",
+        "is_slice": false,
+        "elements": [
+          {
+            "kind": "Tuple",
+            "type": "Tuple",
+            "elements": [
+              {
+                "kind": "String",
+                "type": "String",
+                "text": "nums"
+              },
+              {
+                "kind": "Sequence",
+                "type": "List",
+                "is_slice": false,
+                "elements": [
+                  {
+                    "kind": "Int",
+                    "type": "Int",
+                    "i": 1
+                  },
+                  {
+                    "kind": "Sequence",
+                    "type": "List",
+                    "is_slice": false,
+                    "elements": [
+                      {
+                        "kind": "Int",
+                        "type": "Int",
+                        "i": 2
+                      },
+                      {
+                        "kind": "Int",
+                        "type": "Int",
+                        "i": 3
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "kind": "Tuple",
+            "type": "Tuple",
+            "elements": [
+              {
+                "kind": "String",
+                "type": "String",
+                "text": "inner"
+              },
+              {
+                "kind": "Sequence",
+                "type": "Dict",
+                "is_slice": false,
+                "elements": [
+                  {
+                    "kind": "Tuple",
+                    "type": "Tuple",
+                    "elements": [
+                      {
+                        "kind": "String",
+                        "type": "String",
+                        "text": "a"
+                      },
+                      {
+                        "kind": "Bool",
+                        "type": "Bool",
+                        "b": true
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "datetime_raw",
+      "code": "import datetime\nvalue = datetime.datetime(2024, 1, 2, 3, 4, 5)",
+      "expr": "value",
+      "expected": {
+        "kind": "Raw",
+        "type": "Object",
+        "r": "2024-01-02 03:04:05"
+      }
+    },
+    {
+      "name": "repr_failure",
+      "code": "class BadStr:\n    def __str__(self):\n        raise RuntimeError('boom')\nvalue = BadStr()",
+      "expr": "value",
+      "expected": {
+        "kind": "Error",
+        "type": "Object",
+        "msg": "<unrepr>"
+      }
+    }
+  ]
+}

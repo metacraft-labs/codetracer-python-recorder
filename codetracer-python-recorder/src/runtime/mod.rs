@@ -11,7 +11,7 @@ mod logging;
 mod output_paths;
 pub mod tracer;
 mod value_capture;
-mod value_encoder;
+pub(crate) mod value_encoder;
 
 pub use output_paths::TraceOutputPaths;
 pub use tracer::RuntimeTracer;

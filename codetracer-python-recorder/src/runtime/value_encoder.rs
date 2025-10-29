@@ -106,38 +106,47 @@ pub fn encode_value<'py>(
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "integration-test"))]
+mod fixtures {
     use super::encode_value;
+    use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::types::PyModule;
     use runtime_tracing::{
         Line, NonStreamingTraceWriter, TraceLowLevelEvent, TraceWriter, TypeId, TypeRecord,
         TypeSpecificInfo, ValueRecord,
     };
-    use serde::Deserialize;
     use serde_json::{self, json, Value};
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
+    #[cfg(test)]
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(test)]
+    use std::path::PathBuf;
 
+    #[cfg(test)]
+    use serde::Deserialize;
+
+    #[cfg(test)]
     #[derive(Debug, Deserialize)]
-    struct FixtureFile {
-        cases: Vec<FixtureCase>,
+    pub(crate) struct FixtureFile {
+        pub(crate) cases: Vec<FixtureCase>,
     }
 
+    #[cfg(test)]
     #[derive(Debug, Deserialize)]
-    struct FixtureCase {
-        name: String,
-        code: String,
-        expr: String,
-        expected: Value,
+    pub(crate) struct FixtureCase {
+        pub(crate) name: String,
+        pub(crate) code: String,
+        pub(crate) expr: String,
+        pub(crate) expected: Value,
         #[serde(default)]
-        source: Option<String>,
+        pub(crate) source: Option<String>,
     }
 
+    #[cfg(test)]
     impl FixtureCase {
-        fn context(&self) -> String {
+        pub(crate) fn context(&self) -> String {
             match &self.source {
                 Some(src) => format!("{}::{}", src, self.name),
                 None => self.name.clone(),
@@ -145,50 +154,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn value_encoding_fixtures_match_contract() {
-        let cases = load_fixture_cases();
-        assert!(
-            !cases.is_empty(),
-            "expected at least one fixture case; add tests/data/values/*.json"
-        );
-
-        Python::with_gil(|py| {
-            for case in cases {
-                let globals = PyDict::new(py);
-                let code_cstr =
-                    CString::new(case.code.as_str()).unwrap_or_else(|err| {
-                        panic!("invalid code for {}: {}", case.context(), err);
-                    });
-                py.run(code_cstr.as_c_str(), None, Some(&globals))
-                    .unwrap_or_else(|err| panic!("setup failed for {}: {}", case.context(), err));
-                let expr_cstr =
-                    CString::new(case.expr.as_str()).unwrap_or_else(|err| {
-                        panic!("invalid expr for {}: {}", case.context(), err);
-                    });
-                let value = py
-                    .eval(expr_cstr.as_c_str(), Some(&globals), Some(&globals))
-                    .unwrap_or_else(|err| panic!("expr failed for {}: {}", case.context(), err));
-
-                let mut writer = NonStreamingTraceWriter::new("<fixture>", &[]);
-                writer.start(Path::new("<fixture>"), Line(1));
-
-                let record = encode_value(py, &mut writer, &value);
-                let type_records = collect_type_records(&writer.events);
-                let actual = canonicalize(&record, &type_records);
-                if actual != case.expected {
-                    panic!(
-                        "value mismatch for {}\nexpected: {}\nactual: {}",
-                        case.context(),
-                        serde_json::to_string_pretty(&case.expected).unwrap(),
-                        serde_json::to_string_pretty(&actual).unwrap()
-                    );
-                }
-            }
-        });
-    }
-
-    fn load_fixture_cases() -> Vec<FixtureCase> {
+    #[cfg(test)]
+    pub(crate) fn load_fixture_cases() -> Vec<FixtureCase> {
         let mut cases = Vec::new();
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/values");
         if !base.exists() {
@@ -216,6 +183,33 @@ mod tests {
             }
         }
         cases
+    }
+
+    #[cfg(test)]
+    pub(crate) fn encode_case(py: Python<'_>, case: &FixtureCase) -> PyResult<Value> {
+        encode_snippet(py, case.code.as_str(), case.expr.as_str())
+    }
+
+    pub(crate) fn encode_snippet(py: Python<'_>, code: &str, expr: &str) -> PyResult<Value> {
+        let code_cstr = CString::new(code)
+            .map_err(|err| PyErr::new::<PyValueError, _>(format!("invalid code: {err}")))?;
+        let filename_cstr =
+            CStr::from_bytes_with_nul(b"<fixture>\0").expect("fixture filename literal");
+        let module_name_cstr =
+            CStr::from_bytes_with_nul(b"<fixture_module>\0").expect("fixture module literal");
+        let module =
+            PyModule::from_code(py, code_cstr.as_c_str(), filename_cstr, module_name_cstr)?;
+        let globals = module.dict();
+        let expr_cstr = CString::new(expr)
+            .map_err(|err| PyErr::new::<PyValueError, _>(format!("invalid expr: {err}")))?;
+        let value = py.eval(expr_cstr.as_c_str(), Some(&globals), Some(&globals))?;
+
+        let mut writer = NonStreamingTraceWriter::new("<fixture>", &[]);
+        writer.start(Path::new("<fixture>"), Line(1));
+
+        let record = encode_value(py, &mut writer, &value);
+        let type_records = collect_type_records(&writer.events);
+        Ok(canonicalize(&record, &type_records))
     }
 
     fn collect_type_records(events: &[TraceLowLevelEvent]) -> Vec<TypeRecord> {
@@ -346,5 +340,53 @@ mod tests {
                 "digits": b.iter().map(|byte| Value::from(*byte)).collect::<Vec<_>>(),
             }),
         }
+    }
+}
+
+#[cfg(feature = "integration-test")]
+use fixtures::encode_snippet;
+
+#[cfg(feature = "integration-test")]
+use pyo3::exceptions::PyValueError;
+
+#[cfg(feature = "integration-test")]
+#[pyfunction(name = "encode_value_fixture")]
+pub(crate) fn encode_value_fixture_for_tests(
+    py: Python<'_>,
+    code: &str,
+    expr: &str,
+) -> PyResult<String> {
+    let value = encode_snippet(py, code, expr)?;
+    serde_json::to_string(&value)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialise encoded value: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::{encode_case, load_fixture_cases};
+    use pyo3::prelude::*;
+
+    #[test]
+    fn value_encoding_fixtures_match_contract() {
+        let cases = load_fixture_cases();
+        assert!(
+            !cases.is_empty(),
+            "expected at least one fixture case; add tests/data/values/*.json"
+        );
+
+        Python::with_gil(|py| {
+            for case in cases {
+                let context = case.context();
+                let actual = encode_case(py, &case)
+                    .unwrap_or_else(|err| panic!("encoding failed for {context}: {err}"));
+                if actual != case.expected {
+                    panic!(
+                        "value mismatch for {context}\nexpected: {}\nactual: {}",
+                        serde_json::to_string_pretty(&case.expected).unwrap(),
+                        serde_json::to_string_pretty(&actual).unwrap()
+                    );
+                }
+            }
+        });
     }
 }
