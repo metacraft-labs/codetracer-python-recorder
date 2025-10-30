@@ -1,0 +1,133 @@
+{
+  "cases": [
+    {
+      "name": "set_preview",
+      "code": "value = set(range(10))",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "codetracer.set-metadata",
+        "fields": [
+          {
+            "name": "preview",
+            "value": {
+              "kind": "Sequence",
+              "type": "builtins.list",
+              "is_slice": true,
+              "elements": [
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 0
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 1
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 2
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 3
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 4
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 5
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 6
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 7
+                }
+              ]
+            }
+          },
+          {
+            "name": "total_count",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 10
+            }
+          },
+          {
+            "name": "unordered",
+            "value": {
+              "kind": "Bool",
+              "type": "builtins.bool",
+              "b": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "frozenset_preview",
+      "code": "value = frozenset(range(3))",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "codetracer.set-metadata",
+        "fields": [
+          {
+            "name": "preview",
+            "value": {
+              "kind": "Sequence",
+              "type": "builtins.list",
+              "is_slice": false,
+              "elements": [
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 0
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 1
+                },
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 2
+                }
+              ]
+            }
+          },
+          {
+            "name": "total_count",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 3
+            }
+          },
+          {
+            "name": "unordered",
+            "value": {
+              "kind": "Bool",
+              "type": "builtins.bool",
+              "b": true
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

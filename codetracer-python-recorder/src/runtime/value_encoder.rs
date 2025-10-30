@@ -12,7 +12,8 @@ use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{
     PyAny, PyAnyMethods, PyBool, PyByteArray, PyBytes, PyComplex, PyComplexMethods, PyDict,
-    PyFloat, PyInt, PyList, PyMemoryView, PyString, PyTuple, PyTypeMethods,
+    PyFloat, PyFrozenSet, PyInt, PyList, PyMemoryView, PyRange, PyRangeMethods, PySet, PyString,
+    PyTuple, PyTypeMethods,
 };
 use runtime_tracing::{
     FieldTypeRecord, NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, TypeRecord,
@@ -28,6 +29,7 @@ const STRING_PREVIEW_LIMIT: usize = 256;
 const BINARY_PREVIEW_BYTES: usize = 1024;
 const STRING_PREVIEW_TYPE: &str = "codetracer.string-preview";
 const BYTES_PREVIEW_TYPE: &str = "codetracer.bytes-preview";
+const DEFAULT_MAX_SET_PREVIEW: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncoderLimits {
@@ -73,6 +75,10 @@ static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
         ValueHandler::new(guard_tuple, encode_tuple),
         ValueHandler::new(guard_list, encode_list),
         ValueHandler::new(guard_dict, encode_dict),
+        ValueHandler::new(guard_set, encode_set),
+        ValueHandler::new(guard_frozenset, encode_frozenset),
+        ValueHandler::new(guard_range, encode_range),
+        ValueHandler::new(guard_deque, encode_deque),
     ]
 });
 
@@ -185,10 +191,14 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
         value.downcast::<PyList>().is_ok()
             || value.downcast::<PyDict>().is_ok()
             || value.downcast::<PyTuple>().is_ok()
+            || value.downcast::<PySet>().is_ok()
+            || value.downcast::<PyFrozenSet>().is_ok()
     }
 
     fn is_mutable(&self, value: &Bound<'_, PyAny>) -> bool {
-        value.downcast::<PyList>().is_ok() || value.downcast::<PyDict>().is_ok()
+        value.downcast::<PyList>().is_ok()
+            || value.downcast::<PyDict>().is_ok()
+            || value.downcast::<PySet>().is_ok()
     }
 
     fn make_reference(
@@ -459,15 +469,15 @@ fn encode_bytes_like<'py>(
 
     if let Ok(bytearray) = value.downcast::<PyByteArray>() {
         let data = match bytearray.extract::<Vec<u8>>() {
-            Ok(vec) => vec,
+            Ok(buf) => buf,
             Err(_) => return ctx.encode_repr(value),
         };
         return encode_bytes_preview(ctx, &data, "builtins.bytearray");
     }
 
-    if value.downcast::<PyMemoryView>().is_ok() {
-        let data = match value.extract::<Vec<u8>>() {
-            Ok(vec) => vec,
+    if let Ok(mem) = value.downcast::<PyMemoryView>() {
+        let data = match mem.extract::<Vec<u8>>() {
+            Ok(buf) => buf,
             Err(_) => return ctx.encode_repr(value),
         };
         return encode_bytes_preview(ctx, &data, "builtins.memoryview");
@@ -500,6 +510,77 @@ fn encode_path_like<'py>(
         return encode_bytes_preview(ctx, bytes.as_bytes(), &type_name);
     }
     ctx.encode_repr(value)
+}
+
+fn guard_set(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PySet>().is_ok()
+}
+
+fn encode_set<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    encode_set_like(ctx, value, true)
+}
+
+fn guard_frozenset(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyFrozenSet>().is_ok()
+}
+
+fn encode_frozenset<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    encode_set_like(ctx, value, true)
+}
+
+fn guard_range(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyRange>().is_ok()
+}
+
+fn encode_range<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let range = value.downcast::<PyRange>().expect("guard ensures range");
+    let start = range.start().ok().map(convert_isize).unwrap_or(0);
+    let stop = range.stop().ok().map(convert_isize).unwrap_or(0);
+    let step = range.step().ok().map(convert_isize).unwrap_or(1);
+
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let range_ty = ctx.ensure_struct_type(
+        "codetracer.range",
+        &[("start", int_ty), ("stop", int_ty), ("step", int_ty)],
+    );
+
+    ValueRecord::Struct {
+        field_values: vec![
+            ValueRecord::Int {
+                i: start,
+                type_id: int_ty,
+            },
+            ValueRecord::Int {
+                i: stop,
+                type_id: int_ty,
+            },
+            ValueRecord::Int {
+                i: step,
+                type_id: int_ty,
+            },
+        ],
+        type_id: range_ty,
+    }
+}
+
+fn guard_deque(value: &Bound<'_, PyAny>) -> bool {
+    matches_type(value, "collections", "deque")
+}
+
+fn encode_deque<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    encode_iterable_sequence(ctx, value, "collections.deque")
 }
 
 fn encode_text_value<'py>(
@@ -607,6 +688,132 @@ fn encode_bytes_preview<'py>(
         ],
         type_id: struct_ty,
     }
+}
+
+fn encode_set_like<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+    unordered: bool,
+) -> ValueRecord {
+    let limit = ctx.limits.max_items.min(DEFAULT_MAX_SET_PREVIEW);
+    let mut preview = Vec::with_capacity(limit);
+    let mut truncated = false;
+
+    if limit == 0 {
+        if let Ok(mut iter) = value.try_iter() {
+            truncated = iter.next().is_some();
+        }
+    } else {
+        match value.try_iter() {
+            Ok(mut iter) => {
+                while let Some(result) = iter.next() {
+                    let item = match result {
+                        Ok(item) => item,
+                        Err(_) => return ctx.encode_repr(value),
+                    };
+                    if preview.len() < limit {
+                        preview.push(ctx.encode_nested(&item));
+                    } else {
+                        truncated = true;
+                        break;
+                    }
+                }
+            }
+            Err(_) => return ctx.encode_repr(value),
+        }
+    }
+
+    let total_count = value
+        .len()
+        .ok()
+        .unwrap_or(preview.len().saturating_add(usize::from(truncated)));
+    if !truncated && total_count > preview.len() && preview.len() >= limit && limit > 0 {
+        truncated = true;
+    }
+
+    let preview_type = ctx.ensure_type(TypeKind::Seq, "builtins.list");
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let bool_ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
+    let metadata_ty = ctx.ensure_struct_type(
+        "codetracer.set-metadata",
+        &[
+            ("preview", preview_type),
+            ("total_count", int_ty),
+            ("unordered", bool_ty),
+        ],
+    );
+
+    let preview_record = ValueRecord::Sequence {
+        elements: preview,
+        is_slice: truncated,
+        type_id: preview_type,
+    };
+
+    ValueRecord::Struct {
+        field_values: vec![
+            preview_record,
+            ValueRecord::Int {
+                i: total_count.try_into().unwrap_or(i64::MAX),
+                type_id: int_ty,
+            },
+            ValueRecord::Bool {
+                b: unordered,
+                type_id: bool_ty,
+            },
+        ],
+        type_id: metadata_ty,
+    }
+}
+
+fn encode_iterable_sequence<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+    type_name: &str,
+) -> ValueRecord {
+    let mut iter = match value.try_iter() {
+        Ok(iter) => iter,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let mut elements = Vec::new();
+    let limit = ctx.limits.max_items;
+    let mut truncated = false;
+
+    while let Some(result) = iter.next() {
+        let item = match result {
+            Ok(item) => item,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        if elements.len() < limit {
+            elements.push(ctx.encode_nested(&item));
+        } else {
+            truncated = true;
+            break;
+        }
+    }
+
+    if !truncated {
+        if let Ok(len) = value.len() {
+            truncated = len > elements.len();
+        }
+    }
+
+    let ty = ctx.ensure_type(TypeKind::Seq, type_name);
+    ValueRecord::Sequence {
+        elements,
+        is_slice: truncated,
+        type_id: ty,
+    }
+}
+
+fn convert_isize(value: isize) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| {
+        if value.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
 }
 
 fn guard_tuple(value: &Bound<'_, PyAny>) -> bool {
@@ -1011,7 +1218,7 @@ mod tests {
     use super::{EncoderLimits, ValueEncoderContext, DEFAULT_MAX_DEPTH};
     use pyo3::prelude::*;
     use pyo3::types::{PyList, PyTuple};
-    use runtime_tracing::{Line, NonStreamingTraceWriter, TraceWriter, ValueRecord};
+    use runtime_tracing::{Line, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord};
     use std::ffi::CString;
 
     #[test]
@@ -1195,6 +1402,93 @@ mod tests {
                     }
                 }
                 other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn set_handler_emits_metadata_struct() {
+        Python::with_gil(|py| {
+            let expr = CString::new("set(range(5))").expect("set literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct {
+                    field_values,
+                    type_id,
+                } => {
+                    let expected = TraceWriter::ensure_type_id(
+                        &mut writer,
+                        TypeKind::Struct,
+                        "codetracer.set-metadata",
+                    );
+                    assert_eq!(type_id, expected);
+                    assert_eq!(field_values.len(), 3);
+                    match &field_values[0] {
+                        ValueRecord::Sequence { is_slice, .. } => assert!(!is_slice),
+                        other => panic!("expected preview sequence, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, 5),
+                        other => panic!("expected total_count int, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn range_handler_encodes_bounds() {
+        Python::with_gil(|py| {
+            let expr = CString::new("range(1, 7, 2)").expect("range literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 3);
+                    let mut ints = field_values.iter().map(|val| match val {
+                        ValueRecord::Int { i, .. } => *i,
+                        other => panic!("expected Int field, saw {:?}", other),
+                    });
+                    assert_eq!(ints.next(), Some(1));
+                    assert_eq!(ints.next(), Some(7));
+                    assert_eq!(ints.next(), Some(2));
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn deque_handler_encodes_sequence_preview() {
+        Python::with_gil(|py| {
+            let expr =
+                CString::new("__import__('collections').deque([1, 2, 3])").expect("deque literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Sequence {
+                    elements,
+                    is_slice,
+                    type_id,
+                } => {
+                    let expected = TraceWriter::ensure_type_id(
+                        &mut writer,
+                        TypeKind::Seq,
+                        "collections.deque",
+                    );
+                    assert_eq!(type_id, expected);
+                    assert_eq!(elements.len(), 3);
+                    assert!(!is_slice);
+                }
+                other => panic!("expected Sequence record, saw {:?}", other),
             }
         });
     }

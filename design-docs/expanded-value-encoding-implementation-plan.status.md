@@ -42,17 +42,25 @@
   through `os.fspath()` while registering stable `pathlib.*` type ids. New
   fixtures (`text_binary.json`) exercise the preview metadata and the parity
   suite confirms Python/Rust alignment.
-- WS5–WS8: Not started.
+- **WS5 – Rust Collections & Recursion Management:** Completed. Sets and
+  frozensets surface as `codetracer.set-metadata` structs with preview budgets,
+  ranges encode start/stop/step via `codetracer.range`, and general iterables
+  such as `collections.deque` respect breadth limits during traversal. Fresh
+  fixtures (`sets.json`, `ranges.json`, `collections.json`) plus unit tests for
+  metadata ensure the Rust encoder and Python parity harness agree on the new
+  shapes.
+- WS6–WS8: Not started.
 
 ## Next tasks
-- WS1: Fold the preview-limit semantics into `encode-values.md` and keep the
-  contract examples aligned with the new fixtures.
-- WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) and
-  begin wiring breadth budgets once handlers start covering additional types in
-  WS5.
+- WS1: Fold the preview/set metadata semantics into `encode-values.md` so the
+  contract examples mirror the text/binary/collection fixtures.
+- WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) ahead
+  of WS6 so cyclic linked structures share breadth limits across handlers.
 - WS3: Add fixture coverage for special float/decimal cases (NaN, Infinity,
   quantised decimals) and capture regressions via property tests.
 - WS4: Extend preview coverage to exercise surrogate pairs and zero-length
   payloads, then benchmark the impact of the new limits.
-- Prepare WS5 design work (collections & recursion management) building on the
-  preview metadata.
+- WS5: Audit breadth budgeting on deeply nested mixed containers once WS6
+  structured types land, ensuring metadata remains bounded.
+- Prepare WS6 design work (structured & temporal types) using the expanded
+  registry and metadata helpers.

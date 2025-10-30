@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "name": "range_preview",
+      "code": "value = range(100)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "codetracer.range",
+        "fields": [
+          {
+            "name": "start",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 0
+            }
+          },
+          {
+            "name": "stop",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 100
+            }
+          },
+          {
+            "name": "step",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 1
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
