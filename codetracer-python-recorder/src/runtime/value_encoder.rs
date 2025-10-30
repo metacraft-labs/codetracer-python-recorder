@@ -8,9 +8,13 @@
 
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
+use pyo3::types::{
+    PyAny, PyAnyMethods, PyBool, PyBytes, PyComplex, PyComplexMethods, PyDict, PyFloat, PyInt,
+    PyList, PyTuple, PyTypeMethods,
+};
 use runtime_tracing::{
-    NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, ValueRecord, NONE_VALUE,
+    FieldTypeRecord, NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, TypeRecord,
+    TypeSpecificInfo, ValueRecord, NONE_VALUE,
 };
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -52,6 +56,10 @@ static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
         ValueHandler::new(guard_none, encode_none),
         ValueHandler::new(guard_bool, encode_bool),
         ValueHandler::new(guard_int, encode_int),
+        ValueHandler::new(guard_float, encode_float),
+        ValueHandler::new(guard_complex, encode_complex),
+        ValueHandler::new(guard_decimal, encode_decimal),
+        ValueHandler::new(guard_fraction, encode_fraction),
         ValueHandler::new(guard_string, encode_string),
         ValueHandler::new(guard_tuple, encode_tuple),
         ValueHandler::new(guard_list, encode_list),
@@ -127,12 +135,31 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
         record
     }
 
-    fn ensure_type(&mut self, kind: TypeKind, name: &'static str) -> TypeId {
+    fn ensure_type(&mut self, kind: TypeKind, name: &str) -> TypeId {
         TraceWriter::ensure_type_id(self.writer, kind, name)
     }
 
+    fn ensure_struct_type(&mut self, name: &str, fields: &[(&str, TypeId)]) -> TypeId {
+        let specific_info = TypeSpecificInfo::Struct {
+            fields: fields
+                .iter()
+                .map(|(field_name, type_id)| FieldTypeRecord {
+                    name: (*field_name).to_string(),
+                    type_id: *type_id,
+                })
+                .collect(),
+        };
+        let record = TypeRecord {
+            kind: TypeKind::Struct,
+            lang_type: name.to_string(),
+            specific_info,
+        };
+        TraceWriter::ensure_raw_type_id(self.writer, record)
+    }
+
     fn encode_repr(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
-        let ty = self.ensure_type(TypeKind::Raw, "Object");
+        let qualified = qualified_type_name(value).unwrap_or_else(|| "builtins.object".to_string());
+        let ty = self.ensure_type(TypeKind::Raw, &qualified);
         match value.str() {
             Ok(text) => ValueRecord::Raw {
                 r: text.to_string_lossy().into_owned(),
@@ -161,8 +188,8 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
         value: &Bound<'_, PyAny>,
         canonical: ValueRecord,
     ) -> ValueRecord {
-        let type_id =
-            record_type_id(&canonical).unwrap_or_else(|| self.ensure_type(TypeKind::Raw, "Object"));
+        let type_id = record_type_id(&canonical)
+            .unwrap_or_else(|| self.ensure_type(TypeKind::Raw, "builtins.object"));
         ValueRecord::Reference {
             dereferenced: Box::new(canonical),
             address: ptr as u64,
@@ -194,19 +221,206 @@ fn guard_bool(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_bool(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
-    let ty = ctx.ensure_type(TypeKind::Bool, "Bool");
+    let ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
     let b = value.extract::<bool>().unwrap_or(false);
     ValueRecord::Bool { b, type_id: ty }
 }
 
 fn guard_int(value: &Bound<'_, PyAny>) -> bool {
-    value.extract::<i64>().is_ok()
+    value.downcast::<PyInt>().is_ok()
 }
 
-fn encode_int(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
-    let ty = ctx.ensure_type(TypeKind::Int, "Int");
-    let i = value.extract::<i64>().unwrap_or_default();
-    ValueRecord::Int { i, type_id: ty }
+fn encode_int<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    if let Ok(i) = value.extract::<i64>() {
+        return ValueRecord::Int { i, type_id: ty };
+    }
+
+    let int_obj = value.downcast::<PyInt>().expect("guard ensures PyInt");
+    let negative = match int_obj.lt(0) {
+        Ok(flag) => flag,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let abs_obj = match int_obj.abs() {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let bit_length: usize = match abs_obj
+        .call_method0("bit_length")
+        .and_then(|bits| bits.extract::<usize>())
+    {
+        Ok(bits) => bits,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let byte_len = (bit_length + 7) / 8;
+    let py_bytes_obj = match abs_obj.call_method1("to_bytes", (byte_len, "big")) {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let py_bytes = match py_bytes_obj.downcast::<PyBytes>() {
+        Ok(bytes) => bytes,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let digits = py_bytes.as_bytes().to_vec();
+
+    ValueRecord::BigInt {
+        b: digits,
+        negative,
+        type_id: ty,
+    }
+}
+
+fn guard_float(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyFloat>().is_ok()
+}
+
+fn encode_float<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let ty = ctx.ensure_type(TypeKind::Float, "builtins.float");
+    match value.extract::<f64>() {
+        Ok(f) => ValueRecord::Float { f, type_id: ty },
+        Err(_) => ctx.encode_repr(value),
+    }
+}
+
+fn guard_complex(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyComplex>().is_ok()
+}
+
+fn encode_complex<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let complex = value.downcast::<PyComplex>().expect("guard ensures PyComplex");
+    let float_ty = ctx.ensure_type(TypeKind::Float, "builtins.float");
+    let real = ValueRecord::Float {
+        f: complex.real(),
+        type_id: float_ty,
+    };
+    let imag = ValueRecord::Float {
+        f: complex.imag(),
+        type_id: float_ty,
+    };
+    let ty = ctx.ensure_type(TypeKind::Tuple, "builtins.complex");
+    ValueRecord::Tuple {
+        elements: vec![real, imag],
+        type_id: ty,
+    }
+}
+
+fn guard_decimal(value: &Bound<'_, PyAny>) -> bool {
+    matches_type(value, "decimal", "Decimal")
+}
+
+fn encode_decimal<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let tuple_obj = match value.call_method0("as_tuple") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let tuple = match tuple_obj.downcast::<PyTuple>() {
+        Ok(tuple) => tuple,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    if tuple.len() != 3 {
+        return ctx.encode_repr(value);
+    }
+
+    let sign = match tuple.get_item(0).and_then(|item| item.extract::<i32>()) {
+        Ok(sign) => sign,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let digits_obj = match tuple.get_item(1) {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let digits_tuple = match digits_obj.downcast::<PyTuple>() {
+        Ok(digits) => digits,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let exponent = match tuple
+        .get_item(2)
+        .and_then(|item| item.extract::<i64>())
+    {
+        Ok(exp) => exp,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let mut digits = String::new();
+    for digit in digits_tuple.iter() {
+        let text = match digit.str() {
+            Ok(text) => text.to_string_lossy().into_owned(),
+            Err(_) => return ctx.encode_repr(value),
+        };
+        digits.push_str(&text);
+    }
+
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
+    let decimal_ty = ctx.ensure_struct_type(
+        "decimal.Decimal",
+        &[("sign", int_ty), ("digits", str_ty), ("exponent", int_ty)],
+    );
+
+    let sign_value = if sign == 0 { 1 } else { -1 };
+    let sign_record = ValueRecord::Int {
+        i: sign_value,
+        type_id: int_ty,
+    };
+    let digits_record = ValueRecord::String {
+        text: digits,
+        type_id: str_ty,
+    };
+    let exponent_record = ValueRecord::Int {
+        i: exponent,
+        type_id: int_ty,
+    };
+
+    ValueRecord::Struct {
+        field_values: vec![sign_record, digits_record, exponent_record],
+        type_id: decimal_ty,
+    }
+}
+
+fn guard_fraction(value: &Bound<'_, PyAny>) -> bool {
+    matches_type(value, "fractions", "Fraction")
+}
+
+fn encode_fraction<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let numerator = match value.getattr("numerator") {
+        Ok(val) => val,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let denominator = match value.getattr("denominator") {
+        Ok(val) => val,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let numerator_record = ctx.encode_nested(&numerator);
+    let denominator_record = ctx.encode_nested(&denominator);
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let fraction_ty = ctx.ensure_struct_type(
+        "fractions.Fraction",
+        &[("numerator", int_ty), ("denominator", int_ty)],
+    );
+
+    ValueRecord::Struct {
+        field_values: vec![numerator_record, denominator_record],
+        type_id: fraction_ty,
+    }
 }
 
 fn guard_string(value: &Bound<'_, PyAny>) -> bool {
@@ -214,7 +428,7 @@ fn guard_string(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_string(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
-    let ty = ctx.ensure_type(TypeKind::String, "String");
+    let ty = ctx.ensure_type(TypeKind::String, "builtins.str");
     let text = value.extract::<String>().unwrap_or_else(|_| String::new());
     ValueRecord::String { text, type_id: ty }
 }
@@ -233,7 +447,7 @@ fn encode_tuple<'py>(
         let record = ctx.encode_nested(&item);
         elements.push(record);
     }
-    let ty = ctx.ensure_type(TypeKind::Tuple, "Tuple");
+    let ty = ctx.ensure_type(TypeKind::Tuple, "builtins.tuple");
     ValueRecord::Tuple {
         elements,
         type_id: ty,
@@ -256,7 +470,7 @@ fn encode_list<'py>(
         let record = ctx.encode_nested(&item);
         elements.push(record);
     }
-    let ty = ctx.ensure_type(TypeKind::Seq, "List");
+    let ty = ctx.ensure_type(TypeKind::Seq, "builtins.list");
     ValueRecord::Sequence {
         elements,
         is_slice: len > ctx.limits.max_items,
@@ -275,8 +489,8 @@ fn encode_dict<'py>(
     let dict = value.downcast::<PyDict>().expect("guard ensures dict");
     let len = dict.len();
     let limit = len.min(ctx.limits.max_items);
-    let tuple_ty = ctx.ensure_type(TypeKind::Tuple, "Tuple");
-    let str_ty = ctx.ensure_type(TypeKind::String, "String");
+    let tuple_ty = ctx.ensure_type(TypeKind::Tuple, "builtins.tuple");
+    let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
     let mut elements = Vec::with_capacity(limit);
     for pair in dict.items().iter().take(limit) {
         if let Ok(pair_tuple) = pair.downcast::<PyTuple>() {
@@ -300,7 +514,7 @@ fn encode_dict<'py>(
             });
         }
     }
-    let ty = ctx.ensure_type(TypeKind::Seq, "Dict");
+    let ty = ctx.ensure_type(TypeKind::Seq, "builtins.dict");
     ValueRecord::Sequence {
         elements,
         is_slice: len > ctx.limits.max_items,
@@ -324,6 +538,34 @@ fn record_type_id(record: &ValueRecord) -> Option<TypeId> {
         | ValueRecord::None { type_id }
         | ValueRecord::BigInt { type_id, .. } => Some(*type_id),
         ValueRecord::Cell { .. } => None,
+    }
+}
+
+fn qualified_type_name(value: &Bound<'_, PyAny>) -> Option<String> {
+    let ty = value.get_type();
+    let name = ty.name().ok()?;
+    let name = name.to_string_lossy().into_owned();
+    match ty.module() {
+        Ok(module) => {
+            let module = module.to_string_lossy();
+            if module.is_empty() {
+                Some(name)
+            } else {
+                Some(format!("{}.{}", module, name))
+            }
+        }
+        Err(_) => Some(name),
+    }
+}
+
+fn matches_type(value: &Bound<'_, PyAny>, module: &str, name: &str) -> bool {
+    let ty = value.get_type();
+    match (ty.module(), ty.name()) {
+        (Ok(module_name), Ok(type_name)) => {
+            module_name.to_string_lossy() == module && type_name.to_string_lossy() == name
+        }
+        (Ok(module_name), Err(_)) => module_name.to_string_lossy() == module && name.is_empty(),
+        _ => false,
     }
 }
 
@@ -627,6 +869,117 @@ mod tests {
             match record {
                 ValueRecord::Bool { b, .. } => assert!(b),
                 other => panic!("expected Bool record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn big_int_encoding_emits_bigint_variant() {
+        Python::with_gil(|py| {
+            let expr = CString::new("1 << 80").expect("big int literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::BigInt { negative, b, .. } => {
+                    assert!(!negative, "expected positive bigint");
+                    assert_eq!(b, vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+                }
+                other => panic!("expected BigInt record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn float_handler_encodes_literal() {
+        Python::with_gil(|py| {
+            let expr = CString::new("3.5").expect("float literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Float { f, .. } => assert!((f - 3.5).abs() < f64::EPSILON),
+                other => panic!("expected Float record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn complex_handler_emits_real_imag_tuple() {
+        Python::with_gil(|py| {
+            let expr = CString::new("complex(1.5, -2.25)").expect("complex literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Tuple { elements, .. } => {
+                    assert_eq!(elements.len(), 2);
+                    match (&elements[0], &elements[1]) {
+                        (ValueRecord::Float { f: real, .. }, ValueRecord::Float { f: imag, .. }) => {
+                            assert!((*real - 1.5).abs() < f64::EPSILON);
+                            assert!((*imag + 2.25).abs() < f64::EPSILON);
+                        }
+                        other => panic!("expected float elements, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Tuple record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn decimal_handler_encodes_struct_fields() {
+        Python::with_gil(|py| {
+            let expr = CString::new("__import__('decimal').Decimal('-12.34')").expect("decimal literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 3);
+                    match &field_values[0] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, -1),
+                        other => panic!("expected sign int, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::String { text, .. } => assert_eq!(text, "1234"),
+                        other => panic!("expected digits string, saw {:?}", other),
+                    }
+                    match &field_values[2] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, -2),
+                        other => panic!("expected exponent int, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn fraction_handler_encodes_numerator_denominator() {
+        Python::with_gil(|py| {
+            let expr = CString::new("__import__('fractions').Fraction(-3, 4)").expect("fraction literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 2);
+                    match &field_values[0] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, -3),
+                        other => panic!("expected numerator int, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, 4),
+                        other => panic!("expected denominator int, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
             }
         });
     }

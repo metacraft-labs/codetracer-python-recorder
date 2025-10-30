@@ -1,0 +1,142 @@
+{
+  "cases": [
+    {
+      "name": "int_big",
+      "code": "value = 1 << 80",
+      "expr": "value",
+      "expected": {
+        "kind": "BigInt",
+        "type": "builtins.int",
+        "negative": false,
+        "digits": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "int_big_negative",
+      "code": "value = -(1 << 72)",
+      "expr": "value",
+      "expected": {
+        "kind": "BigInt",
+        "type": "builtins.int",
+        "negative": true,
+        "digits": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "float_literal",
+      "code": "value = 3.14159265",
+      "expr": "value",
+      "expected": {
+        "kind": "Float",
+        "type": "builtins.float",
+        "f": 3.14159265
+      }
+    },
+    {
+      "name": "complex_literal",
+      "code": "value = complex(1.5, -2.25)",
+      "expr": "value",
+      "expected": {
+        "kind": "Tuple",
+        "type": "builtins.complex",
+        "elements": [
+          {
+            "kind": "Float",
+            "type": "builtins.float",
+            "f": 1.5
+          },
+          {
+            "kind": "Float",
+            "type": "builtins.float",
+            "f": -2.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "decimal_value",
+      "code": "from decimal import Decimal\nvalue = Decimal('-12.34')",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "decimal.Decimal",
+        "fields": [
+          {
+            "name": "sign",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": -1
+            }
+          },
+          {
+            "name": "digits",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "1234"
+            }
+          },
+          {
+            "name": "exponent",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": -2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "fraction_value",
+      "code": "from fractions import Fraction\nvalue = Fraction(-3, 4)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "fractions.Fraction",
+        "fields": [
+          {
+            "name": "numerator",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": -3
+            }
+          },
+          {
+            "name": "denominator",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 4
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

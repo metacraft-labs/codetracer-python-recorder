@@ -6,41 +6,41 @@
       "expr": "value",
       "expected": {
         "kind": "Sequence",
-        "type": "Dict",
+        "type": "builtins.dict",
         "is_slice": false,
         "elements": [
           {
             "kind": "Tuple",
-            "type": "Tuple",
+            "type": "builtins.tuple",
             "elements": [
               {
                 "kind": "String",
-                "type": "String",
+                "type": "builtins.str",
                 "text": "nums"
               },
               {
                 "kind": "Sequence",
-                "type": "List",
+                "type": "builtins.list",
                 "is_slice": false,
                 "elements": [
                   {
                     "kind": "Int",
-                    "type": "Int",
+                    "type": "builtins.int",
                     "i": 1
                   },
                   {
                     "kind": "Sequence",
-                    "type": "List",
+                    "type": "builtins.list",
                     "is_slice": false,
                     "elements": [
                       {
                         "kind": "Int",
-                        "type": "Int",
+                        "type": "builtins.int",
                         "i": 2
                       },
                       {
                         "kind": "Int",
-                        "type": "Int",
+                        "type": "builtins.int",
                         "i": 3
                       }
                     ]
@@ -51,30 +51,30 @@
           },
           {
             "kind": "Tuple",
-            "type": "Tuple",
+            "type": "builtins.tuple",
             "elements": [
               {
                 "kind": "String",
-                "type": "String",
+                "type": "builtins.str",
                 "text": "inner"
               },
               {
                 "kind": "Sequence",
-                "type": "Dict",
+                "type": "builtins.dict",
                 "is_slice": false,
                 "elements": [
                   {
                     "kind": "Tuple",
-                    "type": "Tuple",
+                    "type": "builtins.tuple",
                     "elements": [
                       {
                         "kind": "String",
-                        "type": "String",
+                        "type": "builtins.str",
                         "text": "a"
                       },
                       {
                         "kind": "Bool",
-                        "type": "Bool",
+                        "type": "builtins.bool",
                         "b": true
                       }
                     ]
@@ -92,7 +92,7 @@
       "expr": "value",
       "expected": {
         "kind": "Raw",
-        "type": "Object",
+        "type": "datetime.datetime",
         "r": "2024-01-02 03:04:05"
       }
     },
@@ -102,7 +102,7 @@
       "expr": "value",
       "expected": {
         "kind": "Error",
-        "type": "Object",
+        "type": "<fixture_module>.BadStr",
         "msg": "<unrepr>"
       }
     }

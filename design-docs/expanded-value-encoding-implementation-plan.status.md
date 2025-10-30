@@ -28,12 +28,21 @@
   preserved with the new architecture wired through both Rust and Python
   parity checks; the reference-emission tests now target PyO3 0.25's
   `PyList::new`/`PyTuple::new` API so `just dev test` stays green.
-- WS3–WS8: Not started.
+- **WS3 – Rust Scalars & Numerics:** Completed. Booleans, ints, floats, and
+  string handlers now emit module-qualified type ids, python ints larger than
+  `i64` fall back to `ValueRecord::BigInt`, and new handlers cover floats,
+  complex numbers, `decimal.Decimal`, and `fractions.Fraction` with struct
+  metadata. Expanded fixtures (`numerics.json`) and dedicated unit tests ensure
+  big-int aliasing, tuple encoding for complex values, and struct field
+  ordering stay stable across the Rust/Python parity suites.
+- WS4–WS8: Not started.
 
 ## Next tasks
 - WS1: Add fixture coverage for binary payload previews/truncation once the
   encoder feature lands.
 - WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) and
   begin wiring breadth budgets once handlers start covering additional types in
-  WS3.
-- Prepare WS3 design work (scalar/number handlers) using the new registry.
+  WS4.
+- WS3: Add fixture coverage for special float/decimal cases (NaN, Infinity,
+  quantised decimals) and capture regressions via property tests.
+- Prepare WS4 design work (text/binary handlers) using the expanded registry.

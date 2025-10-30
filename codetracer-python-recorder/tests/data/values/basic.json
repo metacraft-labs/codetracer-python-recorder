@@ -15,7 +15,7 @@
       "expr": "value",
       "expected": {
         "kind": "Bool",
-        "type": "Bool",
+        "type": "builtins.bool",
         "b": true
       }
     },
@@ -25,7 +25,7 @@
       "expr": "value",
       "expected": {
         "kind": "Int",
-        "type": "Int",
+        "type": "builtins.int",
         "i": 42
       }
     },
@@ -35,7 +35,7 @@
       "expr": "value",
       "expected": {
         "kind": "String",
-        "type": "String",
+        "type": "builtins.str",
         "text": "hello world"
       }
     },
@@ -45,16 +45,16 @@
       "expr": "value",
       "expected": {
         "kind": "Tuple",
-        "type": "Tuple",
+        "type": "builtins.tuple",
         "elements": [
           {
             "kind": "String",
-            "type": "String",
+            "type": "builtins.str",
             "text": "alpha"
           },
           {
             "kind": "Int",
-            "type": "Int",
+            "type": "builtins.int",
             "i": 7
           }
         ]
@@ -66,22 +66,22 @@
       "expr": "value",
       "expected": {
         "kind": "Sequence",
-        "type": "List",
+        "type": "builtins.list",
         "is_slice": false,
         "elements": [
           {
             "kind": "Int",
-            "type": "Int",
+            "type": "builtins.int",
             "i": 1
           },
           {
             "kind": "Int",
-            "type": "Int",
+            "type": "builtins.int",
             "i": 2
           },
           {
             "kind": "Int",
-            "type": "Int",
+            "type": "builtins.int",
             "i": 3
           }
         ]
@@ -93,37 +93,37 @@
       "expr": "value",
       "expected": {
         "kind": "Sequence",
-        "type": "Dict",
+        "type": "builtins.dict",
         "is_slice": false,
         "elements": [
           {
             "kind": "Tuple",
-            "type": "Tuple",
+            "type": "builtins.tuple",
             "elements": [
               {
                 "kind": "String",
-                "type": "String",
+                "type": "builtins.str",
                 "text": "a"
               },
               {
                 "kind": "Int",
-                "type": "Int",
+                "type": "builtins.int",
                 "i": 1
               }
             ]
           },
           {
             "kind": "Tuple",
-            "type": "Tuple",
+            "type": "builtins.tuple",
             "elements": [
               {
                 "kind": "Int",
-                "type": "Int",
+                "type": "builtins.int",
                 "i": 2
               },
               {
                 "kind": "String",
-                "type": "String",
+                "type": "builtins.str",
                 "text": "b"
               }
             ]
@@ -137,7 +137,7 @@
       "expr": "value",
       "expected": {
         "kind": "Raw",
-        "type": "Object",
+        "type": "<fixture_module>.ReprObj",
         "r": "<ReprObj>"
       }
     }
