@@ -35,14 +35,24 @@
   metadata. Expanded fixtures (`numerics.json`) and dedicated unit tests ensure
   big-int aliasing, tuple encoding for complex values, and struct field
   ordering stay stable across the Rust/Python parity suites.
-- WS4–WS8: Not started.
+- **WS4 – Rust Text, Binary, and Paths:** Completed. Strings now enforce a
+  256-character preview budget and fall back to a `codetracer.string-preview`
+  struct when truncated, bytes-like objects (bytes/bytearray/memoryview) emit
+  base64 previews via `codetracer.bytes-preview`, and path-like values pass
+  through `os.fspath()` while registering stable `pathlib.*` type ids. New
+  fixtures (`text_binary.json`) exercise the preview metadata and the parity
+  suite confirms Python/Rust alignment.
+- WS5–WS8: Not started.
 
 ## Next tasks
-- WS1: Add fixture coverage for binary payload previews/truncation once the
-  encoder feature lands.
+- WS1: Fold the preview-limit semantics into `encode-values.md` and keep the
+  contract examples aligned with the new fixtures.
 - WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) and
   begin wiring breadth budgets once handlers start covering additional types in
-  WS4.
+  WS5.
 - WS3: Add fixture coverage for special float/decimal cases (NaN, Infinity,
   quantised decimals) and capture regressions via property tests.
-- Prepare WS4 design work (text/binary handlers) using the expanded registry.
+- WS4: Extend preview coverage to exercise surrogate pairs and zero-length
+  payloads, then benchmark the impact of the new limits.
+- Prepare WS5 design work (collections & recursion management) building on the
+  preview metadata.

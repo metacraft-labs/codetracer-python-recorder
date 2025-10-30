@@ -6,21 +6,28 @@
 //! encoding surface extensible for future workspaces (WS3–WS6) without coupling
 //! handlers to policy or tracing concerns.
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyAny, PyAnyMethods, PyBool, PyBytes, PyComplex, PyComplexMethods, PyDict, PyFloat, PyInt,
-    PyList, PyTuple, PyTypeMethods,
+    PyAny, PyAnyMethods, PyBool, PyByteArray, PyBytes, PyComplex, PyComplexMethods, PyDict,
+    PyFloat, PyInt, PyList, PyMemoryView, PyString, PyTuple, PyTypeMethods,
 };
 use runtime_tracing::{
     FieldTypeRecord, NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, TypeRecord,
     TypeSpecificInfo, ValueRecord, NONE_VALUE,
 };
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::marker::PhantomData;
 
 const DEFAULT_MAX_DEPTH: usize = 32;
 const DEFAULT_MAX_SEQUENCE_ITEMS: usize = 64;
+const STRING_PREVIEW_LIMIT: usize = 256;
+const BINARY_PREVIEW_BYTES: usize = 1024;
+const STRING_PREVIEW_TYPE: &str = "codetracer.string-preview";
+const BYTES_PREVIEW_TYPE: &str = "codetracer.bytes-preview";
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncoderLimits {
@@ -61,6 +68,8 @@ static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
         ValueHandler::new(guard_decimal, encode_decimal),
         ValueHandler::new(guard_fraction, encode_fraction),
         ValueHandler::new(guard_string, encode_string),
+        ValueHandler::new(guard_bytes_like, encode_bytes_like),
+        ValueHandler::new(guard_path_like, encode_path_like),
         ValueHandler::new(guard_tuple, encode_tuple),
         ValueHandler::new(guard_list, encode_list),
         ValueHandler::new(guard_dict, encode_dict),
@@ -299,7 +308,9 @@ fn encode_complex<'py>(
     ctx: &mut ValueEncoderContext<'py, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
-    let complex = value.downcast::<PyComplex>().expect("guard ensures PyComplex");
+    let complex = value
+        .downcast::<PyComplex>()
+        .expect("guard ensures PyComplex");
     let float_ty = ctx.ensure_type(TypeKind::Float, "builtins.float");
     let real = ValueRecord::Float {
         f: complex.real(),
@@ -348,10 +359,7 @@ fn encode_decimal<'py>(
         Ok(digits) => digits,
         Err(_) => return ctx.encode_repr(value),
     };
-    let exponent = match tuple
-        .get_item(2)
-        .and_then(|item| item.extract::<i64>())
-    {
+    let exponent = match tuple.get_item(2).and_then(|item| item.extract::<i64>()) {
         Ok(exp) => exp,
         Err(_) => return ctx.encode_repr(value),
     };
@@ -424,13 +432,181 @@ fn encode_fraction<'py>(
 }
 
 fn guard_string(value: &Bound<'_, PyAny>) -> bool {
-    value.extract::<String>().is_ok()
+    value.downcast::<PyString>().is_ok()
 }
 
-fn encode_string(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
-    let ty = ctx.ensure_type(TypeKind::String, "builtins.str");
+fn encode_string<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
     let text = value.extract::<String>().unwrap_or_else(|_| String::new());
-    ValueRecord::String { text, type_id: ty }
+    encode_text_value(ctx, "builtins.str", text)
+}
+
+fn guard_bytes_like(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyBytes>().is_ok()
+        || value.downcast::<PyByteArray>().is_ok()
+        || value.downcast::<PyMemoryView>().is_ok()
+}
+
+fn encode_bytes_like<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    if let Ok(bytes) = value.downcast::<PyBytes>() {
+        return encode_bytes_preview(ctx, bytes.as_bytes(), "builtins.bytes");
+    }
+
+    if let Ok(bytearray) = value.downcast::<PyByteArray>() {
+        let data = match bytearray.extract::<Vec<u8>>() {
+            Ok(vec) => vec,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        return encode_bytes_preview(ctx, &data, "builtins.bytearray");
+    }
+
+    if value.downcast::<PyMemoryView>().is_ok() {
+        let data = match value.extract::<Vec<u8>>() {
+            Ok(vec) => vec,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        return encode_bytes_preview(ctx, &data, "builtins.memoryview");
+    }
+
+    ctx.encode_repr(value)
+}
+
+fn guard_path_like(value: &Bound<'_, PyAny>) -> bool {
+    if value.downcast::<PyString>().is_ok() || value.downcast::<PyBytes>().is_ok() {
+        return false;
+    }
+    value.hasattr("__fspath__").unwrap_or(false)
+}
+
+fn encode_path_like<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let path_value = match value.call_method0("__fspath__") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let type_name = qualified_type_name(value).unwrap_or_else(|| "os.PathLike".to_string());
+    if let Ok(text) = path_value.extract::<String>() {
+        return encode_text_value(ctx, &type_name, text);
+    }
+    if let Ok(bytes) = path_value.downcast::<PyBytes>() {
+        return encode_bytes_preview(ctx, bytes.as_bytes(), &type_name);
+    }
+    ctx.encode_repr(value)
+}
+
+fn encode_text_value<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    type_name: &str,
+    text: String,
+) -> ValueRecord {
+    let char_count = text.chars().count();
+    if char_count <= STRING_PREVIEW_LIMIT {
+        let ty = ctx.ensure_type(TypeKind::String, type_name);
+        return ValueRecord::String { text, type_id: ty };
+    }
+
+    let mut preview_end_bytes = text.len();
+    let mut consumed = 0usize;
+    for (idx, ch) in text.char_indices() {
+        consumed += 1;
+        let next_idx = idx + ch.len_utf8();
+        if consumed == STRING_PREVIEW_LIMIT {
+            preview_end_bytes = next_idx;
+            break;
+        }
+    }
+
+    let preview = text[..preview_end_bytes].to_string();
+    let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let bool_ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
+    let struct_name = string_preview_type(type_name);
+    let struct_ty = ctx.ensure_struct_type(
+        &struct_name,
+        &[
+            ("preview", str_ty),
+            ("total_length", int_ty),
+            ("truncated", bool_ty),
+        ],
+    );
+    let total_len = char_count.try_into().unwrap_or(i64::MAX);
+
+    ValueRecord::Struct {
+        field_values: vec![
+            ValueRecord::String {
+                text: preview,
+                type_id: str_ty,
+            },
+            ValueRecord::Int {
+                i: total_len,
+                type_id: int_ty,
+            },
+            ValueRecord::Bool {
+                b: true,
+                type_id: bool_ty,
+            },
+        ],
+        type_id: struct_ty,
+    }
+}
+
+fn string_preview_type(type_name: &str) -> String {
+    if type_name == "builtins.str" {
+        STRING_PREVIEW_TYPE.to_string()
+    } else {
+        format!("{type_name}#string-preview")
+    }
+}
+
+fn encode_bytes_preview<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    data: &[u8],
+    type_name: &str,
+) -> ValueRecord {
+    let total_len = data.len();
+    let preview_len = total_len.min(BINARY_PREVIEW_BYTES);
+    let preview_slice = &data[..preview_len];
+    let preview_b64 = BASE64_STANDARD.encode(preview_slice);
+    let truncated = total_len > BINARY_PREVIEW_BYTES;
+
+    let raw_ty = ctx.ensure_type(TypeKind::Raw, type_name);
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let bool_ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
+    let struct_ty = ctx.ensure_struct_type(
+        BYTES_PREVIEW_TYPE,
+        &[
+            ("preview_b64", raw_ty),
+            ("total_bytes", int_ty),
+            ("truncated", bool_ty),
+        ],
+    );
+    let total_i64 = total_len.try_into().unwrap_or(i64::MAX);
+
+    ValueRecord::Struct {
+        field_values: vec![
+            ValueRecord::Raw {
+                r: preview_b64,
+                type_id: raw_ty,
+            },
+            ValueRecord::Int {
+                i: total_i64,
+                type_id: int_ty,
+            },
+            ValueRecord::Bool {
+                b: truncated,
+                type_id: bool_ty,
+            },
+        ],
+        type_id: struct_ty,
+    }
 }
 
 fn guard_tuple(value: &Bound<'_, PyAny>) -> bool {
@@ -547,11 +723,16 @@ fn qualified_type_name(value: &Bound<'_, PyAny>) -> Option<String> {
     let name = name.to_string_lossy().into_owned();
     match ty.module() {
         Ok(module) => {
-            let module = module.to_string_lossy();
-            if module.is_empty() {
+            let module_cow = module.to_string_lossy();
+            let module_owned = if module_cow.starts_with("pathlib.") {
+                "pathlib".to_string()
+            } else {
+                module_cow.into_owned()
+            };
+            if module_owned.is_empty() {
                 Some(name)
             } else {
-                Some(format!("{}.{}", module, name))
+                Some(format!("{}.{}", module_owned, name))
             }
         }
         Err(_) => Some(name),
@@ -918,7 +1099,10 @@ mod tests {
                 ValueRecord::Tuple { elements, .. } => {
                     assert_eq!(elements.len(), 2);
                     match (&elements[0], &elements[1]) {
-                        (ValueRecord::Float { f: real, .. }, ValueRecord::Float { f: imag, .. }) => {
+                        (
+                            ValueRecord::Float { f: real, .. },
+                            ValueRecord::Float { f: imag, .. },
+                        ) => {
                             assert!((*real - 1.5).abs() < f64::EPSILON);
                             assert!((*imag + 2.25).abs() < f64::EPSILON);
                         }
@@ -933,7 +1117,8 @@ mod tests {
     #[test]
     fn decimal_handler_encodes_struct_fields() {
         Python::with_gil(|py| {
-            let expr = CString::new("__import__('decimal').Decimal('-12.34')").expect("decimal literal");
+            let expr =
+                CString::new("__import__('decimal').Decimal('-12.34')").expect("decimal literal");
             let value = py.eval(expr.as_c_str(), None, None).unwrap();
             let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
             writer.start(std::path::Path::new("<test>"), Line(1));
@@ -962,7 +1147,8 @@ mod tests {
     #[test]
     fn fraction_handler_encodes_numerator_denominator() {
         Python::with_gil(|py| {
-            let expr = CString::new("__import__('fractions').Fraction(-3, 4)").expect("fraction literal");
+            let expr =
+                CString::new("__import__('fractions').Fraction(-3, 4)").expect("fraction literal");
             let value = py.eval(expr.as_c_str(), None, None).unwrap();
             let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
             writer.start(std::path::Path::new("<test>"), Line(1));
@@ -977,6 +1163,35 @@ mod tests {
                     match &field_values[1] {
                         ValueRecord::Int { i, .. } => assert_eq!(*i, 4),
                         other => panic!("expected denominator int, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn bytearray_handler_emits_preview_struct() {
+        Python::with_gil(|py| {
+            let expr = CString::new("bytearray(b'B' * 1500)").expect("bytearray literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 3);
+                    match &field_values[0] {
+                        ValueRecord::Raw { r, .. } => assert!(r.starts_with("QkJCQkJC")),
+                        other => panic!("expected raw preview, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, 1500),
+                        other => panic!("expected total bytes int, saw {:?}", other),
+                    }
+                    match &field_values[2] {
+                        ValueRecord::Bool { b, .. } => assert!(*b),
+                        other => panic!("expected truncated bool, saw {:?}", other),
                     }
                 }
                 other => panic!("expected Struct record, saw {:?}", other),

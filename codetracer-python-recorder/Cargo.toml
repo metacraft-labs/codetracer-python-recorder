@@ -36,6 +36,7 @@ globset = "0.4"
 regex = "1.11"
 toml = "0.8"
 sha2 = "0.10"
+base64 = "0.22"
 
 [dev-dependencies]
 pyo3 = { version = "0.25.1", features = ["auto-initialize"] }
