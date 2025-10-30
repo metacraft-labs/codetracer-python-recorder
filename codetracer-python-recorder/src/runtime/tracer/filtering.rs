@@ -3,7 +3,7 @@
 use crate::code_object::CodeObjectWrapper;
 use crate::logging::{record_dropped_event, with_error_code};
 use crate::runtime::io_capture::ScopedMuteIoCapture;
-use crate::runtime::value_capture::ValueFilterStats;
+use crate::runtime::value_filters::ValueFilterStats;
 use crate::trace_filter::engine::{ExecDecision, ScopeResolution, TraceFilterEngine, ValueKind};
 use pyo3::prelude::*;
 use recorder_errors::ErrorCode;

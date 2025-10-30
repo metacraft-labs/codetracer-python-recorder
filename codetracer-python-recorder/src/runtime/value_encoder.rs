@@ -1,114 +1,335 @@
-//! Encode Python values into `runtime_tracing` records.
+//! Encode Python values into `runtime_tracing` records via a registry of handlers.
+//!
+//! The encoder coordinates a registry of type-specific handlers. Each handler owns
+//! a guard predicate and encoding callback, while [`ValueEncoderContext`] stores
+//! recursion guards, traversal budgets, and shared writer state. This keeps the
+//! encoding surface extensible for future workspaces (WS3–WS6) without coupling
+//! handlers to policy or tracing concerns.
 
+use once_cell::sync::Lazy;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
-use runtime_tracing::{NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
+use pyo3::types::{PyAny, PyBool, PyDict, PyList, PyTuple};
+use runtime_tracing::{
+    NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, ValueRecord, NONE_VALUE,
+};
+use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
 
-/// Convert Python values into `ValueRecord` instances understood by
-/// `runtime_tracing`. Nested containers are encoded recursively and reuse the
-/// tracer's type registry to ensure deterministic identifiers.
+const DEFAULT_MAX_DEPTH: usize = 32;
+const DEFAULT_MAX_SEQUENCE_ITEMS: usize = 64;
+
+#[derive(Debug, Clone, Copy)]
+pub struct EncoderLimits {
+    pub max_depth: usize,
+    pub max_items: usize,
+}
+
+impl Default for EncoderLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: DEFAULT_MAX_DEPTH,
+            max_items: DEFAULT_MAX_SEQUENCE_ITEMS,
+        }
+    }
+}
+
+struct ValueHandler {
+    guard: fn(&Bound<'_, PyAny>) -> bool,
+    encode: for<'py> fn(&mut ValueEncoderContext<'py, '_>, &Bound<'py, PyAny>) -> ValueRecord,
+}
+
+impl ValueHandler {
+    const fn new(
+        guard: fn(&Bound<'_, PyAny>) -> bool,
+        encode: for<'py> fn(&mut ValueEncoderContext<'py, '_>, &Bound<'py, PyAny>) -> ValueRecord,
+    ) -> Self {
+        Self { guard, encode }
+    }
+}
+
+static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
+    vec![
+        ValueHandler::new(guard_none, encode_none),
+        ValueHandler::new(guard_bool, encode_bool),
+        ValueHandler::new(guard_int, encode_int),
+        ValueHandler::new(guard_string, encode_string),
+        ValueHandler::new(guard_tuple, encode_tuple),
+        ValueHandler::new(guard_list, encode_list),
+        ValueHandler::new(guard_dict, encode_dict),
+    ]
+});
+
+pub(crate) struct ValueEncoderContext<'py, 'writer> {
+    _py: PhantomData<Python<'py>>,
+    writer: &'writer mut NonStreamingTraceWriter,
+    limits: EncoderLimits,
+    depth: usize,
+    in_progress: HashSet<usize>,
+    memo: HashMap<usize, ValueRecord>,
+}
+
+impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
+    pub(crate) fn new(py: Python<'py>, writer: &'writer mut NonStreamingTraceWriter) -> Self {
+        Self::with_limits(py, writer, EncoderLimits::default())
+    }
+
+    pub(crate) fn with_limits(
+        _py: Python<'py>,
+        writer: &'writer mut NonStreamingTraceWriter,
+        limits: EncoderLimits,
+    ) -> Self {
+        Self {
+            _py: PhantomData,
+            writer,
+            limits,
+            depth: 0,
+            in_progress: HashSet::new(),
+            memo: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn encode_root(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
+        self.dispatch(value)
+    }
+
+    fn encode_nested(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
+        if self.depth >= self.limits.max_depth {
+            return self.encode_repr(value);
+        }
+        self.depth += 1;
+        let record = self.dispatch(value);
+        self.depth -= 1;
+        record
+    }
+
+    fn dispatch(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
+        let ptr = value.as_ptr() as usize;
+        if let Some(existing) = self.memo.get(&ptr).cloned() {
+            return self.make_reference(ptr, value, existing);
+        }
+
+        let track = self.should_track(value);
+        if track && !self.in_progress.insert(ptr) {
+            return self.encode_repr(value);
+        }
+
+        let record = HANDLERS
+            .iter()
+            .find(|handler| (handler.guard)(value))
+            .map(|handler| (handler.encode)(self, value))
+            .unwrap_or_else(|| self.encode_repr(value));
+
+        if track {
+            self.in_progress.remove(&ptr);
+            self.memo.insert(ptr, record.clone());
+        }
+
+        record
+    }
+
+    fn ensure_type(&mut self, kind: TypeKind, name: &'static str) -> TypeId {
+        TraceWriter::ensure_type_id(self.writer, kind, name)
+    }
+
+    fn encode_repr(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
+        let ty = self.ensure_type(TypeKind::Raw, "Object");
+        match value.str() {
+            Ok(text) => ValueRecord::Raw {
+                r: text.to_string_lossy().into_owned(),
+                type_id: ty,
+            },
+            Err(_) => ValueRecord::Error {
+                msg: "<unrepr>".to_string(),
+                type_id: ty,
+            },
+        }
+    }
+
+    fn should_track(&self, value: &Bound<'_, PyAny>) -> bool {
+        value.downcast::<PyList>().is_ok()
+            || value.downcast::<PyDict>().is_ok()
+            || value.downcast::<PyTuple>().is_ok()
+    }
+
+    fn is_mutable(&self, value: &Bound<'_, PyAny>) -> bool {
+        value.downcast::<PyList>().is_ok() || value.downcast::<PyDict>().is_ok()
+    }
+
+    fn make_reference(
+        &mut self,
+        ptr: usize,
+        value: &Bound<'_, PyAny>,
+        canonical: ValueRecord,
+    ) -> ValueRecord {
+        let type_id =
+            record_type_id(&canonical).unwrap_or_else(|| self.ensure_type(TypeKind::Raw, "Object"));
+        ValueRecord::Reference {
+            dereferenced: Box::new(canonical),
+            address: ptr as u64,
+            mutable: self.is_mutable(value),
+            type_id,
+        }
+    }
+}
+
 pub fn encode_value<'py>(
     py: Python<'py>,
     writer: &mut NonStreamingTraceWriter,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
-    if value.is_none() {
-        return NONE_VALUE;
-    }
+    let mut context = ValueEncoderContext::new(py, writer);
+    context.encode_root(value)
+}
 
-    if let Ok(b) = value.extract::<bool>() {
-        let ty = TraceWriter::ensure_type_id(writer, TypeKind::Bool, "Bool");
-        return ValueRecord::Bool { b, type_id: ty };
-    }
+fn guard_none(value: &Bound<'_, PyAny>) -> bool {
+    value.is_none()
+}
 
-    if let Ok(i) = value.extract::<i64>() {
-        let ty = TraceWriter::ensure_type_id(writer, TypeKind::Int, "Int");
-        return ValueRecord::Int { i, type_id: ty };
-    }
+fn encode_none(_ctx: &mut ValueEncoderContext<'_, '_>, _value: &Bound<'_, PyAny>) -> ValueRecord {
+    NONE_VALUE
+}
 
-    if let Ok(s) = value.extract::<String>() {
-        let ty = TraceWriter::ensure_type_id(writer, TypeKind::String, "String");
-        return ValueRecord::String {
-            text: s,
-            type_id: ty,
-        };
-    }
+fn guard_bool(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyBool>().is_ok()
+}
 
-    if let Ok(tuple) = value.downcast::<PyTuple>() {
-        let mut elements = Vec::with_capacity(tuple.len());
-        for item in tuple.iter() {
-            elements.push(encode_value(py, writer, &item));
-        }
-        let ty = TraceWriter::ensure_type_id(writer, TypeKind::Tuple, "Tuple");
-        return ValueRecord::Tuple {
-            elements,
-            type_id: ty,
-        };
-    }
+fn encode_bool(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
+    let ty = ctx.ensure_type(TypeKind::Bool, "Bool");
+    let b = value.extract::<bool>().unwrap_or(false);
+    ValueRecord::Bool { b, type_id: ty }
+}
 
-    if let Ok(list) = value.downcast::<PyList>() {
-        let mut elements = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            elements.push(encode_value(py, writer, &item));
-        }
-        let ty = TraceWriter::ensure_type_id(writer, TypeKind::Seq, "List");
-        return ValueRecord::Sequence {
-            elements,
-            is_slice: false,
-            type_id: ty,
-        };
-    }
+fn guard_int(value: &Bound<'_, PyAny>) -> bool {
+    value.extract::<i64>().is_ok()
+}
 
-    if let Ok(dict) = value.downcast::<PyDict>() {
-        let seq_ty = TraceWriter::ensure_type_id(writer, TypeKind::Seq, "Dict");
-        let tuple_ty = TraceWriter::ensure_type_id(writer, TypeKind::Tuple, "Tuple");
-        let str_ty = TraceWriter::ensure_type_id(writer, TypeKind::String, "String");
-        let mut elements = Vec::with_capacity(dict.len());
-        for pair in dict.items().iter() {
-            if let Ok(pair_tuple) = pair.downcast::<PyTuple>() {
-                if pair_tuple.len() == 2 {
-                    let key = pair_tuple.get_item(0).unwrap();
-                    let value = pair_tuple.get_item(1).unwrap();
-                    let key_record = if let Ok(text) = key.extract::<String>() {
-                        ValueRecord::String {
-                            text,
-                            type_id: str_ty,
-                        }
-                    } else {
-                        encode_value(py, writer, &key)
-                    };
-                    let value_record = encode_value(py, writer, &value);
-                    let pair_record = ValueRecord::Tuple {
-                        elements: vec![key_record, value_record],
-                        type_id: tuple_ty,
-                    };
-                    elements.push(pair_record);
-                }
+fn encode_int(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
+    let ty = ctx.ensure_type(TypeKind::Int, "Int");
+    let i = value.extract::<i64>().unwrap_or_default();
+    ValueRecord::Int { i, type_id: ty }
+}
+
+fn guard_string(value: &Bound<'_, PyAny>) -> bool {
+    value.extract::<String>().is_ok()
+}
+
+fn encode_string(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
+    let ty = ctx.ensure_type(TypeKind::String, "String");
+    let text = value.extract::<String>().unwrap_or_else(|_| String::new());
+    ValueRecord::String { text, type_id: ty }
+}
+
+fn guard_tuple(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyTuple>().is_ok()
+}
+
+fn encode_tuple<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let tuple = value.downcast::<PyTuple>().expect("guard ensures tuple");
+    let mut elements = Vec::with_capacity(tuple.len());
+    for item in tuple.iter() {
+        let record = ctx.encode_nested(&item);
+        elements.push(record);
+    }
+    let ty = ctx.ensure_type(TypeKind::Tuple, "Tuple");
+    ValueRecord::Tuple {
+        elements,
+        type_id: ty,
+    }
+}
+
+fn guard_list(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyList>().is_ok()
+}
+
+fn encode_list<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let list = value.downcast::<PyList>().expect("guard ensures list");
+    let len = list.len();
+    let limit = len.min(ctx.limits.max_items);
+    let mut elements = Vec::with_capacity(limit);
+    for item in list.iter().take(limit) {
+        let record = ctx.encode_nested(&item);
+        elements.push(record);
+    }
+    let ty = ctx.ensure_type(TypeKind::Seq, "List");
+    ValueRecord::Sequence {
+        elements,
+        is_slice: len > ctx.limits.max_items,
+        type_id: ty,
+    }
+}
+
+fn guard_dict(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyDict>().is_ok()
+}
+
+fn encode_dict<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let dict = value.downcast::<PyDict>().expect("guard ensures dict");
+    let len = dict.len();
+    let limit = len.min(ctx.limits.max_items);
+    let tuple_ty = ctx.ensure_type(TypeKind::Tuple, "Tuple");
+    let str_ty = ctx.ensure_type(TypeKind::String, "String");
+    let mut elements = Vec::with_capacity(limit);
+    for pair in dict.items().iter().take(limit) {
+        if let Ok(pair_tuple) = pair.downcast::<PyTuple>() {
+            if pair_tuple.len() != 2 {
+                continue;
             }
+            let key = pair_tuple.get_item(0).unwrap();
+            let value = pair_tuple.get_item(1).unwrap();
+            let key_record = if let Ok(text) = key.extract::<String>() {
+                ValueRecord::String {
+                    text,
+                    type_id: str_ty,
+                }
+            } else {
+                ctx.encode_nested(&key)
+            };
+            let value_record = ctx.encode_nested(&value);
+            elements.push(ValueRecord::Tuple {
+                elements: vec![key_record, value_record],
+                type_id: tuple_ty,
+            });
         }
-        return ValueRecord::Sequence {
-            elements,
-            is_slice: false,
-            type_id: seq_ty,
-        };
     }
+    let ty = ctx.ensure_type(TypeKind::Seq, "Dict");
+    ValueRecord::Sequence {
+        elements,
+        is_slice: len > ctx.limits.max_items,
+        type_id: ty,
+    }
+}
 
-    let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Object");
-    match value.str() {
-        Ok(text) => ValueRecord::Raw {
-            r: text.to_string_lossy().into_owned(),
-            type_id: ty,
-        },
-        Err(_) => ValueRecord::Error {
-            msg: "<unrepr>".to_string(),
-            type_id: ty,
-        },
+fn record_type_id(record: &ValueRecord) -> Option<TypeId> {
+    match record {
+        ValueRecord::Int { type_id, .. }
+        | ValueRecord::Float { type_id, .. }
+        | ValueRecord::Bool { type_id, .. }
+        | ValueRecord::String { type_id, .. }
+        | ValueRecord::Sequence { type_id, .. }
+        | ValueRecord::Tuple { type_id, .. }
+        | ValueRecord::Struct { type_id, .. }
+        | ValueRecord::Variant { type_id, .. }
+        | ValueRecord::Reference { type_id, .. }
+        | ValueRecord::Raw { type_id, .. }
+        | ValueRecord::Error { type_id, .. }
+        | ValueRecord::None { type_id }
+        | ValueRecord::BigInt { type_id, .. } => Some(*type_id),
+        ValueRecord::Cell { .. } => None,
     }
 }
 
 #[cfg(any(test, feature = "integration-test"))]
 mod fixtures {
-    use super::encode_value;
+    use super::ValueEncoderContext;
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
     use pyo3::types::PyModule;
@@ -116,6 +337,8 @@ mod fixtures {
         Line, NonStreamingTraceWriter, TraceLowLevelEvent, TraceWriter, TypeId, TypeRecord,
         TypeSpecificInfo, ValueRecord,
     };
+    #[cfg(test)]
+    use serde::Deserialize;
     use serde_json::{self, json, Value};
     use std::ffi::{CStr, CString};
     #[cfg(test)]
@@ -123,9 +346,6 @@ mod fixtures {
     use std::path::Path;
     #[cfg(test)]
     use std::path::PathBuf;
-
-    #[cfg(test)]
-    use serde::Deserialize;
 
     #[cfg(test)]
     #[derive(Debug, Deserialize)]
@@ -207,7 +427,8 @@ mod fixtures {
         let mut writer = NonStreamingTraceWriter::new("<fixture>", &[]);
         writer.start(Path::new("<fixture>"), Line(1));
 
-        let record = encode_value(py, &mut writer, &value);
+        let mut context = ValueEncoderContext::new(py, &mut writer);
+        let record = context.encode_root(&value);
         let type_records = collect_type_records(&writer.events);
         Ok(canonicalize(&record, &type_records))
     }
@@ -364,7 +585,11 @@ pub(crate) fn encode_value_fixture_for_tests(
 #[cfg(test)]
 mod tests {
     use super::fixtures::{encode_case, load_fixture_cases};
+    use super::{EncoderLimits, ValueEncoderContext, DEFAULT_MAX_DEPTH};
     use pyo3::prelude::*;
+    use pyo3::types::{PyList, PyTuple};
+    use runtime_tracing::{Line, NonStreamingTraceWriter, TraceWriter, ValueRecord};
+    use std::ffi::CString;
 
     #[test]
     fn value_encoding_fixtures_match_contract() {
@@ -386,6 +611,101 @@ mod tests {
                         serde_json::to_string_pretty(&actual).unwrap()
                     );
                 }
+            }
+        });
+    }
+
+    #[test]
+    fn bool_handler_runs_before_int() {
+        Python::with_gil(|py| {
+            let expr = CString::new("True").expect("bool literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            let record = context.encode_root(&value);
+            match record {
+                ValueRecord::Bool { b, .. } => assert!(b),
+                other => panic!("expected Bool record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn recursion_respects_depth_budget() {
+        Python::with_gil(|py| {
+            let nested = CString::new("[[[1]]]").expect("nested list literal");
+            let value = py.eval(nested.as_c_str(), None, None).expect("nested list");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let limits = EncoderLimits {
+                max_depth: 1,
+                max_items: usize::MAX,
+            };
+            let mut context = ValueEncoderContext::with_limits(py, &mut writer, limits);
+            let record = context.encode_root(&value);
+            let inner = match record {
+                ValueRecord::Sequence { elements, .. } => elements.first().cloned(),
+                other => panic!("expected outer sequence, found {:?}", other),
+            }
+            .expect("inner element");
+            match inner {
+                ValueRecord::Sequence { elements, .. } => match elements.first().cloned() {
+                    Some(ValueRecord::Raw { .. }) | Some(ValueRecord::Error { .. }) => {}
+                    other => panic!(
+                        "expected raw fallback due to depth limit, found {:?}",
+                        other
+                    ),
+                },
+                other => panic!("expected nested sequence, found {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn repeated_containers_emit_reference_records() {
+        Python::with_gil(|py| {
+            let inner_list = PyList::new(py, [1]).expect("inner list creation");
+            let tuple = PyTuple::new(py, [inner_list.clone(), inner_list]).expect("tuple creation");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            let tuple_any = tuple.into_any();
+            let record = context.encode_root(&tuple_any);
+            match record {
+                ValueRecord::Tuple { elements, .. } => {
+                    assert_eq!(elements.len(), 2);
+                    assert!(matches!(
+                        elements[1],
+                        ValueRecord::Reference { mutable: true, .. }
+                    ));
+                }
+                other => panic!("expected Tuple record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn list_truncation_sets_slice_flag() {
+        Python::with_gil(|py| {
+            let expr = CString::new("[0, 1, 2]").expect("list literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let limits = EncoderLimits {
+                max_depth: DEFAULT_MAX_DEPTH,
+                max_items: 1,
+            };
+            let mut context = ValueEncoderContext::with_limits(py, &mut writer, limits);
+            let record = context.encode_root(&value);
+            match record {
+                ValueRecord::Sequence {
+                    elements, is_slice, ..
+                } => {
+                    assert_eq!(elements.len(), 1);
+                    assert!(is_slice, "expected slice flag after truncation");
+                }
+                other => panic!("expected Sequence record, saw {:?}", other),
             }
         });
     }

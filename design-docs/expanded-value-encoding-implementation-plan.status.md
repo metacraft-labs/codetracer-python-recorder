@@ -7,6 +7,7 @@
 
 ## Key Source Files
 - codetracer-python-recorder/src/runtime/value_encoder.rs
+- codetracer-python-recorder/src/runtime/value_filters.rs
 - codetracer-python-recorder/src/runtime/value_capture.rs
 - codetracer-python-recorder/tests/data/values/basic.json
 - codetracer-python-recorder/tests/data/values/advanced.json
@@ -20,10 +21,19 @@
   suite (`tests/python/unit/test_value_encoding_contract.py`). `just dev test`
   now exercises both Rust and Python harnesses without additional environment
   tweaks.
-- WS2–WS8: Not started.
+- **WS2 – Rust Encoder Registry & Guardrails:** Completed. Introduced a
+  registry-driven `ValueEncoderContext` with depth/object budgets, extracted a
+  reusable policy adapter (`runtime/value_filters.rs`), and added targeted unit
+  tests for handler ordering and recursion budgeting. Existing behaviour is
+  preserved with the new architecture wired through both Rust and Python
+  parity checks; the reference-emission tests now target PyO3 0.25's
+  `PyList::new`/`PyTuple::new` API so `just dev test` stays green.
+- WS3–WS8: Not started.
 
 ## Next tasks
 - WS1: Add fixture coverage for binary payload previews/truncation once the
   encoder feature lands.
-- Prepare WS2 design notes (registry shape, handler traits) now that the
-  fixture harness is in place.
+- WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) and
+  begin wiring breadth budgets once handlers start covering additional types in
+  WS3.
+- Prepare WS3 design work (scalar/number handlers) using the new registry.
