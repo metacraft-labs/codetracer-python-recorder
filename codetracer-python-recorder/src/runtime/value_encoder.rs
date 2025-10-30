@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{
     PyAny, PyAnyMethods, PyBool, PyByteArray, PyBytes, PyComplex, PyComplexMethods, PyDict,
     PyFloat, PyFrozenSet, PyInt, PyList, PyMemoryView, PyRange, PyRangeMethods, PySet, PyString,
-    PyTuple, PyTypeMethods,
+    PyTuple, PyType, PyTypeMethods,
 };
 use runtime_tracing::{
     FieldTypeRecord, NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, TypeRecord,
@@ -30,6 +30,15 @@ const BINARY_PREVIEW_BYTES: usize = 1024;
 const STRING_PREVIEW_TYPE: &str = "codetracer.string-preview";
 const BYTES_PREVIEW_TYPE: &str = "codetracer.bytes-preview";
 const DEFAULT_MAX_SET_PREVIEW: usize = 8;
+
+#[derive(Copy, Clone)]
+enum DateTimeKind {
+    DateTime,
+    Date,
+    Time,
+    Timedelta,
+    Timezone,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncoderLimits {
@@ -72,6 +81,12 @@ static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
         ValueHandler::new(guard_string, encode_string),
         ValueHandler::new(guard_bytes_like, encode_bytes_like),
         ValueHandler::new(guard_path_like, encode_path_like),
+        ValueHandler::new(guard_dataclass, encode_dataclass),
+        ValueHandler::new(guard_attrs, encode_attrs),
+        ValueHandler::new(guard_namedtuple, encode_namedtuple),
+        ValueHandler::new(guard_enum, encode_enum),
+        ValueHandler::new(guard_simple_namespace, encode_simple_namespace),
+        ValueHandler::new(guard_datetime_like, encode_datetime_like),
         ValueHandler::new(guard_tuple, encode_tuple),
         ValueHandler::new(guard_list, encode_list),
         ValueHandler::new(guard_dict, encode_dict),
@@ -155,11 +170,19 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
     }
 
     fn ensure_struct_type(&mut self, name: &str, fields: &[(&str, TypeId)]) -> TypeId {
+        let dynamic_fields: Vec<(String, TypeId)> = fields
+            .iter()
+            .map(|(field_name, type_id)| ((*field_name).to_string(), *type_id))
+            .collect();
+        self.ensure_struct_type_dynamic(name, &dynamic_fields)
+    }
+
+    fn ensure_struct_type_dynamic(&mut self, name: &str, fields: &[(String, TypeId)]) -> TypeId {
         let specific_info = TypeSpecificInfo::Struct {
             fields: fields
                 .iter()
                 .map(|(field_name, type_id)| FieldTypeRecord {
-                    name: (*field_name).to_string(),
+                    name: field_name.clone(),
                     type_id: *type_id,
                 })
                 .collect(),
@@ -512,6 +535,430 @@ fn encode_path_like<'py>(
     ctx.encode_repr(value)
 }
 
+fn guard_dataclass(value: &Bound<'_, PyAny>) -> bool {
+    value.hasattr("__dataclass_fields__").unwrap_or(false)
+}
+
+fn encode_dataclass<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let fields_obj = match value.getattr("__dataclass_fields__") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let fields = match fields_obj.downcast::<PyDict>() {
+        Ok(dict) => dict,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let mut records = Vec::new();
+    for (key, _) in fields.iter() {
+        let name: String = match key.extract() {
+            Ok(name) => name,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        let attr_value = match value.getattr(name.as_str()) {
+            Ok(val) => val,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        records.push((name, ctx.encode_nested(&attr_value)));
+    }
+    let type_name = qualified_type_name(value).unwrap_or_else(|| "dataclass".to_string());
+    encode_struct_from_records(ctx, &type_name, records)
+}
+
+fn guard_attrs(value: &Bound<'_, PyAny>) -> bool {
+    value.hasattr("__attrs_attrs__").unwrap_or(false)
+}
+
+fn encode_attrs<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let attrs_obj = match value.getattr("__attrs_attrs__") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let attrs = match attrs_obj.downcast::<PyTuple>() {
+        Ok(tuple) => tuple,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let mut records = Vec::new();
+    for attr in attrs.iter() {
+        let name: String = match attr.getattr("name").and_then(|n| n.extract::<String>()) {
+            Ok(name) => name,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        let attr_value = match value.getattr(name.as_str()) {
+            Ok(val) => val,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        records.push((name, ctx.encode_nested(&attr_value)));
+    }
+    let type_name = qualified_type_name(value).unwrap_or_else(|| "attrs".to_string());
+    encode_struct_from_records(ctx, &type_name, records)
+}
+
+fn guard_namedtuple(value: &Bound<'_, PyAny>) -> bool {
+    value.downcast::<PyTuple>().is_ok() && value.hasattr("_fields").unwrap_or(false)
+}
+
+fn encode_namedtuple<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let fields_obj = match value.getattr("_fields") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let fields = match fields_obj.downcast::<PyTuple>() {
+        Ok(tuple) => tuple,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let mut records = Vec::new();
+    for field in fields.iter() {
+        let name: String = match field.extract() {
+            Ok(name) => name,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        let attr_value = match value.getattr(name.as_str()) {
+            Ok(val) => val,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        records.push((name, ctx.encode_nested(&attr_value)));
+    }
+    let type_name = qualified_type_name(value).unwrap_or_else(|| "namedtuple".to_string());
+    encode_struct_from_records(ctx, &type_name, records)
+}
+
+fn guard_enum(value: &Bound<'_, PyAny>) -> bool {
+    let ty = value.get_type();
+    is_enum_type(&ty)
+}
+
+fn encode_enum<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
+    let name = match value.getattr("name").and_then(|n| n.extract::<String>()) {
+        Ok(name) => name,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let enum_value = match value.getattr("value") {
+        Ok(val) => val,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let mut records = Vec::new();
+    records.push((
+        "name".to_string(),
+        ValueRecord::String {
+            text: name,
+            type_id: str_ty,
+        },
+    ));
+    records.push(("value".to_string(), ctx.encode_nested(&enum_value)));
+    let type_name = qualified_type_name(value).unwrap_or_else(|| "enum.Enum".to_string());
+    encode_struct_from_records(ctx, &type_name, records)
+}
+
+fn guard_simple_namespace(value: &Bound<'_, PyAny>) -> bool {
+    matches!(
+        qualified_type_name(value).as_deref(),
+        Some("types.SimpleNamespace")
+    )
+}
+
+fn encode_simple_namespace<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let dict_obj = match value.getattr("__dict__") {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let dict = match dict_obj.downcast::<PyDict>() {
+        Ok(dict) => dict,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let mut records = Vec::new();
+    for (key, val) in dict.iter() {
+        let name: String = match key.extract() {
+            Ok(name) => name,
+            Err(_) => return ctx.encode_repr(value),
+        };
+        if name.starts_with('_') {
+            continue;
+        }
+        records.push((name, ctx.encode_nested(&val)));
+    }
+    records.sort_by(|a, b| a.0.cmp(&b.0));
+    let type_name =
+        qualified_type_name(value).unwrap_or_else(|| "types.SimpleNamespace".to_string());
+    encode_struct_from_records(ctx, &type_name, records)
+}
+
+fn guard_datetime_like(value: &Bound<'_, PyAny>) -> bool {
+    datetime_kind(value).is_some()
+}
+
+fn encode_datetime_like<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    value: &Bound<'py, PyAny>,
+) -> ValueRecord {
+    let kind = match datetime_kind(value) {
+        Some(kind) => kind,
+        None => return ctx.encode_repr(value),
+    };
+    let py = value.py();
+    let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let float_ty = ctx.ensure_type(TypeKind::Float, "builtins.float");
+
+    match kind {
+        DateTimeKind::DateTime => {
+            let iso = match value
+                .call_method0("isoformat")
+                .and_then(|s| s.extract::<String>())
+            {
+                Ok(iso) => iso,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let timestamp = match value
+                .call_method0("timestamp")
+                .and_then(|ts| ts.extract::<f64>())
+            {
+                Ok(ts) => ts,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let tzinfo = match value.getattr("tzinfo") {
+                Ok(tz) => tz,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let fields = vec![
+                (
+                    "isoformat".to_string(),
+                    ValueRecord::String {
+                        text: iso,
+                        type_id: str_ty,
+                    },
+                ),
+                (
+                    "timestamp".to_string(),
+                    ValueRecord::Float {
+                        f: timestamp,
+                        type_id: float_ty,
+                    },
+                ),
+                ("tzinfo".to_string(), ctx.encode_nested(&tzinfo)),
+            ];
+            encode_struct_from_records(ctx, "datetime.datetime", fields)
+        }
+        DateTimeKind::Date => {
+            let iso = match value
+                .call_method0("isoformat")
+                .and_then(|s| s.extract::<String>())
+            {
+                Ok(iso) => iso,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let year = match value.getattr("year").and_then(|v| v.extract::<i64>()) {
+                Ok(year) => year,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let month = match value.getattr("month").and_then(|v| v.extract::<i64>()) {
+                Ok(month) => month,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let day = match value.getattr("day").and_then(|v| v.extract::<i64>()) {
+                Ok(day) => day,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let fields = vec![
+                (
+                    "isoformat".to_string(),
+                    ValueRecord::String {
+                        text: iso,
+                        type_id: str_ty,
+                    },
+                ),
+                (
+                    "year".to_string(),
+                    ValueRecord::Int {
+                        i: year,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "month".to_string(),
+                    ValueRecord::Int {
+                        i: month,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "day".to_string(),
+                    ValueRecord::Int {
+                        i: day,
+                        type_id: int_ty,
+                    },
+                ),
+            ];
+            encode_struct_from_records(ctx, "datetime.date", fields)
+        }
+        DateTimeKind::Time => {
+            let iso = match value
+                .call_method0("isoformat")
+                .and_then(|s| s.extract::<String>())
+            {
+                Ok(iso) => iso,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let hour = match value.getattr("hour").and_then(|v| v.extract::<i64>()) {
+                Ok(hour) => hour,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let minute = match value.getattr("minute").and_then(|v| v.extract::<i64>()) {
+                Ok(minute) => minute,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let second = match value.getattr("second").and_then(|v| v.extract::<i64>()) {
+                Ok(second) => second,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let microsecond = match value
+                .getattr("microsecond")
+                .and_then(|v| v.extract::<i64>())
+            {
+                Ok(us) => us,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let tzinfo = match value.getattr("tzinfo") {
+                Ok(tz) => tz,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let fields = vec![
+                (
+                    "isoformat".to_string(),
+                    ValueRecord::String {
+                        text: iso,
+                        type_id: str_ty,
+                    },
+                ),
+                (
+                    "hour".to_string(),
+                    ValueRecord::Int {
+                        i: hour,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "minute".to_string(),
+                    ValueRecord::Int {
+                        i: minute,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "second".to_string(),
+                    ValueRecord::Int {
+                        i: second,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "microsecond".to_string(),
+                    ValueRecord::Int {
+                        i: microsecond,
+                        type_id: int_ty,
+                    },
+                ),
+                ("tzinfo".to_string(), ctx.encode_nested(&tzinfo)),
+            ];
+            encode_struct_from_records(ctx, "datetime.time", fields)
+        }
+        DateTimeKind::Timedelta => {
+            let days = match value.getattr("days").and_then(|v| v.extract::<i64>()) {
+                Ok(days) => days,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let seconds = match value.getattr("seconds").and_then(|v| v.extract::<i64>()) {
+                Ok(seconds) => seconds,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let microseconds = match value
+                .getattr("microseconds")
+                .and_then(|v| v.extract::<i64>())
+            {
+                Ok(us) => us,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let total_seconds = match value
+                .call_method0("total_seconds")
+                .and_then(|ts| ts.extract::<f64>())
+            {
+                Ok(ts) => ts,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let fields = vec![
+                (
+                    "days".to_string(),
+                    ValueRecord::Int {
+                        i: days,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "seconds".to_string(),
+                    ValueRecord::Int {
+                        i: seconds,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "microseconds".to_string(),
+                    ValueRecord::Int {
+                        i: microseconds,
+                        type_id: int_ty,
+                    },
+                ),
+                (
+                    "total_seconds".to_string(),
+                    ValueRecord::Float {
+                        f: total_seconds,
+                        type_id: float_ty,
+                    },
+                ),
+            ];
+            encode_struct_from_records(ctx, "datetime.timedelta", fields)
+        }
+        DateTimeKind::Timezone => {
+            let name = match value
+                .call_method1("tzname", (py.None(),))
+                .and_then(|n| n.extract::<String>())
+            {
+                Ok(name) => name,
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let offset = match value.call_method1("utcoffset", (py.None(),)) {
+                Ok(obj) => ctx.encode_nested(&obj),
+                Err(_) => return ctx.encode_repr(value),
+            };
+            let fields = vec![
+                (
+                    "name".to_string(),
+                    ValueRecord::String {
+                        text: name,
+                        type_id: str_ty,
+                    },
+                ),
+                ("offset".to_string(), offset),
+            ];
+            encode_struct_from_records(ctx, "datetime.timezone", fields)
+        }
+    }
+}
+
 fn guard_set(value: &Bound<'_, PyAny>) -> bool {
     value.downcast::<PySet>().is_ok()
 }
@@ -690,46 +1137,56 @@ fn encode_bytes_preview<'py>(
     }
 }
 
+fn encode_struct_from_records<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_>,
+    type_name: &str,
+    fields: Vec<(String, ValueRecord)>,
+) -> ValueRecord {
+    let mut spec = Vec::with_capacity(fields.len());
+    let mut values = Vec::with_capacity(fields.len());
+    for (name, record) in fields {
+        let type_id = record_type_id(&record)
+            .unwrap_or_else(|| ctx.ensure_type(TypeKind::Raw, "builtins.object"));
+        spec.push((name, type_id));
+        values.push(record);
+    }
+    let type_id = ctx.ensure_struct_type_dynamic(type_name, &spec);
+    ValueRecord::Struct {
+        field_values: values,
+        type_id,
+    }
+}
+
 fn encode_set_like<'py>(
     ctx: &mut ValueEncoderContext<'py, '_>,
     value: &Bound<'py, PyAny>,
     unordered: bool,
 ) -> ValueRecord {
     let limit = ctx.limits.max_items.min(DEFAULT_MAX_SET_PREVIEW);
+    let py = value.py();
+    let sorted_list = match pyo3::types::PyModule::import(py, "builtins")
+        .and_then(|builtins| builtins.getattr("sorted"))
+        .and_then(|sorted_fn| sorted_fn.call1((value,)))
+    {
+        Ok(obj) => obj,
+        Err(_) => return ctx.encode_repr(value),
+    };
+    let sorted_list = match sorted_list.downcast::<PyList>() {
+        Ok(list) => list,
+        Err(_) => return ctx.encode_repr(value),
+    };
+
+    let total_count = sorted_list.len();
     let mut preview = Vec::with_capacity(limit);
-    let mut truncated = false;
-
-    if limit == 0 {
-        if let Ok(mut iter) = value.try_iter() {
-            truncated = iter.next().is_some();
-        }
-    } else {
-        match value.try_iter() {
-            Ok(mut iter) => {
-                while let Some(result) = iter.next() {
-                    let item = match result {
-                        Ok(item) => item,
-                        Err(_) => return ctx.encode_repr(value),
-                    };
-                    if preview.len() < limit {
-                        preview.push(ctx.encode_nested(&item));
-                    } else {
-                        truncated = true;
-                        break;
-                    }
-                }
-            }
-            Err(_) => return ctx.encode_repr(value),
+    for (index, item) in sorted_list.iter().enumerate() {
+        if index < limit {
+            preview.push(ctx.encode_nested(&item));
+        } else {
+            preview.shrink_to_fit();
+            break;
         }
     }
-
-    let total_count = value
-        .len()
-        .ok()
-        .unwrap_or(preview.len().saturating_add(usize::from(truncated)));
-    if !truncated && total_count > preview.len() && preview.len() >= limit && limit > 0 {
-        truncated = true;
-    }
+    let truncated = total_count > preview.len();
 
     let preview_type = ctx.ensure_type(TypeKind::Seq, "builtins.list");
     let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
@@ -814,6 +1271,50 @@ fn convert_isize(value: isize) -> i64 {
             i64::MAX
         }
     })
+}
+
+fn is_enum_type(ty: &Bound<'_, PyType>) -> bool {
+    let mro = ty.mro();
+    for base in mro.iter() {
+        if let Ok(base_type) = base.downcast::<PyType>() {
+            let name_matches = base_type
+                .name()
+                .map(|name| name.to_string_lossy() == "Enum")
+                .unwrap_or(false);
+            if !name_matches {
+                continue;
+            }
+            let module_matches = base_type
+                .module()
+                .map(|module| module.to_string_lossy() == "enum")
+                .unwrap_or(false);
+            if module_matches {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn datetime_kind(value: &Bound<'_, PyAny>) -> Option<DateTimeKind> {
+    let ty = value.get_type();
+    let name = ty.name().ok()?.to_string_lossy().into_owned();
+    let module = ty
+        .module()
+        .ok()
+        .map(|module| module.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if module != "datetime" {
+        return None;
+    }
+    match name.as_str() {
+        "datetime" => Some(DateTimeKind::DateTime),
+        "date" => Some(DateTimeKind::Date),
+        "time" => Some(DateTimeKind::Time),
+        "timedelta" => Some(DateTimeKind::Timedelta),
+        "timezone" => Some(DateTimeKind::Timezone),
+        _ => None,
+    }
 }
 
 fn guard_tuple(value: &Bound<'_, PyAny>) -> bool {
@@ -1217,9 +1718,9 @@ mod tests {
     use super::fixtures::{encode_case, load_fixture_cases};
     use super::{EncoderLimits, ValueEncoderContext, DEFAULT_MAX_DEPTH};
     use pyo3::prelude::*;
-    use pyo3::types::{PyList, PyTuple};
+    use pyo3::types::{PyList, PyModule, PyTuple};
     use runtime_tracing::{Line, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord};
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
 
     #[test]
     fn value_encoding_fixtures_match_contract() {
@@ -1243,6 +1744,14 @@ mod tests {
                 }
             }
         });
+    }
+
+    fn value_from_code<'py>(py: Python<'py>, code: &str) -> pyo3::PyResult<Bound<'py, PyAny>> {
+        let code_cstr = CString::new(code).expect("code literal");
+        let filename = CStr::from_bytes_with_nul(b"<test>\0").unwrap();
+        let module_name = CStr::from_bytes_with_nul(b"<test_module>\0").unwrap();
+        let module = PyModule::from_code(py, code_cstr.as_c_str(), filename, module_name)?;
+        module.getattr("value")
     }
 
     #[test]
@@ -1458,6 +1967,122 @@ mod tests {
                     assert_eq!(ints.next(), Some(1));
                     assert_eq!(ints.next(), Some(7));
                     assert_eq!(ints.next(), Some(2));
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn dataclass_handler_encodes_fields() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "from dataclasses import dataclass\n@dataclass\nclass Point:\n    x: int\n    y: int\nvalue = Point(10, 20)",
+            )
+            .expect("dataclass instance");
+            let type_name = super::qualified_type_name(&value).expect("type name");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct {
+                    field_values,
+                    type_id,
+                } => {
+                    assert_eq!(field_values.len(), 2);
+                    let expected =
+                        TraceWriter::ensure_type_id(&mut writer, TypeKind::Struct, &type_name);
+                    assert_eq!(type_id, expected);
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn namedtuple_handler_encodes_fields() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "from collections import namedtuple\nPair = namedtuple('Pair', ['a', 'b'])\nPair.__module__ = __name__\nvalue = Pair(3, 4)",
+            )
+            .expect("namedtuple instance");
+            let type_name = super::qualified_type_name(&value).expect("type name");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct {
+                    field_values,
+                    type_id,
+                } => {
+                    assert_eq!(field_values.len(), 2);
+                    let expected =
+                        TraceWriter::ensure_type_id(&mut writer, TypeKind::Struct, &type_name);
+                    assert_eq!(type_id, expected);
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn enum_handler_encodes_name_and_value() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "from enum import Enum\nclass Color(Enum):\n    RED = 1\nvalue = Color.RED",
+            )
+            .expect("enum instance");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 2);
+                    match &field_values[0] {
+                        ValueRecord::String { text, .. } => assert_eq!(text, "RED"),
+                        other => panic!("expected enum name string, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn simple_namespace_handler_orders_fields() {
+        Python::with_gil(|py| {
+            let expr = CString::new("__import__('types').SimpleNamespace(foo=1, bar=2)")
+                .expect("namespace literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 2);
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn datetime_handler_produces_struct() {
+        Python::with_gil(|py| {
+            let expr = CString::new(
+                "__import__('datetime').datetime(2024, 1, 2, 3, 4, 5, tzinfo=__import__('datetime').timezone.utc)",
+            )
+            .expect("datetime literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert!(field_values.len() >= 3);
                 }
                 other => panic!("expected Struct record, saw {:?}", other),
             }

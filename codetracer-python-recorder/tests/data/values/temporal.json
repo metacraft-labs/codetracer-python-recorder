@@ -1,0 +1,293 @@
+{
+  "cases": [
+    {
+      "name": "datetime_value",
+      "code": "import datetime\nvalue = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "datetime.datetime",
+        "fields": [
+          {
+            "name": "isoformat",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "2024-01-02T03:04:05+00:00"
+            }
+          },
+          {
+            "name": "timestamp",
+            "value": {
+              "kind": "Float",
+              "type": "builtins.float",
+              "f": 1704164645.0
+            }
+          },
+          {
+            "name": "tzinfo",
+            "value": {
+              "kind": "Struct",
+              "type": "datetime.timezone",
+              "fields": [
+                {
+                  "name": "name",
+                  "value": {
+                    "kind": "String",
+                    "type": "builtins.str",
+                    "text": "UTC"
+                  }
+                },
+                {
+                  "name": "offset",
+                  "value": {
+                    "kind": "Struct",
+                    "type": "datetime.timedelta",
+                    "fields": [
+                      {
+                        "name": "days",
+                        "value": {
+                          "kind": "Int",
+                          "type": "builtins.int",
+                          "i": 0
+                        }
+                      },
+                      {
+                        "name": "seconds",
+                        "value": {
+                          "kind": "Int",
+                          "type": "builtins.int",
+                          "i": 0
+                        }
+                      },
+                      {
+                        "name": "microseconds",
+                        "value": {
+                          "kind": "Int",
+                          "type": "builtins.int",
+                          "i": 0
+                        }
+                      },
+                      {
+                        "name": "total_seconds",
+                        "value": {
+                          "kind": "Float",
+                          "type": "builtins.float",
+                          "f": 0.0
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "date_value",
+      "code": "import datetime\nvalue = datetime.date(2024, 7, 8)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "datetime.date",
+        "fields": [
+          {
+            "name": "isoformat",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "2024-07-08"
+            }
+          },
+          {
+            "name": "year",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 2024
+            }
+          },
+          {
+            "name": "month",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 7
+            }
+          },
+          {
+            "name": "day",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "time_value",
+      "code": "import datetime\nvalue = datetime.time(12, 34, 56, 789)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "datetime.time",
+        "fields": [
+          {
+            "name": "isoformat",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "12:34:56.000789"
+            }
+          },
+          {
+            "name": "hour",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 12
+            }
+          },
+          {
+            "name": "minute",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 34
+            }
+          },
+          {
+            "name": "second",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 56
+            }
+          },
+          {
+            "name": "microsecond",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 789
+            }
+          },
+          {
+            "name": "tzinfo",
+            "value": {
+              "kind": "None",
+              "type": "None"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "timedelta_value",
+      "code": "import datetime\nvalue = datetime.timedelta(days=1, seconds=2, microseconds=3)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "datetime.timedelta",
+        "fields": [
+          {
+            "name": "days",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 1
+            }
+          },
+          {
+            "name": "seconds",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 2
+            }
+          },
+          {
+            "name": "microseconds",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 3
+            }
+          },
+          {
+            "name": "total_seconds",
+            "value": {
+              "kind": "Float",
+              "type": "builtins.float",
+              "f": 86402.000003
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "timezone_value",
+      "code": "import datetime\nvalue = datetime.timezone(datetime.timedelta(hours=-5), name='EST')",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "datetime.timezone",
+        "fields": [
+          {
+            "name": "name",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "EST"
+            }
+          },
+          {
+            "name": "offset",
+            "value": {
+              "kind": "Struct",
+              "type": "datetime.timedelta",
+              "fields": [
+                {
+                  "name": "days",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": -1
+                  }
+                },
+                {
+                  "name": "seconds",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 68400
+                  }
+                },
+                {
+                  "name": "microseconds",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 0
+                  }
+                },
+                {
+                  "name": "total_seconds",
+                  "value": {
+                    "kind": "Float",
+                    "type": "builtins.float",
+                    "f": -18000.0
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

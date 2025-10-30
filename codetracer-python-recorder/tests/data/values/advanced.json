@@ -91,9 +91,33 @@
       "code": "import datetime\nvalue = datetime.datetime(2024, 1, 2, 3, 4, 5)",
       "expr": "value",
       "expected": {
-        "kind": "Raw",
+        "kind": "Struct",
         "type": "datetime.datetime",
-        "r": "2024-01-02 03:04:05"
+        "fields": [
+          {
+            "name": "isoformat",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "2024-01-02T03:04:05"
+            }
+          },
+          {
+            "name": "timestamp",
+            "value": {
+              "kind": "Float",
+              "type": "builtins.float",
+              "f": 1704157445.0
+            }
+          },
+          {
+            "name": "tzinfo",
+            "value": {
+              "kind": "None",
+              "type": "None"
+            }
+          }
+        ]
       }
     },
     {

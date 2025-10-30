@@ -49,7 +49,13 @@
   fixtures (`sets.json`, `ranges.json`, `collections.json`) plus unit tests for
   metadata ensure the Rust encoder and Python parity harness agree on the new
   shapes.
-- WS6–WS8: Not started.
+- **WS6 – Rust Structured & Temporal Types:** Completed. Dataclasses, attrs
+  classes, namedtuples, enums, and `types.SimpleNamespace` now encode as
+  `ValueRecord::Struct` with stable field metadata, while `datetime`
+  primitives (datetime/date/time/timedelta/timezone) emit ISO strings plus raw
+  components. Supporting fixtures (`structured.json`, `temporal.json`) and
+  unit tests keep the Rust encoder and Python parity suite aligned.
+- WS7–WS8: Not started.
 
 ## Next tasks
 - WS1: Fold the preview/set metadata semantics into `encode-values.md` so the
@@ -60,7 +66,10 @@
   quantised decimals) and capture regressions via property tests.
 - WS4: Extend preview coverage to exercise surrogate pairs and zero-length
   payloads, then benchmark the impact of the new limits.
-- WS5: Audit breadth budgeting on deeply nested mixed containers once WS6
-  structured types land, ensuring metadata remains bounded.
-- Prepare WS6 design work (structured & temporal types) using the expanded
-  registry and metadata helpers.
+- WS5: Audit breadth budgeting on deeply nested mixed containers now that
+  structured types are covered, ensuring metadata remains bounded.
+- WS6: Fold the structured/temporal encoding semantics into
+  `design-docs/encode-values.md` and extend fixtures to cover edge cases (e.g.,
+  zero-offset timezones, dataclasses with defaults).
+- Prepare WS7 design work (repr fallback & telemetry) leveraging the enlarged
+  registry metadata helpers.

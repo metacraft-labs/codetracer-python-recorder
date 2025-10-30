@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "name": "dataclass_point",
+      "code": "from dataclasses import dataclass\n@dataclass\nclass Point:\n    x: int\n    y: int\nvalue = Point(1, 2)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "<fixture_module>.Point",
+        "fields": [
+          {
+            "name": "x",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 1
+            }
+          },
+          {
+            "name": "y",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "namedtuple_pair",
+      "code": "from collections import namedtuple\nPair = namedtuple('Pair', ['a', 'b'])\nPair.__module__ = __name__\nvalue = Pair(3, 4)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "<fixture_module>.Pair",
+        "fields": [
+          {
+            "name": "a",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 3
+            }
+          },
+          {
+            "name": "b",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 4
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "enum_color",
+      "code": "from enum import Enum\nclass Color(Enum):\n    RED = 1\nvalue = Color.RED",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "<fixture_module>.Color",
+        "fields": [
+          {
+            "name": "name",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "RED"
+            }
+          },
+          {
+            "name": "value",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "simple_namespace",
+      "code": "from types import SimpleNamespace\nvalue = SimpleNamespace(bar='baz', foo=42)",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "types.SimpleNamespace",
+        "fields": [
+          {
+            "name": "bar",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "baz"
+            }
+          },
+          {
+            "name": "foo",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 42
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
