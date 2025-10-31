@@ -170,11 +170,21 @@ source of truth when implementing or reviewing value-handling changes.
 
 ## Errors & Fallback
 
-- **repr fallback** — For unsupported objects, call `PyObject_Repr` and emit:
-  `ValueRecord::Raw { r: repr_string, type_id: ensure(TypeKind::Raw, "<module>.<type>") }`.
-- **repr failure** — When `repr` raises, emit `ValueRecord::Error` with:
-  - `msg`: `"<unrepr>: <exception repr>"`
-  - `type_id`: same as the attempted fallback.
+- **repr fallback** — For unsupported objects, call `PyObject_Repr` and encode a
+  `codetracer.repr-fallback` struct with the following fields:
+  - `repr`: `ValueRecord::Raw` holding the repr preview (truncated to
+    `STRING_PREVIEW_LIMIT` code points).
+  - `total_length`: `ValueRecord::Int` storing the original repr length in code
+    points.
+  - `truncated`: `ValueRecord::Bool` indicating whether the preview was
+    shortened.
+  - `handler`: `ValueRecord::String` naming the handler that triggered the
+    fallback, or `<none>` when no guard matched.
+  - `reason`: `ValueRecord::String` with one of `no_handler`, `handler_error`,
+    `depth_limit`, `cycle_detected`, or `repr_error`.
+- **repr failure** — When `repr` raises, the `repr` field becomes a
+  `ValueRecord::Error` with message `"<unrepr>: <exception repr>"` and the
+  `reason` field is `repr_error`.
 - **Encoding failure** — Catch unexpected errors, log with `ScopedMuteIoCapture`,
   and emit `ValueRecord::Error` plus a telemetry counter.
 

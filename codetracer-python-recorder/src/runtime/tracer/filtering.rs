@@ -201,10 +201,45 @@ impl FilterStats {
                 json!(self.values.dropped_count(kind)),
             );
         }
+        let mut fallbacks = serde_json::Map::new();
+        let mut fallback_truncated = serde_json::Map::new();
+        for kind in ValueKind::ALL {
+            fallbacks.insert(
+                kind.label().to_string(),
+                json!(self.values.fallback_count(kind)),
+            );
+            fallback_truncated.insert(
+                kind.label().to_string(),
+                json!(self.values.fallback_truncated_count(kind)),
+            );
+        }
+
+        let mut fallback_by_handler = serde_json::Map::new();
+        for (handler, count) in self.values.fallback_by_handler() {
+            fallback_by_handler.insert((*handler).to_string(), json!(count));
+        }
+
+        let mut fallback_by_reason = serde_json::Map::new();
+        for (reason, count) in self.values.fallback_by_reason() {
+            fallback_by_reason.insert((*reason).to_string(), json!(count));
+        }
+
+        let mut fallback_by_type = serde_json::Map::new();
+        for (type_name, count) in self.values.fallback_by_type() {
+            fallback_by_type.insert(type_name.clone(), json!(count));
+        }
+
         json!({
             "scopes_skipped": self.skipped_scopes,
             "value_redactions": serde_json::Value::Object(redactions),
             "value_drops": serde_json::Value::Object(drops),
+            "value_fallbacks": json!({
+                "total": serde_json::Value::Object(fallbacks),
+                "truncated": serde_json::Value::Object(fallback_truncated),
+                "by_handler": serde_json::Value::Object(fallback_by_handler),
+                "by_reason": serde_json::Value::Object(fallback_by_reason),
+                "by_type": serde_json::Value::Object(fallback_by_type),
+            }),
         })
     }
 }

@@ -136,9 +136,50 @@
       "code": "class ReprObj:\n    def __repr__(self):\n        return '<ReprObj>'\nvalue = ReprObj()",
       "expr": "value",
       "expected": {
-        "kind": "Raw",
-        "type": "<fixture_module>.ReprObj",
-        "r": "<ReprObj>"
+        "kind": "Struct",
+        "type": "codetracer.repr-fallback",
+        "fields": [
+          {
+            "name": "repr",
+            "value": {
+              "kind": "Raw",
+              "type": "<fixture_module>.ReprObj",
+              "r": "<ReprObj>"
+            }
+          },
+          {
+            "name": "total_length",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 9
+            }
+          },
+          {
+            "name": "truncated",
+            "value": {
+              "kind": "Bool",
+              "type": "builtins.bool",
+              "b": false
+            }
+          },
+          {
+            "name": "handler",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "<none>"
+            }
+          },
+          {
+            "name": "reason",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "no_handler"
+            }
+          }
+        ]
       }
     }
   ]

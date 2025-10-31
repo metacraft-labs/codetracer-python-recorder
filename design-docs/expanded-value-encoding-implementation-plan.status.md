@@ -55,21 +55,20 @@
   primitives (datetime/date/time/timedelta/timezone) emit ISO strings plus raw
   components. Supporting fixtures (`structured.json`, `temporal.json`) and
   unit tests keep the Rust encoder and Python parity suite aligned.
-- WS7–WS8: Not started.
+- **WS7 – Rust Fallback & Telemetry:** Completed. `ValueEncoderContext` now
+  delegates unsupported values to `PyObject_Repr`, wraps results in a
+  `codetracer.repr-fallback` struct with preview, truncation, handler, and
+  reason metadata, and surfaces repr failures as `<unrepr>: …` error payloads.
+  `ValueFilterStats` records per-kind fallback counts (including truncation
+  totals and handler/type breakdowns), and filter summaries emit the new
+  telemetry so downstream tooling can prioritise missing handlers.
+- **WS8 – Hardening, Benchmarks, and Rollout:** Not started.
 
 ## Next tasks
-- WS1: Fold the preview/set metadata semantics into `encode-values.md` so the
-  contract examples mirror the text/binary/collection fixtures.
-- WS2: Flesh out reference-emission strategy (`ValueRecord::Reference`) ahead
-  of WS6 so cyclic linked structures share breadth limits across handlers.
-- WS3: Add fixture coverage for special float/decimal cases (NaN, Infinity,
-  quantised decimals) and capture regressions via property tests.
-- WS4: Extend preview coverage to exercise surrogate pairs and zero-length
-  payloads, then benchmark the impact of the new limits.
-- WS5: Audit breadth budgeting on deeply nested mixed containers now that
-  structured types are covered, ensuring metadata remains bounded.
-- WS6: Fold the structured/temporal encoding semantics into
-  `design-docs/encode-values.md` and extend fixtures to cover edge cases (e.g.,
-  zero-offset timezones, dataclasses with defaults).
-- Prepare WS7 design work (repr fallback & telemetry) leveraging the enlarged
-  registry metadata helpers.
+- Capture WS8 benchmarks comparing repr fallback throughput/allocations before
+  and after the struct/telemetry changes; document the findings alongside the
+  existing fixture parity tests.
+- Refresh contributor docs to reference `codetracer.repr-fallback` metadata and
+  the `value_fallbacks` JSON summary emitted by filter telemetry.
+- Draft the rollout note for replay tooling teams, calling out the new fallback
+  struct, truncation flags, and telemetry counters.

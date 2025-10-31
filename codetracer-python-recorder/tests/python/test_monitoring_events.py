@@ -62,6 +62,26 @@ def _parse_trace(out_dir: Path) -> ParsedTrace:
     )
 
 
+def _decode_text(value: Dict[str, Any]) -> str:
+    kind = value.get("kind")
+    if kind == "String":
+        return value.get("text", "")
+    if kind == "Raw":
+        return value.get("r", "")
+    if kind == "Error":
+        return value.get("msg", "")
+    if kind == "Struct":
+        for field in value.get("fields", []):
+            text = _decode_text(field.get("value", {}))
+            if text:
+                return text
+        for entry in value.get("field_values", []):
+            text = _decode_text(entry)
+            if text:
+                return text
+    return ""
+
+
 def _write_script(tmp: Path) -> Path:
     # Keep lines compact and predictable to assert step line numbers
     code = (
@@ -549,13 +569,6 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
     def arg_name(arg: Dict[str, Any]) -> str:
         return parsed.varnames[int(arg["variable_id"])]
 
-    def decode_text(value: Dict[str, Any]) -> str:
-        if value.get("kind") == "String":
-            return value.get("text", "")
-        if value.get("kind") == "Raw":
-            return value.get("r", "")
-        return ""
-
     exception_calls = [
         arg
         for call in worker_calls
@@ -563,7 +576,7 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
         if arg_name(arg) == "exception"
     ]
     assert exception_calls, "Expected coroutine throw to record an exception argument"
-    assert any("boom" in decode_text(arg["value"]) for arg in exception_calls)
+    assert any("boom" in _decode_text(arg["value"]) for arg in exception_calls)
 
     def recorded_strings() -> List[str]:
         values: List[str] = []
@@ -571,7 +584,7 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
             rv_value = rv.get("return_value")
             if not rv_value:
                 continue
-            text = decode_text(rv_value)
+            text = _decode_text(rv_value)
             if text:
                 values.append(text)
         return values
@@ -604,8 +617,6 @@ def test_py_unwind_records_exception_return(tmp_path: Path) -> None:
 
     parsed = _parse_trace(out_dir)
     assert any(
-        (rv_value := rv.get("return_value"))
-        and rv_value.get("kind") in {"Raw", "String"}
-        and "boom" in (rv_value.get("r") or rv_value.get("text", ""))
+        (rv_value := rv.get("return_value")) and "boom" in _decode_text(rv_value)
         for rv in parsed.returns
     ), "Expected unwind to record the exception message"

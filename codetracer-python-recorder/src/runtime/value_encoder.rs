@@ -6,6 +6,9 @@
 //! encoding surface extensible for future workspaces (WS3–WS6) without coupling
 //! handlers to policy or tracing concerns.
 
+use crate::logging::record_dropped_event;
+use crate::runtime::value_filters::ValueFilterStats;
+use crate::trace_filter::engine::ValueKind;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use once_cell::sync::Lazy;
@@ -30,6 +33,10 @@ const BINARY_PREVIEW_BYTES: usize = 1024;
 const STRING_PREVIEW_TYPE: &str = "codetracer.string-preview";
 const BYTES_PREVIEW_TYPE: &str = "codetracer.bytes-preview";
 const DEFAULT_MAX_SET_PREVIEW: usize = 8;
+const REPR_FALLBACK_TYPE: &str = "codetracer.repr-fallback";
+const FALLBACK_EVENT: &str = "value_repr_fallback";
+const FALLBACK_ERROR_EVENT: &str = "value_repr_failure";
+const NO_HANDLER_LABEL: &str = "<none>";
 
 #[derive(Copy, Clone)]
 enum DateTimeKind {
@@ -56,65 +63,133 @@ impl Default for EncoderLimits {
 }
 
 struct ValueHandler {
+    name: &'static str,
     guard: fn(&Bound<'_, PyAny>) -> bool,
-    encode: for<'py> fn(&mut ValueEncoderContext<'py, '_>, &Bound<'py, PyAny>) -> ValueRecord,
+    encode: for<'py, 'stats> fn(
+        &mut ValueEncoderContext<'py, '_, 'stats>,
+        &Bound<'py, PyAny>,
+    ) -> ValueRecord,
 }
 
 impl ValueHandler {
     const fn new(
+        name: &'static str,
         guard: fn(&Bound<'_, PyAny>) -> bool,
-        encode: for<'py> fn(&mut ValueEncoderContext<'py, '_>, &Bound<'py, PyAny>) -> ValueRecord,
+        encode: for<'py, 'stats> fn(
+            &mut ValueEncoderContext<'py, '_, 'stats>,
+            &Bound<'py, PyAny>,
+        ) -> ValueRecord,
     ) -> Self {
-        Self { guard, encode }
+        Self {
+            name,
+            guard,
+            encode,
+        }
     }
 }
 
 static HANDLERS: Lazy<Vec<ValueHandler>> = Lazy::new(|| {
     vec![
-        ValueHandler::new(guard_none, encode_none),
-        ValueHandler::new(guard_bool, encode_bool),
-        ValueHandler::new(guard_int, encode_int),
-        ValueHandler::new(guard_float, encode_float),
-        ValueHandler::new(guard_complex, encode_complex),
-        ValueHandler::new(guard_decimal, encode_decimal),
-        ValueHandler::new(guard_fraction, encode_fraction),
-        ValueHandler::new(guard_string, encode_string),
-        ValueHandler::new(guard_bytes_like, encode_bytes_like),
-        ValueHandler::new(guard_path_like, encode_path_like),
-        ValueHandler::new(guard_dataclass, encode_dataclass),
-        ValueHandler::new(guard_attrs, encode_attrs),
-        ValueHandler::new(guard_namedtuple, encode_namedtuple),
-        ValueHandler::new(guard_enum, encode_enum),
-        ValueHandler::new(guard_simple_namespace, encode_simple_namespace),
-        ValueHandler::new(guard_datetime_like, encode_datetime_like),
-        ValueHandler::new(guard_tuple, encode_tuple),
-        ValueHandler::new(guard_list, encode_list),
-        ValueHandler::new(guard_dict, encode_dict),
-        ValueHandler::new(guard_set, encode_set),
-        ValueHandler::new(guard_frozenset, encode_frozenset),
-        ValueHandler::new(guard_range, encode_range),
-        ValueHandler::new(guard_deque, encode_deque),
+        ValueHandler::new("none", guard_none, encode_none),
+        ValueHandler::new("bool", guard_bool, encode_bool),
+        ValueHandler::new("int", guard_int, encode_int),
+        ValueHandler::new("float", guard_float, encode_float),
+        ValueHandler::new("complex", guard_complex, encode_complex),
+        ValueHandler::new("decimal", guard_decimal, encode_decimal),
+        ValueHandler::new("fraction", guard_fraction, encode_fraction),
+        ValueHandler::new("string", guard_string, encode_string),
+        ValueHandler::new("bytes-like", guard_bytes_like, encode_bytes_like),
+        ValueHandler::new("path-like", guard_path_like, encode_path_like),
+        ValueHandler::new("dataclass", guard_dataclass, encode_dataclass),
+        ValueHandler::new("attrs", guard_attrs, encode_attrs),
+        ValueHandler::new("namedtuple", guard_namedtuple, encode_namedtuple),
+        ValueHandler::new("enum", guard_enum, encode_enum),
+        ValueHandler::new(
+            "simple-namespace",
+            guard_simple_namespace,
+            encode_simple_namespace,
+        ),
+        ValueHandler::new("datetime-like", guard_datetime_like, encode_datetime_like),
+        ValueHandler::new("tuple", guard_tuple, encode_tuple),
+        ValueHandler::new("list", guard_list, encode_list),
+        ValueHandler::new("dict", guard_dict, encode_dict),
+        ValueHandler::new("set", guard_set, encode_set),
+        ValueHandler::new("frozenset", guard_frozenset, encode_frozenset),
+        ValueHandler::new("range", guard_range, encode_range),
+        ValueHandler::new("deque", guard_deque, encode_deque),
     ]
 });
 
-pub(crate) struct ValueEncoderContext<'py, 'writer> {
+struct FallbackRecorder<'stats> {
+    stats: &'stats mut ValueFilterStats,
+    kind: ValueKind,
+}
+
+impl<'stats> FallbackRecorder<'stats> {
+    fn record(
+        &mut self,
+        handler: Option<&'static str>,
+        reason: FallbackReason,
+        type_name: &str,
+        truncated: bool,
+    ) {
+        self.stats
+            .record_fallback(self.kind, handler, reason.label(), type_name, truncated);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FallbackReason {
+    NoHandler,
+    HandlerError,
+    DepthLimit,
+    Cycle,
+    ReprError,
+}
+
+impl FallbackReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NoHandler => "no_handler",
+            Self::HandlerError => "handler_error",
+            Self::DepthLimit => "depth_limit",
+            Self::Cycle => "cycle_detected",
+            Self::ReprError => "repr_error",
+        }
+    }
+}
+
+pub(crate) struct ValueEncoderContext<'py, 'writer, 'stats> {
     _py: PhantomData<Python<'py>>,
     writer: &'writer mut NonStreamingTraceWriter,
     limits: EncoderLimits,
     depth: usize,
     in_progress: HashSet<usize>,
     memo: HashMap<usize, ValueRecord>,
+    fallback: Option<FallbackRecorder<'stats>>,
+    current_handler: Option<&'static str>,
 }
 
-impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
+impl<'py, 'writer> ValueEncoderContext<'py, 'writer, '_> {
     pub(crate) fn new(py: Python<'py>, writer: &'writer mut NonStreamingTraceWriter) -> Self {
         Self::with_limits(py, writer, EncoderLimits::default())
     }
+}
 
+impl<'py, 'writer, 'stats> ValueEncoderContext<'py, 'writer, 'stats> {
     pub(crate) fn with_limits(
         _py: Python<'py>,
         writer: &'writer mut NonStreamingTraceWriter,
         limits: EncoderLimits,
+    ) -> Self {
+        Self::with_limits_and_telemetry(_py, writer, limits, None)
+    }
+
+    fn with_limits_and_telemetry(
+        _py: Python<'py>,
+        writer: &'writer mut NonStreamingTraceWriter,
+        limits: EncoderLimits,
+        fallback: Option<FallbackRecorder<'stats>>,
     ) -> Self {
         Self {
             _py: PhantomData,
@@ -123,6 +198,8 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
             depth: 0,
             in_progress: HashSet::new(),
             memo: HashMap::new(),
+            fallback,
+            current_handler: None,
         }
     }
 
@@ -132,7 +209,7 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
 
     fn encode_nested(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
         if self.depth >= self.limits.max_depth {
-            return self.encode_repr(value);
+            return self.encode_repr_with_reason(value, FallbackReason::DepthLimit);
         }
         self.depth += 1;
         let record = self.dispatch(value);
@@ -148,14 +225,19 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
 
         let track = self.should_track(value);
         if track && !self.in_progress.insert(ptr) {
-            return self.encode_repr(value);
+            return self.encode_repr_with_reason(value, FallbackReason::Cycle);
         }
 
         let record = HANDLERS
             .iter()
             .find(|handler| (handler.guard)(value))
-            .map(|handler| (handler.encode)(self, value))
-            .unwrap_or_else(|| self.encode_repr(value));
+            .map(|handler| {
+                let previous = self.current_handler.replace(handler.name);
+                let record = (handler.encode)(self, value);
+                self.current_handler = previous;
+                record
+            })
+            .unwrap_or_else(|| self.encode_repr_with_reason(value, FallbackReason::NoHandler));
 
         if track {
             self.in_progress.remove(&ptr);
@@ -196,17 +278,105 @@ impl<'py, 'writer> ValueEncoderContext<'py, 'writer> {
     }
 
     fn encode_repr(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
+        self.encode_repr_with_reason(value, FallbackReason::HandlerError)
+    }
+
+    fn encode_repr_with_reason(
+        &mut self,
+        value: &Bound<'py, PyAny>,
+        reason: FallbackReason,
+    ) -> ValueRecord {
         let qualified = qualified_type_name(value).unwrap_or_else(|| "builtins.object".to_string());
         let ty = self.ensure_type(TypeKind::Raw, &qualified);
-        match value.str() {
-            Ok(text) => ValueRecord::Raw {
-                r: text.to_string_lossy().into_owned(),
-                type_id: ty,
-            },
-            Err(_) => ValueRecord::Error {
-                msg: "<unrepr>".to_string(),
-                type_id: ty,
-            },
+        match value.repr() {
+            Ok(text) => {
+                let text = text.to_string_lossy().into_owned();
+                let (preview, total_length, truncated) = repr_preview(&text, STRING_PREVIEW_LIMIT);
+                self.record_fallback(reason, &qualified, truncated);
+                self.repr_struct(
+                    ValueRecord::Raw {
+                        r: preview,
+                        type_id: ty,
+                    },
+                    total_length,
+                    truncated,
+                    reason,
+                )
+            }
+            Err(err) => {
+                let py = value.py();
+                let message = build_unrepr_message(py, err);
+                self.record_fallback(FallbackReason::ReprError, &qualified, false);
+                record_dropped_event(FALLBACK_ERROR_EVENT);
+                self.repr_struct(
+                    ValueRecord::Error {
+                        msg: message,
+                        type_id: ty,
+                    },
+                    0,
+                    false,
+                    FallbackReason::ReprError,
+                )
+            }
+        }
+    }
+
+    fn repr_struct(
+        &mut self,
+        repr_value: ValueRecord,
+        total_length: usize,
+        truncated: bool,
+        reason: FallbackReason,
+    ) -> ValueRecord {
+        let int_ty = self.ensure_type(TypeKind::Int, "builtins.int");
+        let bool_ty = self.ensure_type(TypeKind::Bool, "builtins.bool");
+        let str_ty = self.ensure_type(TypeKind::String, "builtins.str");
+        let handler = self.current_handler.unwrap_or(NO_HANDLER_LABEL).to_string();
+        let object_ty = self.ensure_type(TypeKind::Raw, "builtins.object");
+        let struct_ty = self.ensure_struct_type(
+            REPR_FALLBACK_TYPE,
+            &[
+                ("repr", object_ty),
+                ("total_length", int_ty),
+                ("truncated", bool_ty),
+                ("handler", str_ty),
+                ("reason", str_ty),
+            ],
+        );
+        let length = total_length.try_into().unwrap_or(i64::MAX);
+        ValueRecord::Struct {
+            field_values: vec![
+                repr_value,
+                ValueRecord::Int {
+                    i: length,
+                    type_id: int_ty,
+                },
+                ValueRecord::Bool {
+                    b: truncated,
+                    type_id: bool_ty,
+                },
+                ValueRecord::String {
+                    text: handler,
+                    type_id: str_ty,
+                },
+                ValueRecord::String {
+                    text: reason.label().to_string(),
+                    type_id: str_ty,
+                },
+            ],
+            type_id: struct_ty,
+        }
+    }
+
+    fn record_fallback(&mut self, reason: FallbackReason, type_name: &str, truncated: bool) {
+        if matches!(
+            reason,
+            FallbackReason::NoHandler | FallbackReason::HandlerError
+        ) {
+            record_dropped_event(FALLBACK_EVENT);
+        }
+        if let Some(recorder) = self.fallback.as_mut() {
+            recorder.record(self.current_handler, reason, type_name, truncated);
         }
     }
 
@@ -250,11 +420,33 @@ pub fn encode_value<'py>(
     context.encode_root(value)
 }
 
+pub fn encode_value_with_stats<'py>(
+    py: Python<'py>,
+    writer: &mut NonStreamingTraceWriter,
+    value: &Bound<'py, PyAny>,
+    telemetry: Option<(&mut ValueFilterStats, ValueKind)>,
+) -> ValueRecord {
+    if let Some((stats, kind)) = telemetry {
+        let mut context = ValueEncoderContext::with_limits_and_telemetry(
+            py,
+            writer,
+            EncoderLimits::default(),
+            Some(FallbackRecorder { stats, kind }),
+        );
+        return context.encode_root(value);
+    }
+    let mut context = ValueEncoderContext::new(py, writer);
+    context.encode_root(value)
+}
+
 fn guard_none(value: &Bound<'_, PyAny>) -> bool {
     value.is_none()
 }
 
-fn encode_none(_ctx: &mut ValueEncoderContext<'_, '_>, _value: &Bound<'_, PyAny>) -> ValueRecord {
+fn encode_none(
+    _ctx: &mut ValueEncoderContext<'_, '_, '_>,
+    _value: &Bound<'_, PyAny>,
+) -> ValueRecord {
     NONE_VALUE
 }
 
@@ -262,7 +454,7 @@ fn guard_bool(value: &Bound<'_, PyAny>) -> bool {
     value.downcast::<PyBool>().is_ok()
 }
 
-fn encode_bool(ctx: &mut ValueEncoderContext<'_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
+fn encode_bool(ctx: &mut ValueEncoderContext<'_, '_, '_>, value: &Bound<'_, PyAny>) -> ValueRecord {
     let ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
     let b = value.extract::<bool>().unwrap_or(false);
     ValueRecord::Bool { b, type_id: ty }
@@ -273,7 +465,7 @@ fn guard_int(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_int<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
@@ -323,7 +515,7 @@ fn guard_float(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_float<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let ty = ctx.ensure_type(TypeKind::Float, "builtins.float");
@@ -338,7 +530,7 @@ fn guard_complex(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_complex<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let complex = value
@@ -365,7 +557,7 @@ fn guard_decimal(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_decimal<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let tuple_obj = match value.call_method0("as_tuple") {
@@ -438,7 +630,7 @@ fn guard_fraction(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_fraction<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let numerator = match value.getattr("numerator") {
@@ -469,7 +661,7 @@ fn guard_string(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_string<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let text = value.extract::<String>().unwrap_or_else(|_| String::new());
@@ -483,7 +675,7 @@ fn guard_bytes_like(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_bytes_like<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     if let Ok(bytes) = value.downcast::<PyBytes>() {
@@ -517,7 +709,7 @@ fn guard_path_like(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_path_like<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let path_value = match value.call_method0("__fspath__") {
@@ -540,7 +732,7 @@ fn guard_dataclass(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_dataclass<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let fields_obj = match value.getattr("__dataclass_fields__") {
@@ -572,7 +764,7 @@ fn guard_attrs(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_attrs<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let attrs_obj = match value.getattr("__attrs_attrs__") {
@@ -604,7 +796,7 @@ fn guard_namedtuple(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_namedtuple<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let fields_obj = match value.getattr("_fields") {
@@ -637,7 +829,7 @@ fn guard_enum(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_enum<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
@@ -670,7 +862,7 @@ fn guard_simple_namespace(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_simple_namespace<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let dict_obj = match value.getattr("__dict__") {
@@ -703,7 +895,7 @@ fn guard_datetime_like(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_datetime_like<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let kind = match datetime_kind(value) {
@@ -964,7 +1156,7 @@ fn guard_set(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_set<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     encode_set_like(ctx, value, true)
@@ -975,7 +1167,7 @@ fn guard_frozenset(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_frozenset<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     encode_set_like(ctx, value, true)
@@ -986,7 +1178,7 @@ fn guard_range(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_range<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let range = value.downcast::<PyRange>().expect("guard ensures range");
@@ -1024,14 +1216,14 @@ fn guard_deque(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_deque<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     encode_iterable_sequence(ctx, value, "collections.deque")
 }
 
 fn encode_text_value<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     type_name: &str,
     text: String,
 ) -> ValueRecord {
@@ -1095,7 +1287,7 @@ fn string_preview_type(type_name: &str) -> String {
 }
 
 fn encode_bytes_preview<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     data: &[u8],
     type_name: &str,
 ) -> ValueRecord {
@@ -1138,7 +1330,7 @@ fn encode_bytes_preview<'py>(
 }
 
 fn encode_struct_from_records<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     type_name: &str,
     fields: Vec<(String, ValueRecord)>,
 ) -> ValueRecord {
@@ -1158,7 +1350,7 @@ fn encode_struct_from_records<'py>(
 }
 
 fn encode_set_like<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
     unordered: bool,
 ) -> ValueRecord {
@@ -1223,7 +1415,7 @@ fn encode_set_like<'py>(
 }
 
 fn encode_iterable_sequence<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
     type_name: &str,
 ) -> ValueRecord {
@@ -1322,7 +1514,7 @@ fn guard_tuple(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_tuple<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let tuple = value.downcast::<PyTuple>().expect("guard ensures tuple");
@@ -1343,7 +1535,7 @@ fn guard_list(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_list<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let list = value.downcast::<PyList>().expect("guard ensures list");
@@ -1367,7 +1559,7 @@ fn guard_dict(value: &Bound<'_, PyAny>) -> bool {
 }
 
 fn encode_dict<'py>(
-    ctx: &mut ValueEncoderContext<'py, '_>,
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     let dict = value.downcast::<PyDict>().expect("guard ensures dict");
@@ -1423,6 +1615,34 @@ fn record_type_id(record: &ValueRecord) -> Option<TypeId> {
         | ValueRecord::BigInt { type_id, .. } => Some(*type_id),
         ValueRecord::Cell { .. } => None,
     }
+}
+
+fn repr_preview(text: &str, limit: usize) -> (String, usize, bool) {
+    let total = text.chars().count();
+    if total <= limit {
+        return (text.to_string(), total, false);
+    }
+
+    let mut preview_end = text.len();
+    let mut consumed = 0usize;
+    for (idx, ch) in text.char_indices() {
+        consumed += 1;
+        if consumed == limit {
+            preview_end = idx + ch.len_utf8();
+            break;
+        }
+    }
+    let preview = text[..preview_end].to_string();
+    (preview, total, true)
+}
+
+fn build_unrepr_message(py: Python<'_>, err: PyErr) -> String {
+    let repr = err
+        .value(py)
+        .repr()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| err.to_string());
+    format!("<unrepr>: {repr}")
 }
 
 fn qualified_type_name(value: &Bound<'_, PyAny>) -> Option<String> {
@@ -1716,11 +1936,18 @@ pub(crate) fn encode_value_fixture_for_tests(
 #[cfg(test)]
 mod tests {
     use super::fixtures::{encode_case, load_fixture_cases};
-    use super::{EncoderLimits, ValueEncoderContext, DEFAULT_MAX_DEPTH};
+    use super::{
+        encode_value_with_stats, EncoderLimits, ValueEncoderContext, DEFAULT_MAX_DEPTH,
+        STRING_PREVIEW_LIMIT,
+    };
+    use crate::runtime::value_filters::ValueFilterStats;
+    use crate::trace_filter::engine::ValueKind;
     use pyo3::prelude::*;
     use pyo3::types::{PyList, PyModule, PyTuple};
     use runtime_tracing::{Line, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord};
     use std::ffi::{CStr, CString};
+
+    const NONE_HANDLER: &str = super::NO_HANDLER_LABEL;
 
     #[test]
     fn value_encoding_fixtures_match_contract() {
@@ -2070,6 +2297,140 @@ mod tests {
     }
 
     #[test]
+    fn repr_fallback_struct_contains_metadata() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "class ReprObj:\n    def __repr__(self):\n        return '<ReprObj>'\nvalue = ReprObj()",
+            )
+            .expect("repr object");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 5);
+                    match &field_values[0] {
+                        ValueRecord::Raw { r, .. } => assert_eq!(r, "<ReprObj>"),
+                        other => panic!("expected raw repr, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, 9),
+                        other => panic!("expected total length int, saw {:?}", other),
+                    }
+                    match &field_values[2] {
+                        ValueRecord::Bool { b, .. } => assert!(!b),
+                        other => panic!("expected truncated flag, saw {:?}", other),
+                    }
+                    match &field_values[3] {
+                        ValueRecord::String { text, .. } => assert_eq!(text, NONE_HANDLER),
+                        other => panic!("expected handler string, saw {:?}", other),
+                    }
+                    match &field_values[4] {
+                        ValueRecord::String { text, .. } => assert_eq!(text, "no_handler"),
+                        other => panic!("expected reason string, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected repr fallback struct, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn repr_failure_emits_error_struct() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "class Bad:\n    def __repr__(self):\n        raise RuntimeError('boom')\nvalue = Bad()",
+            )
+            .expect("bad repr object");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 5);
+                    match &field_values[0] {
+                        ValueRecord::Error { msg, .. } => {
+                            assert!(
+                                msg.starts_with("<unrepr>: RuntimeError('boom')"),
+                                "unexpected repr failure message: {}",
+                                msg
+                            );
+                        }
+                        other => panic!("expected error payload, saw {:?}", other),
+                    }
+                    match &field_values[2] {
+                        ValueRecord::Bool { b, .. } => assert!(!b),
+                        other => panic!("expected truncated flag, saw {:?}", other),
+                    }
+                    match &field_values[4] {
+                        ValueRecord::String { text, .. } => assert_eq!(text, "repr_error"),
+                        other => panic!("expected reason string, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected repr fallback struct, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn repr_preview_truncates_long_strings() {
+        Python::with_gil(|py| {
+            let value = value_from_code(
+                py,
+                "class Big:\n    def __repr__(self):\n        return 'X' * 600\nvalue = Big()",
+            )
+            .expect("big repr object");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::new(py, &mut writer);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 5);
+                    match &field_values[0] {
+                        ValueRecord::Raw { r, .. } => assert_eq!(r.len(), STRING_PREVIEW_LIMIT),
+                        other => panic!("expected raw repr preview, saw {:?}", other),
+                    }
+                    match &field_values[1] {
+                        ValueRecord::Int { i, .. } => assert_eq!(*i, 600),
+                        other => panic!("expected total length int, saw {:?}", other),
+                    }
+                    match &field_values[2] {
+                        ValueRecord::Bool { b, .. } => assert!(*b),
+                        other => panic!("expected truncated flag, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected repr fallback struct, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn telemetry_tracks_repr_fallbacks() {
+        Python::with_gil(|py| {
+            let value = value_from_code(py, "class Custom:\n    pass\nvalue = Custom()")
+                .expect("custom object");
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut stats = ValueFilterStats::default();
+            let record = encode_value_with_stats(
+                py,
+                &mut writer,
+                &value,
+                Some((&mut stats, ValueKind::Arg)),
+            );
+            assert!(matches!(record, ValueRecord::Struct { .. }));
+            assert_eq!(stats.fallback_count(ValueKind::Arg), 1);
+            assert_eq!(stats.fallback_truncated_count(ValueKind::Arg), 0);
+            assert_eq!(stats.fallback_by_reason().get("no_handler"), Some(&1));
+            assert_eq!(stats.fallback_by_handler().get(NONE_HANDLER), Some(&1));
+            let key = "<test_module>.Custom".to_string();
+            assert_eq!(stats.fallback_by_type().get(&key), Some(&1));
+        });
+    }
+
+    #[test]
     fn datetime_handler_produces_struct() {
         Python::with_gil(|py| {
             let expr = CString::new(
@@ -2137,13 +2498,35 @@ mod tests {
             }
             .expect("inner element");
             match inner {
-                ValueRecord::Sequence { elements, .. } => match elements.first().cloned() {
-                    Some(ValueRecord::Raw { .. }) | Some(ValueRecord::Error { .. }) => {}
-                    other => panic!(
-                        "expected raw fallback due to depth limit, found {:?}",
-                        other
-                    ),
-                },
+                ValueRecord::Sequence { elements, .. } => {
+                    let fallback = elements.first().cloned().expect("fallback element");
+                    match fallback {
+                        ValueRecord::Struct { field_values, .. } => {
+                            assert_eq!(field_values.len(), 5);
+                            match &field_values[0] {
+                                ValueRecord::Raw { .. } | ValueRecord::Error { .. } => {}
+                                other => panic!("expected repr payload, saw {:?}", other),
+                            }
+                            match &field_values[2] {
+                                ValueRecord::Bool { b, .. } => assert!(!b),
+                                other => panic!("expected truncated flag, saw {:?}", other),
+                            }
+                            match &field_values[3] {
+                                ValueRecord::String { text, .. } => {
+                                    assert_eq!(text, "list", "handler should be list");
+                                }
+                                other => panic!("expected handler string, saw {:?}", other),
+                            }
+                            match &field_values[4] {
+                                ValueRecord::String { text, .. } => {
+                                    assert_eq!(text, "depth_limit");
+                                }
+                                other => panic!("expected reason string, saw {:?}", other),
+                            }
+                        }
+                        other => panic!("expected repr fallback struct, found {:?}", other),
+                    }
+                }
                 other => panic!("expected nested sequence, found {:?}", other),
             }
         });

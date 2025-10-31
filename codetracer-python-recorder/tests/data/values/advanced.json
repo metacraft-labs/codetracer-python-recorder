@@ -122,12 +122,104 @@
     },
     {
       "name": "repr_failure",
-      "code": "class BadStr:\n    def __str__(self):\n        raise RuntimeError('boom')\nvalue = BadStr()",
+      "code": "class BadRepr:\n    def __repr__(self):\n        raise RuntimeError('boom')\nvalue = BadRepr()",
       "expr": "value",
       "expected": {
-        "kind": "Error",
-        "type": "<fixture_module>.BadStr",
-        "msg": "<unrepr>"
+        "kind": "Struct",
+        "type": "codetracer.repr-fallback",
+        "fields": [
+          {
+            "name": "repr",
+            "value": {
+              "kind": "Error",
+              "type": "<fixture_module>.BadRepr",
+              "msg": "<unrepr>: RuntimeError('boom')"
+            }
+          },
+          {
+            "name": "total_length",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 0
+            }
+          },
+          {
+            "name": "truncated",
+            "value": {
+              "kind": "Bool",
+              "type": "builtins.bool",
+              "b": false
+            }
+          },
+          {
+            "name": "handler",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "<none>"
+            }
+          },
+          {
+            "name": "reason",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "repr_error"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "repr_truncated",
+      "code": "class Big:\n    def __repr__(self):\n        return 'X' * 600\nvalue = Big()",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "codetracer.repr-fallback",
+        "fields": [
+          {
+            "name": "repr",
+            "value": {
+              "kind": "Raw",
+              "type": "<fixture_module>.Big",
+              "r": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+            }
+          },
+          {
+            "name": "total_length",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 600
+            }
+          },
+          {
+            "name": "truncated",
+            "value": {
+              "kind": "Bool",
+              "type": "builtins.bool",
+              "b": true
+            }
+          },
+          {
+            "name": "handler",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "<none>"
+            }
+          },
+          {
+            "name": "reason",
+            "value": {
+              "kind": "String",
+              "type": "builtins.str",
+              "text": "no_handler"
+            }
+          }
+        ]
       }
     }
   ]
