@@ -1,0 +1,15 @@
+[meta]
+name = "click-test"
+version = 1
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+[[scope.rules]]
+selector = 'pkg:glob:*'
+exec = 'trace'
+
+[[scope.rules.value_patterns]]
+selector = "global:glob:*"
+action = "drop"
