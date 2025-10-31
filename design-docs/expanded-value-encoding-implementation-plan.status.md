@@ -62,13 +62,15 @@
   `ValueFilterStats` records per-kind fallback counts (including truncation
   totals and handler/type breakdowns), and filter summaries emit the new
   telemetry so downstream tooling can prioritise missing handlers.
-- **WS8 – Hardening, Benchmarks, and Rollout:** Not started.
+- **WS8 – Hardening, Benchmarks, and Rollout:** Completed. Captured Criterion
+  runs (`target/criterion/trace_filter/workload/*/new/estimates.json`) showing a
+  1.07 ms baseline, 8.35 ms regex, and 33.2 ms glob workload in the new encoder,
+  and recorded end-to-end Python throughput plus filter telemetry deltas in
+  `codetracer-python-recorder/target/perf/trace_filter_py.json`. Updated
+  `docs/onboarding/trace-filters.md` with the `value_fallbacks` metadata and
+  guidance for interpreting non-zero baseline redaction counts, and refreshed
+  `just bench` expectations for sharing results with downstream teams.
 
 ## Next tasks
-- Capture WS8 benchmarks comparing repr fallback throughput/allocations before
-  and after the struct/telemetry changes; document the findings alongside the
-  existing fixture parity tests.
-- Refresh contributor docs to reference `codetracer.repr-fallback` metadata and
-  the `value_fallbacks` JSON summary emitted by filter telemetry.
-- Draft the rollout note for replay tooling teams, calling out the new fallback
-  struct, truncation flags, and telemetry counters.
+- Coordinate with replay tooling on rollout messaging when the next release is
+  cut so `value_fallbacks` dashboards are wired up in parallel.

@@ -72,6 +72,7 @@
   - `stats.scopes_skipped` – total number of code objects blocked by `exec = "skip"`.
   - `stats.value_redactions` – per-kind counts for redacted values (`argument`, `local`, `global`, `return`, `attribute`).
   - `stats.value_drops` – per-kind counts for values removed entirely from the trace.
+  - `stats.value_fallbacks` – repr fallback telemetry containing `total`/`truncated` counts per value kind plus breakdowns by handler, reason (`no_handler`, `handler_error`, `depth_limit`, `cycle_detected`, `repr_error`), and original type name.
 - These counters help CI/quality tooling detect unexpectedly aggressive filters.
 
 ## Benchmarks and Guard Rails
@@ -80,5 +81,6 @@
 - `just bench` orchestrates both:
   1. Ensures the development virtualenv exists (`just venv`).
   2. Runs the Criterion bench with `PYO3_PYTHON` pinned to the virtualenv interpreter.
- 3. Executes the Python smoke benchmark, writing `codetracer-python-recorder/target/perf/trace_filter_py.json` (durations plus redaction/drop stats per scenario).
+  3. Executes the Python smoke benchmark, writing `codetracer-python-recorder/target/perf/trace_filter_py.json` (durations plus redaction/drop stats per scenario).
 - Use the JSON artefact to feed dashboards or simple regression checks while longer-term gating thresholds are defined.
+- The built-in default filter still redacts secret-like locals in the baseline scenario, so expect non-zero local redaction counts even before applying the benchmark-specific filters; focus comparisons on the scenario deltas (e.g., increased global redactions or additional skipped scopes).
