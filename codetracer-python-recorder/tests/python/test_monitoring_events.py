@@ -21,6 +21,7 @@ class ParsedTrace:
     steps: List[Tuple[int, int]]  # (path_id, line)
     varnames: List[str]  # index is variable_id
     call_records: List[Dict[str, Any]]  # raw Call payloads (order preserved)
+    types: List[Dict[str, Any]]  # index is type_id
 
 
 def _parse_trace(out_dir: Path) -> ParsedTrace:
@@ -36,6 +37,7 @@ def _parse_trace(out_dir: Path) -> ParsedTrace:
     steps: List[Tuple[int, int]] = []
     varnames: List[str] = []
     call_records: List[Dict[str, Any]] = []
+    types: List[Dict[str, Any]] = []
 
     for item in events:
         if "Function" in item:
@@ -50,6 +52,8 @@ def _parse_trace(out_dir: Path) -> ParsedTrace:
         elif "Step" in item:
             s = item["Step"]
             steps.append((int(s["path_id"]), int(s["line"])))
+        elif "Type" in item:
+            types.append(item["Type"])
 
     return ParsedTrace(
         paths=paths,
@@ -59,7 +63,28 @@ def _parse_trace(out_dir: Path) -> ParsedTrace:
         steps=steps,
         varnames=varnames,
         call_records=call_records,
+        types=types,
     )
+
+
+def _struct_field_map(value: Dict[str, Any], parsed: ParsedTrace) -> Dict[str, Dict[str, Any]]:
+    """Zip struct field metadata with the recorded values using the trace Type table."""
+    type_id = value.get("type_id")
+    if not isinstance(type_id, int):
+        return {}
+    if type_id < 0 or type_id >= len(parsed.types):
+        return {}
+    type_record = parsed.types[type_id]
+    specifics = type_record.get("specific_info", {})
+    fields = specifics.get("fields", [])
+    field_values = value.get("field_values", [])
+    result: Dict[str, Dict[str, Any]] = {}
+    for index, field in enumerate(fields):
+        name = field.get("name")
+        if name is None or index >= len(field_values):
+            continue
+        result[name] = field_values[index]
+    return result
 
 
 def _decode_text(value: Dict[str, Any]) -> str:
@@ -330,18 +355,36 @@ def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
         r = varargs_val.get("r", "")
         assert "30" in r and "40" in r
 
-    # Kwargs must be encoded structurally as a sequence of (key, value) tuples
     kwargs_val = name_to_val["kwargs"]
-    assert kwargs_val.get("kind") == "Sequence", f"Expected structured kwargs encoding, got: {kwargs_val}"
-    elements = kwargs_val.get("elements")
-    assert isinstance(elements, list) and len(elements) == 1, f"Expected single kwargs pair, got: {elements}"
-    pair = elements[0]
-    assert pair.get("kind") == "Tuple", f"Expected key/value tuple, got: {pair}"
-    kv = pair.get("elements")
-    assert isinstance(kv, list) and len(kv) == 2, f"Expected 2-tuple for kwargs item, got: {kv}"
-    key_rec, val_rec = kv[0], kv[1]
-    assert key_rec.get("kind") == "String" and key_rec.get("text") == "k", f"Unexpected kwargs key encoding: {key_rec}"
-    assert val_rec.get("kind") == "Int" and int(val_rec.get("i")) == 60, f"Unexpected kwargs value encoding: {val_rec}"
+    kwargs_kind = kwargs_val.get("kind")
+    if kwargs_kind == "Sequence":
+        # Legacy path: kwargs emitted as a sequence of (key, value) tuples.
+        elements = kwargs_val.get("elements")
+        assert isinstance(elements, list) and len(elements) == 1, f"Expected single kwargs pair, got: {elements}"
+        pair = elements[0]
+        assert pair.get("kind") == "Tuple", f"Expected key/value tuple, got: {pair}"
+        kv = pair.get("elements")
+        assert isinstance(kv, list) and len(kv) == 2, f"Expected 2-tuple for kwargs item, got: {kv}"
+        key_rec, val_rec = kv[0], kv[1]
+        assert key_rec.get("kind") == "String" and key_rec.get("text") == "k", f"Unexpected kwargs key encoding: {key_rec}"
+        assert val_rec.get("kind") == "Int" and int(val_rec.get("i")) == 60, f"Unexpected kwargs value encoding: {val_rec}"
+    elif kwargs_kind == "Struct":
+        # New path: kwargs emitted as a struct keyed by argument names.
+        field_map = _struct_field_map(kwargs_val, parsed)
+        assert "k" in field_map, f"Expected kwargs to include 'k', saw: {list(field_map)}"
+        val_rec = field_map["k"]
+        assert val_rec.get("kind") == "Int" and int(val_rec.get("i")) == 60, f"Unexpected kwargs value encoding: {val_rec}"
+        metadata = field_map.get("$codetracer.dict.metadata$")
+        assert metadata and metadata.get("kind") == "Struct", f"Missing kwargs metadata: {metadata}"
+        meta_map = _struct_field_map(metadata, parsed)
+        preview = meta_map.get("preview_count")
+        total = meta_map.get("total_count")
+        truncated = meta_map.get("truncated")
+        assert preview and preview.get("kind") == "Int" and int(preview.get("i")) == 1
+        assert total and total.get("kind") == "Int" and int(total.get("i")) == 1
+        assert truncated and truncated.get("kind") == "Bool" and truncated.get("b") is False
+    else:
+        pytest.fail(f"Unexpected kwargs encoding: {kwargs_val}")
 
 
 def test_generator_yield_resume_events_are_balanced(tmp_path: Path) -> None:

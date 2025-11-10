@@ -19,8 +19,8 @@ use pyo3::types::{
     PyTuple, PyType, PyTypeMethods,
 };
 use runtime_tracing::{
-    FieldTypeRecord, NonStreamingTraceWriter, TraceWriter, TypeId, TypeKind, TypeRecord,
-    TypeSpecificInfo, ValueRecord, NONE_VALUE,
+    FieldTypeRecord, NonStreamingTraceWriter, TraceLowLevelEvent, TraceWriter, TypeId, TypeKind,
+    TypeRecord, TypeSpecificInfo, ValueRecord, NONE_VALUE,
 };
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -33,6 +33,10 @@ const BINARY_PREVIEW_BYTES: usize = 1024;
 const STRING_PREVIEW_TYPE: &str = "codetracer.string-preview";
 const BYTES_PREVIEW_TYPE: &str = "codetracer.bytes-preview";
 const DEFAULT_MAX_SET_PREVIEW: usize = 8;
+const STRING_KEY_DICT_LANG_TYPE_PREFIX: &str = "codetracer.dict#";
+const STRING_KEY_DICT_DISPLAY_TYPE: &str = "codetracer.dict";
+const STRING_KEY_DICT_METADATA_TYPE: &str = "codetracer.dict#preview";
+const STRING_KEY_DICT_METADATA_FIELD: &str = "$codetracer.dict.metadata$";
 const REPR_FALLBACK_TYPE: &str = "codetracer.repr-fallback";
 const FALLBACK_EVENT: &str = "value_repr_fallback";
 const FALLBACK_ERROR_EVENT: &str = "value_repr_failure";
@@ -168,6 +172,7 @@ pub(crate) struct ValueEncoderContext<'py, 'writer, 'stats> {
     memo: HashMap<usize, ValueRecord>,
     fallback: Option<FallbackRecorder<'stats>>,
     current_handler: Option<&'static str>,
+    dict_type_aliases: HashSet<String>,
 }
 
 impl<'py, 'writer> ValueEncoderContext<'py, 'writer, '_> {
@@ -200,6 +205,7 @@ impl<'py, 'writer, 'stats> ValueEncoderContext<'py, 'writer, 'stats> {
             memo: HashMap::new(),
             fallback,
             current_handler: None,
+            dict_type_aliases: HashSet::new(),
         }
     }
 
@@ -275,6 +281,26 @@ impl<'py, 'writer, 'stats> ValueEncoderContext<'py, 'writer, 'stats> {
             specific_info,
         };
         TraceWriter::ensure_raw_type_id(self.writer, record)
+    }
+
+    fn alias_string_dict_type(&mut self, internal_name: &str) {
+        if !self.dict_type_aliases.insert(internal_name.to_string()) {
+            return;
+        }
+        if let Some(record) = self
+            .writer
+            .events
+            .iter_mut()
+            .rev()
+            .find_map(|event| match event {
+                TraceLowLevelEvent::Type(record) if record.lang_type == internal_name => {
+                    Some(record)
+                }
+                _ => None,
+            })
+        {
+            record.lang_type = STRING_KEY_DICT_DISPLAY_TYPE.to_string();
+        }
     }
 
     fn encode_repr(&mut self, value: &Bound<'py, PyAny>) -> ValueRecord {
@@ -1564,6 +1590,17 @@ fn encode_dict<'py>(
 ) -> ValueRecord {
     let dict = value.downcast::<PyDict>().expect("guard ensures dict");
     let len = dict.len();
+    if let Some(record) = encode_string_key_dict(ctx, &dict, len) {
+        return record;
+    }
+    encode_dict_sequence(ctx, &dict, len)
+}
+
+fn encode_dict_sequence<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
+    dict: &Bound<'py, PyDict>,
+    len: usize,
+) -> ValueRecord {
     let limit = len.min(ctx.limits.max_items);
     let tuple_ty = ctx.ensure_type(TypeKind::Tuple, "builtins.tuple");
     let str_ty = ctx.ensure_type(TypeKind::String, "builtins.str");
@@ -1595,6 +1632,95 @@ fn encode_dict<'py>(
         elements,
         is_slice: len > ctx.limits.max_items,
         type_id: ty,
+    }
+}
+
+fn encode_string_key_dict<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
+    dict: &Bound<'py, PyDict>,
+    len: usize,
+) -> Option<ValueRecord> {
+    let limit = len.min(ctx.limits.max_items);
+    let py = dict.py();
+    let mut keys = Vec::with_capacity(limit);
+    let mut values = Vec::with_capacity(limit);
+
+    for (index, (key, value)) in dict.iter().enumerate() {
+        let key_text: String = match key.extract() {
+            Ok(text) => text,
+            Err(_) => return None,
+        };
+        if index < limit {
+            keys.push(key_text);
+            values.push(value.unbind());
+        }
+    }
+
+    let type_name = dict_struct_lang_type(&keys)?;
+    let metadata = dict_preview_metadata(ctx, keys.len(), len);
+    let mut records = Vec::with_capacity(keys.len() + 1);
+    for (key, value_obj) in keys.into_iter().zip(values.into_iter()) {
+        let bound_val = value_obj.bind(py);
+        records.push((key, ctx.encode_nested(&bound_val)));
+    }
+    records.push((STRING_KEY_DICT_METADATA_FIELD.to_string(), metadata));
+
+    let mut spec = Vec::with_capacity(records.len());
+    let mut values = Vec::with_capacity(records.len());
+    for (name, record) in records {
+        let type_id = record_type_id(&record)
+            .unwrap_or_else(|| ctx.ensure_type(TypeKind::Raw, "builtins.object"));
+        spec.push((name, type_id));
+        values.push(record);
+    }
+    let type_id = ctx.ensure_struct_type_dynamic(&type_name, &spec);
+    ctx.alias_string_dict_type(&type_name);
+    Some(ValueRecord::Struct {
+        field_values: values,
+        type_id,
+    })
+}
+
+fn dict_struct_lang_type(keys: &[String]) -> Option<String> {
+    serde_json::to_string(keys)
+        .ok()
+        .map(|serialized| format!("{STRING_KEY_DICT_LANG_TYPE_PREFIX}{serialized}"))
+}
+
+fn dict_preview_metadata<'py>(
+    ctx: &mut ValueEncoderContext<'py, '_, '_>,
+    preview_count: usize,
+    total_count: usize,
+) -> ValueRecord {
+    let int_ty = ctx.ensure_type(TypeKind::Int, "builtins.int");
+    let bool_ty = ctx.ensure_type(TypeKind::Bool, "builtins.bool");
+    let metadata_ty = ctx.ensure_struct_type(
+        STRING_KEY_DICT_METADATA_TYPE,
+        &[
+            ("preview_count", int_ty),
+            ("total_count", int_ty),
+            ("truncated", bool_ty),
+        ],
+    );
+    let preview_i64 = preview_count.try_into().unwrap_or(i64::MAX);
+    let total_i64 = total_count.try_into().unwrap_or(i64::MAX);
+    let truncated = total_count > preview_count;
+    ValueRecord::Struct {
+        field_values: vec![
+            ValueRecord::Int {
+                i: preview_i64,
+                type_id: int_ty,
+            },
+            ValueRecord::Int {
+                i: total_i64,
+                type_id: int_ty,
+            },
+            ValueRecord::Bool {
+                b: truncated,
+                type_id: bool_ty,
+            },
+        ],
+        type_id: metadata_ty,
     }
 }
 
@@ -2475,6 +2601,54 @@ mod tests {
                     assert!(!is_slice);
                 }
                 other => panic!("expected Sequence record, saw {:?}", other),
+            }
+        });
+    }
+
+    #[test]
+    fn string_key_dicts_emit_struct_with_metadata() {
+        Python::with_gil(|py| {
+            let expr = CString::new("{'a': 1, 'b': 2}").expect("dict literal");
+            let value = py.eval(expr.as_c_str(), None, None).unwrap();
+            let limits = EncoderLimits {
+                max_depth: DEFAULT_MAX_DEPTH,
+                max_items: 1,
+            };
+            let mut writer = NonStreamingTraceWriter::new("<test>", &[]);
+            writer.start(std::path::Path::new("<test>"), Line(1));
+            let mut context = ValueEncoderContext::with_limits(py, &mut writer, limits);
+            match context.encode_root(&value) {
+                ValueRecord::Struct { field_values, .. } => {
+                    assert_eq!(field_values.len(), 2, "expected one entry plus metadata");
+                    match &field_values[1] {
+                        ValueRecord::Struct {
+                            field_values: metadata,
+                            ..
+                        } => {
+                            assert_eq!(metadata.len(), 3, "metadata fields");
+                            match metadata[0] {
+                                ValueRecord::Int { i, .. } => assert_eq!(i, 1),
+                                ref other => {
+                                    panic!("expected preview_count int, saw {:?}", other)
+                                }
+                            }
+                            match metadata[1] {
+                                ValueRecord::Int { i, .. } => assert_eq!(i, 2),
+                                ref other => {
+                                    panic!("expected total_count int, saw {:?}", other)
+                                }
+                            }
+                            match metadata[2] {
+                                ValueRecord::Bool { b, .. } => assert!(b),
+                                ref other => {
+                                    panic!("expected truncated bool, saw {:?}", other)
+                                }
+                            }
+                        }
+                        other => panic!("expected metadata struct, saw {:?}", other),
+                    }
+                }
+                other => panic!("expected Struct record, saw {:?}", other),
             }
         });
     }

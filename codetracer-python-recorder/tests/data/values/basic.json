@@ -88,6 +88,66 @@
       }
     },
     {
+      "name": "dict_string_keys",
+      "code": "value = {'alpha': 1, 'beta': 2}",
+      "expr": "value",
+      "expected": {
+        "kind": "Struct",
+        "type": "codetracer.dict",
+        "fields": [
+          {
+            "name": "alpha",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 1
+            }
+          },
+          {
+            "name": "beta",
+            "value": {
+              "kind": "Int",
+              "type": "builtins.int",
+              "i": 2
+            }
+          },
+          {
+            "name": "$codetracer.dict.metadata$",
+            "value": {
+              "kind": "Struct",
+              "type": "codetracer.dict#preview",
+              "fields": [
+                {
+                  "name": "preview_count",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 2
+                  }
+                },
+                {
+                  "name": "total_count",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 2
+                  }
+                },
+                {
+                  "name": "truncated",
+                  "value": {
+                    "kind": "Bool",
+                    "type": "builtins.bool",
+                    "b": false
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "dict_mixed_keys",
       "code": "value = {'a': 1, 2: 'b'}",
       "expr": "value",
@@ -96,38 +156,38 @@
         "type": "builtins.dict",
         "is_slice": false,
         "elements": [
-          {
-            "kind": "Tuple",
-            "type": "builtins.tuple",
-            "elements": [
-              {
-                "kind": "String",
-                "type": "builtins.str",
-                "text": "a"
-              },
-              {
-                "kind": "Int",
-                "type": "builtins.int",
-                "i": 1
-              }
-            ]
-          },
-          {
-            "kind": "Tuple",
-            "type": "builtins.tuple",
-            "elements": [
-              {
-                "kind": "Int",
-                "type": "builtins.int",
-                "i": 2
-              },
-              {
-                "kind": "String",
-                "type": "builtins.str",
-                "text": "b"
-              }
-            ]
-          }
+                {
+                  "kind": "Tuple",
+                  "type": "builtins.tuple",
+                  "elements": [
+                    {
+                      "kind": "String",
+                      "type": "builtins.str",
+                      "text": "a"
+                    },
+                    {
+                      "kind": "Int",
+                      "type": "builtins.int",
+                      "i": 1
+                    }
+                  ]
+                },
+                {
+                  "kind": "Tuple",
+                  "type": "builtins.tuple",
+                  "elements": [
+                    {
+                      "kind": "Int",
+                      "type": "builtins.int",
+                      "i": 2
+                    },
+                    {
+                      "kind": "String",
+                      "type": "builtins.str",
+                      "text": "b"
+                    }
+                  ]
+                }
         ]
       }
     },

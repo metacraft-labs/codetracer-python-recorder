@@ -128,14 +128,24 @@ source of truth when implementing or reviewing value-handling changes.
 
 ## Mappings
 
-- **Dicts/Mapping subclasses** — Emit as `ValueRecord::Sequence` of key/value
-  tuples. The outer sequence has type `builtins.dict`, inner tuple type
-  `codetracer.dict-entry`. Preserve iteration order. Referencing keys:
-  - Direct string keys use `ValueRecord::String`.
-  - Non-string keys are encoded recursively.
-- **OrderedDict / default dict** — Reuse `builtins.dict` type id but attach
-  metadata struct describing specialised behaviour (e.g.,
-  `codetracer.collections.defaultdict` with fields `["default_factory"]`).
+- **Dicts/Mapping subclasses** — When every key is a string, emit a
+  `ValueRecord::Struct` whose field names exactly mirror the key order.
+  Register the type as `codetracer.dict` (the encoder internally deduplicates
+  layouts, but the visible name stays constant for UI readability). Always
+  append a reserved field named `$codetracer.dict.metadata$` whose value is a
+  `codetracer.dict#preview` struct with fields
+  `["preview_count", "total_count", "truncated"]`; this replaces the legacy
+  `is_slice` flag and keeps truncation metadata intact even when the payload is
+  a struct. If any key fails to extract as a string, fall back to the sequence
+  representation below.
+- **Mixed-key dicts** — Emit as `ValueRecord::Sequence` of key/value tuples.
+  The outer sequence has type `builtins.dict`, inner tuple type
+  `codetracer.dict-entry`. Preserve iteration order. Direct string keys use
+  `ValueRecord::String`, other keys recurse through the encoder.
+- **OrderedDict / default dict** — Reuse `builtins.dict` type id (for the
+  mixed-key path) but attach metadata struct describing specialised behaviour
+  (e.g., `codetracer.collections.defaultdict` with fields
+  `["default_factory"]`).
 
 ## Structured Objects
 

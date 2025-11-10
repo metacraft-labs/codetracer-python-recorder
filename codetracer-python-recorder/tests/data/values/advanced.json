@@ -5,83 +5,123 @@
       "code": "value = {\"nums\": [1, [2, 3]], \"inner\": {\"a\": True}}",
       "expr": "value",
       "expected": {
-        "kind": "Sequence",
-        "type": "builtins.dict",
-        "is_slice": false,
-        "elements": [
+        "kind": "Struct",
+        "type": "codetracer.dict",
+        "fields": [
           {
-            "kind": "Tuple",
-            "type": "builtins.tuple",
-            "elements": [
-              {
-                "kind": "String",
-                "type": "builtins.str",
-                "text": "nums"
-              },
-              {
-                "kind": "Sequence",
-                "type": "builtins.list",
-                "is_slice": false,
-                "elements": [
-                  {
-                    "kind": "Int",
-                    "type": "builtins.int",
-                    "i": 1
-                  },
-                  {
-                    "kind": "Sequence",
-                    "type": "builtins.list",
-                    "is_slice": false,
-                    "elements": [
-                      {
-                        "kind": "Int",
-                        "type": "builtins.int",
-                        "i": 2
-                      },
-                      {
-                        "kind": "Int",
-                        "type": "builtins.int",
-                        "i": 3
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
+            "name": "nums",
+            "value": {
+              "kind": "Sequence",
+              "type": "builtins.list",
+              "is_slice": false,
+              "elements": [
+                {
+                  "kind": "Int",
+                  "type": "builtins.int",
+                  "i": 1
+                },
+                {
+                  "kind": "Sequence",
+                  "type": "builtins.list",
+                  "is_slice": false,
+                  "elements": [
+                    {
+                      "kind": "Int",
+                      "type": "builtins.int",
+                      "i": 2
+                    },
+                    {
+                      "kind": "Int",
+                      "type": "builtins.int",
+                      "i": 3
+                    }
+                  ]
+                }
+              ]
+            }
           },
           {
-            "kind": "Tuple",
-            "type": "builtins.tuple",
-            "elements": [
-              {
-                "kind": "String",
-                "type": "builtins.str",
-                "text": "inner"
-              },
-              {
-                "kind": "Sequence",
-                "type": "builtins.dict",
-                "is_slice": false,
-                "elements": [
-                  {
-                    "kind": "Tuple",
-                    "type": "builtins.tuple",
-                    "elements": [
+            "name": "inner",
+            "value": {
+              "kind": "Struct",
+              "type": "codetracer.dict",
+              "fields": [
+                {
+                  "name": "a",
+                  "value": {
+                    "kind": "Bool",
+                    "type": "builtins.bool",
+                    "b": true
+                  }
+                },
+                {
+                  "name": "$codetracer.dict.metadata$",
+                  "value": {
+                    "kind": "Struct",
+                    "type": "codetracer.dict#preview",
+                    "fields": [
                       {
-                        "kind": "String",
-                        "type": "builtins.str",
-                        "text": "a"
+                        "name": "preview_count",
+                        "value": {
+                          "kind": "Int",
+                          "type": "builtins.int",
+                          "i": 1
+                        }
                       },
                       {
-                        "kind": "Bool",
-                        "type": "builtins.bool",
-                        "b": true
+                        "name": "total_count",
+                        "value": {
+                          "kind": "Int",
+                          "type": "builtins.int",
+                          "i": 1
+                        }
+                      },
+                      {
+                        "name": "truncated",
+                        "value": {
+                          "kind": "Bool",
+                          "type": "builtins.bool",
+                          "b": false
+                        }
                       }
                     ]
                   }
-                ]
-              }
-            ]
+                }
+              ]
+            }
+          },
+          {
+            "name": "$codetracer.dict.metadata$",
+            "value": {
+              "kind": "Struct",
+              "type": "codetracer.dict#preview",
+              "fields": [
+                {
+                  "name": "preview_count",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 2
+                  }
+                },
+                {
+                  "name": "total_count",
+                  "value": {
+                    "kind": "Int",
+                    "type": "builtins.int",
+                    "i": 2
+                  }
+                },
+                {
+                  "name": "truncated",
+                  "value": {
+                    "kind": "Bool",
+                    "type": "builtins.bool",
+                    "b": false
+                  }
+                }
+              ]
+            }
           }
         ]
       }
