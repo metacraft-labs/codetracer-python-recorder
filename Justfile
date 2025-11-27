@@ -24,6 +24,11 @@ clean:
     rm -rf .venv **/__pycache__ **/*.pyc **/*.pyo **/.pytest_cache
     rm -rf codetracer-python-recorder/target codetracer-python-recorder/**/*.so
 
+# Test that Nix packages build cleanly
+nix-test:
+    cd nix && nix flake check
+    cd nix && nix build .#codetracer-pure-python-recorder --no-link
+    cd nix && nix build .#codetracer-python-recorder --no-link
 
 # Create a clean local virtualenv for Python tooling (without editable packages installed)
 venv version=PYTHON_DEFAULT_VERSION:

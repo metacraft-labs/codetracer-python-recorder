@@ -8,6 +8,62 @@
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
     in {
+      packages = forEachSystem (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+
+          # Pure Python recorder package
+          codetracer-pure-python-recorder = pkgs.python312.pkgs.buildPythonPackage {
+            pname = "codetracer-pure-python-recorder";
+            version = "0.1.0";
+            pyproject = true;
+
+            src = ../codetracer-pure-python-recorder;
+
+            build-system = with pkgs.python312.pkgs; [
+              setuptools
+            ];
+
+            pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
+
+            meta = {
+              description = "Pure-Python prototype recorder producing CodeTracer traces";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+          # Rust-backed recorder package
+          codetracer-python-recorder = pkgs.python312.pkgs.buildPythonPackage {
+            pname = "codetracer-python-recorder";
+            version = "0.3.0";
+            pyproject = true;
+
+            src = ../codetracer-python-recorder;
+
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ../codetracer-python-recorder/Cargo.lock;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustPlatform.cargoSetupHook
+              rustPlatform.maturinBuildHook
+              capnproto
+              pkg-config
+            ];
+
+            pythonImportsCheck = [ "codetracer_python_recorder" ];
+
+            meta = {
+              description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+        in {
+          inherit codetracer-pure-python-recorder codetracer-python-recorder;
+          default = codetracer-python-recorder;
+        });
+
       devShells = forEachSystem (system:
         let pkgs = import nixpkgs { inherit system; };
         in {
