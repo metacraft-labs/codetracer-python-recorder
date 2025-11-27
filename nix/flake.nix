@@ -12,10 +12,14 @@
         let
           pkgs = import nixpkgs { inherit system; };
 
+          # Read versions from pyproject.toml files
+          purePythonProjectToml = builtins.fromTOML (builtins.readFile ../codetracer-pure-python-recorder/pyproject.toml);
+          rustBackedProjectToml = builtins.fromTOML (builtins.readFile ../codetracer-python-recorder/pyproject.toml);
+
           # Pure Python recorder package
           codetracer-pure-python-recorder = pkgs.python312.pkgs.buildPythonPackage {
             pname = "codetracer-pure-python-recorder";
-            version = "0.1.0";
+            version = purePythonProjectToml.project.version;
             pyproject = true;
 
             src = ../codetracer-pure-python-recorder;
@@ -35,7 +39,7 @@
           # Rust-backed recorder package
           codetracer-python-recorder = pkgs.python312.pkgs.buildPythonPackage {
             pname = "codetracer-python-recorder";
-            version = "0.3.0";
+            version = rustBackedProjectToml.project.version;
             pyproject = true;
 
             src = ../codetracer-python-recorder;
