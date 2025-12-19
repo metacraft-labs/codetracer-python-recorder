@@ -13,9 +13,26 @@ const BUILTIN_FILTER_LABEL: &str = "builtin-default";
 const BUILTIN_TRACE_FILTER: &str =
     include_str!("../../../resources/trace_filters/builtin_default.toml");
 
+// Framework-specific builtin filters
+const BUILTIN_PYTEST_FILTER_LABEL: &str = "builtin-pytest";
+const BUILTIN_PYTEST_FILTER: &str =
+    include_str!("../../../resources/trace_filters/builtin_pytest.toml");
+
+const BUILTIN_UNITTEST_FILTER_LABEL: &str = "builtin-unittest";
+const BUILTIN_UNITTEST_FILTER: &str =
+    include_str!("../../../resources/trace_filters/builtin_unittest.toml");
+
 pub fn load_trace_filter(
     explicit: Option<&[PathBuf]>,
     program: &str,
+) -> Result<Option<Arc<TraceFilterEngine>>> {
+    load_trace_filter_with_framework(explicit, program, None)
+}
+
+pub fn load_trace_filter_with_framework(
+    explicit: Option<&[PathBuf]>,
+    program: &str,
+    test_framework: Option<&str>,
 ) -> Result<Option<Arc<TraceFilterEngine>>> {
     let mut chain: Vec<PathBuf> = Vec::new();
 
@@ -27,10 +44,26 @@ pub fn load_trace_filter(
         chain.extend(paths.iter().cloned());
     }
 
-    let config = TraceFilterConfig::from_inline_and_paths(
-        &[(BUILTIN_FILTER_LABEL, BUILTIN_TRACE_FILTER)],
-        &chain,
-    )?;
+    // Build the list of inline filters - builtin-default is always included
+    let mut inline_filters: Vec<(&str, &str)> = vec![(BUILTIN_FILTER_LABEL, BUILTIN_TRACE_FILTER)];
+
+    // Add framework-specific filter if requested
+    if let Some(framework) = test_framework {
+        match framework {
+            "pytest" => {
+                inline_filters.push((BUILTIN_PYTEST_FILTER_LABEL, BUILTIN_PYTEST_FILTER));
+            }
+            "unittest" => {
+                inline_filters.push((BUILTIN_UNITTEST_FILTER_LABEL, BUILTIN_UNITTEST_FILTER));
+            }
+            _ => {
+                // Unknown framework - log warning but continue
+                log::warn!("Unknown test framework '{}', no builtin filter applied", framework);
+            }
+        }
+    }
+
+    let config = TraceFilterConfig::from_inline_and_paths(&inline_filters, &chain)?;
     Ok(Some(Arc::new(TraceFilterEngine::new(config))))
 }
 
@@ -160,5 +193,107 @@ pub mod tests {
         assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
         assert!(paths.contains(&default_filter_path));
         assert!(paths.contains(&override_filter_path));
+    }
+
+    #[test]
+    fn load_trace_filter_with_pytest_framework_includes_pytest_filter() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+
+        let engine = load_trace_filter_with_framework(
+            None,
+            script.to_str().expect("utf8"),
+            Some("pytest"),
+        )
+        .expect("load")
+        .expect("engine");
+
+        let paths: Vec<PathBuf> = engine
+            .summary()
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-pytest>")));
+    }
+
+    #[test]
+    fn load_trace_filter_with_unittest_framework_includes_unittest_filter() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+
+        let engine = load_trace_filter_with_framework(
+            None,
+            script.to_str().expect("utf8"),
+            Some("unittest"),
+        )
+        .expect("load")
+        .expect("engine");
+
+        let paths: Vec<PathBuf> = engine
+            .summary()
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-unittest>")));
+    }
+
+    #[test]
+    fn load_trace_filter_without_framework_excludes_framework_filters() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+
+        let engine = load_trace_filter_with_framework(
+            None,
+            script.to_str().expect("utf8"),
+            None,
+        )
+        .expect("load")
+        .expect("engine");
+
+        let paths: Vec<PathBuf> = engine
+            .summary()
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
+        assert!(!paths.contains(&PathBuf::from("<inline:builtin-pytest>")));
+        assert!(!paths.contains(&PathBuf::from("<inline:builtin-unittest>")));
+    }
+
+    #[test]
+    fn load_trace_filter_unknown_framework_only_includes_default() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let script = write_app(root);
+
+        let engine = load_trace_filter_with_framework(
+            None,
+            script.to_str().expect("utf8"),
+            Some("unknown_framework"),
+        )
+        .expect("load")
+        .expect("engine");
+
+        let paths: Vec<PathBuf> = engine
+            .summary()
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        // Should still have builtin-default but no unknown framework filter
+        assert!(paths.contains(&PathBuf::from("<inline:builtin-default>")));
+        assert_eq!(paths.len(), 1, "Should only have builtin-default filter");
     }
 }

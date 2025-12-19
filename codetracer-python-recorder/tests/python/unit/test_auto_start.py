@@ -34,6 +34,7 @@ def test_auto_start_resolves_filter_chain(tmp_path: Path, monkeypatch: pytest.Mo
         fmt: str,
         activation: str | None,
         filters: list[str] | None,
+        test_framework: str | None = None,
     ) -> None:
         state["active"] = True
         captured_filters.append(filters)

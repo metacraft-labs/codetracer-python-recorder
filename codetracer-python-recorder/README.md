@@ -51,6 +51,54 @@ All additional arguments are forwarded to the target script unchanged. The CLI
 reuses whichever interpreter launches it so wrappers such as `uv run`, `pipx`,
 or activated virtual environments behave identically to `python script.py`.
 
+## Test framework integration
+
+The recorder supports direct integration with pytest and unittest, automatically
+applying curated filters that skip framework internals while tracing your test code.
+
+### Pytest
+
+```bash
+python -m codetracer_python_recorder \
+  --trace-dir ./trace-out \
+  --format json \
+  --pytest tests/test_example.py::test_addition -v
+```
+
+Everything after `--pytest` is passed directly to pytest. You can use any pytest
+arguments including node IDs (`path::test_name`), markers (`-m slow`), or
+verbosity flags (`-v`, `-vv`).
+
+### Unittest
+
+```bash
+python -m codetracer_python_recorder \
+  --trace-dir ./trace-out \
+  --format json \
+  --unittest tests.test_module.TestClass.test_method -v
+```
+
+Everything after `--unittest` is passed directly to `python -m unittest`.
+
+### Framework filters
+
+When `--pytest` or `--unittest` is specified, the recorder automatically applies
+a built-in filter that skips framework internals:
+
+- **pytest**: Skips `pytest`, `pluggy`, `_pytest`, and related packages
+- **unittest**: Skips `unittest` and related standard library test machinery
+
+These filters are applied in addition to the default filter chain. To disable
+the automatic framework filter and use only your explicit filters:
+
+```bash
+python -m codetracer_python_recorder \
+  --trace-dir ./trace-out \
+  --format json \
+  --no-framework-filters \
+  --pytest tests/test_example.py -v
+```
+
 ## Trace filter configuration
 - Filter files are TOML with `[meta]`, `[scope]`, and `[[scope.rules]]` tables. Rules evaluate in declaration order and can tweak both execution (`exec`) and value decisions (`value_default`).
 - Supported selector domains: `pkg`, `file`, `obj` for scopes; `local`, `global`, `arg`, `ret`, `attr` for value policies. Match types default to `glob` and also accept `regex` or `literal` (e.g. `local:regex:^(metric|masked)_\w+$`).

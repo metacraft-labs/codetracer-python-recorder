@@ -20,6 +20,20 @@ def _run_cli(script: Path, *args: str, env: dict[str, str] | None = None) -> sub
     return subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
 
 
+def _assert_injection_support(result: subprocess.CompletedProcess[str]) -> None:
+    """Assert that error injection is supported (integration-test feature enabled).
+
+    If injection is not working, the test fails with instructions on how to fix.
+    Run `just dev` to build with the integration-test feature enabled.
+    """
+    if result.returncode == 0 and "test-injected failure" not in result.stderr:
+        pytest.fail(
+            "Recorder built without integration-test hooks.\n"
+            "Run `just dev` (or `just test` which includes it) to build with "
+            "the integration-test feature enabled."
+        )
+
+
 def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
     script = tmp_path / "app.py"
     script.write_text("value = 1\nprint(value)\n")
@@ -38,6 +52,8 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
         "disable",
         env=env,
     )
+
+    _assert_injection_support(result)
 
     assert result.returncode == 0, result.stderr
     assert trace_dir.is_dir()
@@ -69,6 +85,8 @@ def test_cli_abort_policy_propagates_internal_error(tmp_path: Path) -> None:
         env=env,
     )
 
+    _assert_injection_support(result)
+
     assert result.returncode != 0
     assert trace_dir.is_dir()
     assert "test-injected failure" in result.stderr
@@ -98,6 +116,15 @@ def test_cli_require_trace_fails_when_no_events_recorded(tmp_path: Path) -> None
         env=env,
     )
 
+    # Check injection support - events file existence indicates it's not working
+    events = trace_dir / "trace.json"
+    if result.returncode == 0 and events.exists():
+        pytest.fail(
+            "Recorder built without integration-test hooks.\n"
+            "Run `just dev` (or `just test` which includes it) to build with "
+            "the integration-test feature enabled."
+        )
+
     assert result.returncode != 0
     assert trace_dir.is_dir()
     assert "requires a trace but no events were recorded" in result.stderr
@@ -122,6 +149,8 @@ def test_cli_json_errors_emits_trailer(tmp_path: Path) -> None:
         "abort",
         env=env,
     )
+
+    _assert_injection_support(result)
 
     assert result.returncode != 0
     lines = [line for line in result.stderr.splitlines() if line.strip()]

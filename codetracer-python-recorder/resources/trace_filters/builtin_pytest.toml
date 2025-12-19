@@ -1,0 +1,106 @@
+[meta]
+name = "builtin-pytest"
+version = 1
+description = "Skip pytest internals, pluggy, and common test infrastructure while tracing test code"
+labels = ["builtin", "pytest"]
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+# Skip pytest framework internals
+[[scope.rules]]
+selector = 'pkg:glob:pytest*'
+exec = "skip"
+reason = "Skip pytest framework internals"
+
+[[scope.rules]]
+selector = 'pkg:glob:_pytest*'
+exec = "skip"
+reason = "Skip pytest private modules"
+
+# Skip pluggy plugin system (pytest's plugin architecture)
+[[scope.rules]]
+selector = 'pkg:glob:pluggy*'
+exec = "skip"
+reason = "Skip pluggy plugin system"
+
+# Skip py library (pytest dependency for path handling)
+[[scope.rules]]
+selector = 'pkg:glob:py.*'
+exec = "skip"
+reason = "Skip py library (pytest dependency)"
+
+[[scope.rules]]
+selector = 'pkg:literal:py'
+exec = "skip"
+reason = "Skip py library root module"
+
+# Skip iniconfig (pytest configuration parsing)
+[[scope.rules]]
+selector = 'pkg:glob:iniconfig*'
+exec = "skip"
+reason = "Skip iniconfig (pytest dependency)"
+
+# Skip packaging (version parsing used by pytest)
+[[scope.rules]]
+selector = 'pkg:glob:packaging*'
+exec = "skip"
+reason = "Skip packaging library"
+
+# Skip common pytest plugins
+[[scope.rules]]
+selector = 'pkg:glob:pytest_*'
+exec = "skip"
+reason = "Skip pytest plugins"
+
+[[scope.rules]]
+selector = 'pkg:glob:xdist*'
+exec = "skip"
+reason = "Skip pytest-xdist distributed testing"
+
+[[scope.rules]]
+selector = 'pkg:glob:coverage*'
+exec = "skip"
+reason = "Skip coverage.py"
+
+[[scope.rules]]
+selector = 'pkg:glob:_pytest_*'
+exec = "skip"
+reason = "Skip pytest plugin internals"
+
+# Ensure test modules are traced
+[[scope.rules]]
+selector = 'pkg:glob:test_*'
+exec = "trace"
+reason = "Trace test modules"
+
+[[scope.rules]]
+selector = 'pkg:glob:tests.*'
+exec = "trace"
+reason = "Trace tests package contents"
+
+[[scope.rules]]
+selector = 'pkg:glob:*_test'
+exec = "trace"
+reason = "Trace test modules with _test suffix"
+
+[[scope.rules]]
+selector = 'file:glob:**/test_*.py'
+exec = "trace"
+reason = "Trace test files"
+
+[[scope.rules]]
+selector = 'file:glob:**/*_test.py'
+exec = "trace"
+reason = "Trace test files with _test suffix"
+
+[[scope.rules]]
+selector = 'file:glob:**/tests/**/*.py'
+exec = "trace"
+reason = "Trace files in tests directories"
+
+[[scope.rules]]
+selector = 'file:glob:**/conftest.py'
+exec = "trace"
+reason = "Trace conftest.py fixtures"

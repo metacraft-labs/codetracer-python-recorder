@@ -1,0 +1,51 @@
+[meta]
+name = "builtin-unittest"
+version = 1
+description = "Skip unittest framework internals while tracing test code"
+labels = ["builtin", "unittest"]
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+# Skip unittest framework internals
+[[scope.rules]]
+selector = 'pkg:literal:unittest'
+exec = "skip"
+reason = "Skip unittest framework"
+
+[[scope.rules]]
+selector = 'pkg:glob:unittest.*'
+exec = "skip"
+reason = "Skip unittest submodules"
+
+# Ensure test modules are traced
+[[scope.rules]]
+selector = 'pkg:glob:test_*'
+exec = "trace"
+reason = "Trace test modules"
+
+[[scope.rules]]
+selector = 'pkg:glob:tests.*'
+exec = "trace"
+reason = "Trace tests package contents"
+
+[[scope.rules]]
+selector = 'pkg:glob:*_test'
+exec = "trace"
+reason = "Trace test modules with _test suffix"
+
+[[scope.rules]]
+selector = 'file:glob:**/test_*.py'
+exec = "trace"
+reason = "Trace test files"
+
+[[scope.rules]]
+selector = 'file:glob:**/*_test.py'
+exec = "trace"
+reason = "Trace test files with _test suffix"
+
+[[scope.rules]]
+selector = 'file:glob:**/tests/**/*.py'
+exec = "trace"
+reason = "Trace files in tests directories"

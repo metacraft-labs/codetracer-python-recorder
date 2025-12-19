@@ -14,7 +14,7 @@ use runtime_tracing::TraceEventsFileFormat;
 use crate::errors::Result;
 use crate::trace_filter::engine::TraceFilterEngine;
 use filesystem::{ensure_trace_directory, resolve_trace_format};
-use filters::load_trace_filter;
+use filters::{load_trace_filter, load_trace_filter_with_framework};
 use metadata::collect_program_metadata;
 
 /// Basic metadata about the currently running Python program.
@@ -52,10 +52,26 @@ impl TraceSessionBootstrap {
         activation_path: Option<&Path>,
         explicit_trace_filters: Option<&[PathBuf]>,
     ) -> Result<Self> {
+        Self::prepare_with_framework(py, trace_directory, format, activation_path, explicit_trace_filters, None)
+    }
+
+    /// Prepare a tracing session with optional test framework filter support.
+    pub fn prepare_with_framework(
+        py: Python<'_>,
+        trace_directory: &Path,
+        format: &str,
+        activation_path: Option<&Path>,
+        explicit_trace_filters: Option<&[PathBuf]>,
+        test_framework: Option<&str>,
+    ) -> Result<Self> {
         ensure_trace_directory(trace_directory)?;
         let format = resolve_trace_format(format)?;
         let metadata = collect_program_metadata(py)?;
-        let trace_filter = load_trace_filter(explicit_trace_filters, &metadata.program)?;
+        let trace_filter = load_trace_filter_with_framework(
+            explicit_trace_filters,
+            &metadata.program,
+            test_framework,
+        )?;
         Ok(Self {
             trace_directory: trace_directory.to_path_buf(),
             format,

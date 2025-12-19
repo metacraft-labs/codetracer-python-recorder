@@ -9,8 +9,9 @@ default:
 PYTHON_DEFAULT_VERSION := "3.13"
 
 # Python versions used for multi-version testing/building with uv
-PY_VERSIONS := "3.10 3.11 3.12 3.13"
-PY_SHORT_VERSIONS := "10 11 12 13"
+# Note: Project requires >=3.12,<3.14 per pyproject.toml
+PY_VERSIONS := "3.12 3.13"
+PY_SHORT_VERSIONS := "12 13"
 
 # Print toolchain versions to verify the dev environment
 env:
@@ -38,8 +39,8 @@ venv version=PYTHON_DEFAULT_VERSION:
 dev:
     uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
 
-# Run unit tests of dev build
-test: cargo-test py-test
+# Run unit tests of dev build (dev ensures integration-test feature is built)
+test: dev cargo-test py-test
 
 # Run Rust unit tests without default features to link Python C library
 cargo-test:

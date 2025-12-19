@@ -70,6 +70,7 @@ def start(
     trace_filter: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | None = None,
     policy: Mapping[str, object] | None = None,
     apply_env_policy: bool = True,
+    test_framework: str | None = None,
 ) -> TraceSession:
     """Start a new global trace session.
 
@@ -95,6 +96,10 @@ def start(
         When ``True`` (default), refresh policy settings from environment
         variables via :func:`configure_policy_from_env` prior to applying
         explicit overrides.
+    test_framework:
+        Optional test framework name (``"pytest"`` or ``"unittest"``). When
+        provided, the corresponding builtin framework filter is automatically
+        applied to skip framework internals from the trace.
 
     Returns
     -------
@@ -124,7 +129,7 @@ def start(
     if policy:
         _configure_policy(**_coerce_policy_kwargs(policy))
 
-    _start_backend(str(trace_path), normalized_format, activation_path, filter_chain)
+    _start_backend(str(trace_path), normalized_format, activation_path, filter_chain, test_framework)
     session = TraceSession(path=trace_path, format=normalized_format)
     _active_session = session
     return session

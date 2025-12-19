@@ -103,6 +103,7 @@ def test_trace_context_manager_starts_and_stops(monkeypatch: pytest.MonkeyPatch,
         fmt: str,
         activation: str | None,
         filters: list[str] | None,
+        test_framework: str | None = None,
     ) -> None:
         trace_state["active"] = True
         calls["start"].append((Path(path), fmt, activation, filters))
