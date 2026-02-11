@@ -9,7 +9,7 @@ use crate::runtime::tracer::filtering::FilterCoordinator;
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
-use runtime_tracing::{NonStreamingTraceWriter, TraceWriter};
+use runtime_tracing::TraceWriter;
 use serde_json::{self, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ impl LifecycleController {
 
     pub fn begin(
         &mut self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         outputs: &TraceOutputPaths,
         start_line: u32,
     ) -> RecorderResult<()> {
@@ -105,7 +105,7 @@ impl LifecycleController {
 
     pub fn finalise(
         &mut self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         filter: &FilterCoordinator,
         exit_summary: &ExitSummary,
     ) -> RecorderResult<()> {
@@ -271,10 +271,10 @@ mod tests {
     use crate::policy::RecorderPolicy;
     use crate::runtime::output_paths::TraceOutputPaths;
     use recorder_errors::ErrorCode;
-    use runtime_tracing::{NonStreamingTraceWriter, TraceEventsFileFormat};
+    use runtime_tracing::{create_trace_writer, TraceEventsFileFormat};
 
-    fn writer() -> NonStreamingTraceWriter {
-        NonStreamingTraceWriter::new("program.py", &[])
+    fn writer() -> Box<dyn TraceWriter> {
+        create_trace_writer("program.py", &[], TraceEventsFileFormat::Json)
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         let mut writer = writer();
 
         controller
-            .begin(&mut writer, &outputs, 1)
+            .begin(&mut *writer, &outputs, 1)
             .expect("begin lifecycle");
 
         std::fs::write(outputs.events(), "events").expect("write events");

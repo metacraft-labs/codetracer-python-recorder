@@ -6,8 +6,7 @@ use crate::runtime::io_capture::{
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use pyo3::prelude::*;
 use runtime_tracing::{
-    EventLogKind, Line, NonStreamingTraceWriter, PathId, RecordEvent, TraceLowLevelEvent,
-    TraceWriter,
+    EventLogKind, Line, PathId, RecordEvent, TraceLowLevelEvent, TraceWriter,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -44,7 +43,7 @@ impl IoCoordinator {
     pub(crate) fn flush_before_step(
         &self,
         thread_id: ThreadId,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
     ) -> bool {
         let Some(pipeline) = self.pipeline.as_ref() else {
             return false;
@@ -55,7 +54,7 @@ impl IoCoordinator {
     }
 
     /// Flush every buffered chunk regardless of thread affinity.
-    pub(crate) fn flush_all(&self, writer: &mut NonStreamingTraceWriter) -> bool {
+    pub(crate) fn flush_all(&self, writer: &mut dyn TraceWriter) -> bool {
         let Some(pipeline) = self.pipeline.as_ref() else {
             return false;
         };
@@ -68,7 +67,7 @@ impl IoCoordinator {
     pub(crate) fn teardown(
         &mut self,
         py: Python<'_>,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
     ) -> bool {
         let Some(mut pipeline) = self.pipeline.take() else {
             return false;
@@ -109,7 +108,7 @@ impl IoCoordinator {
     fn drain_chunks(
         &self,
         pipeline: &IoCapturePipeline,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
     ) -> bool {
         let mut recorded = false;
         for chunk in pipeline.drain_chunks() {
@@ -118,7 +117,7 @@ impl IoCoordinator {
         recorded
     }
 
-    fn record_chunk(&self, writer: &mut NonStreamingTraceWriter, mut chunk: IoChunk) -> bool {
+    fn record_chunk(&self, writer: &mut dyn TraceWriter, mut chunk: IoChunk) -> bool {
         if chunk.path_id.is_none() {
             if let Some(path) = chunk.path.as_deref() {
                 let path_id = TraceWriter::ensure_path_id(writer, Path::new(path));

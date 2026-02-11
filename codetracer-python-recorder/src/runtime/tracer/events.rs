@@ -221,7 +221,7 @@ impl Tracer for RuntimeTracer {
             None
         };
         let telemetry = telemetry_holder.as_deref_mut();
-        match capture_call_arguments(py, &mut self.writer, code, value_policy, telemetry) {
+        match capture_call_arguments(py, self.writer.as_writer_mut(), code, value_policy, telemetry) {
             Ok(args) => self.register_call_record(py, code, args),
             Err(err) => {
                 let details = err.to_string();
@@ -286,8 +286,8 @@ impl Tracer for RuntimeTracer {
 
         if let Ok(filename) = code.filename(py) {
             let path = Path::new(filename);
-            let path_id = TraceWriter::ensure_path_id(&mut self.writer, path);
-            TraceWriter::register_step(&mut self.writer, path, line_value);
+            let path_id = TraceWriter::ensure_path_id(self.writer.as_writer_mut(), path);
+            TraceWriter::register_step(self.writer.as_writer_mut(), path, line_value);
             self.mark_event();
             recorded_path = Some((path_id, line_value));
         }
@@ -309,7 +309,7 @@ impl Tracer for RuntimeTracer {
         let telemetry = telemetry_holder.as_deref_mut();
         record_visible_scope(
             py,
-            &mut self.writer,
+            self.writer.as_writer_mut(),
             &snapshot,
             &mut recorded,
             value_policy,
@@ -382,7 +382,7 @@ impl Tracer for RuntimeTracer {
         let mut args: Vec<FullValueRecord> = Vec::new();
         if let Some(arg) = encode_named_argument(
             py,
-            &mut self.writer,
+            self.writer.as_writer_mut(),
             exception,
             "exception",
             value_policy,
@@ -432,7 +432,7 @@ impl Tracer for RuntimeTracer {
         // For non-streaming formats we can update the events file.
         match self.format {
             TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
-                TraceWriter::finish_writing_trace_events(&mut self.writer).map_err(|err| {
+                TraceWriter::finish_writing_trace_events(self.writer.as_writer_mut()).map_err(|err| {
                     ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
                             .with_context("source", err.to_string()),
@@ -459,7 +459,7 @@ impl Tracer for RuntimeTracer {
         let _trace_scope = self.lifecycle.trace_id_scope();
         let policy = policy_snapshot();
 
-        if self.io.teardown(py, &mut self.writer) {
+        if self.io.teardown(py, self.writer.as_writer_mut()) {
             self.mark_event();
         }
 
@@ -471,7 +471,7 @@ impl Tracer for RuntimeTracer {
             if policy.keep_partial_trace {
                 if let Err(err) =
                     self.lifecycle
-                        .finalise(&mut self.writer, &self.filter, &exit_summary)
+                        .finalise(self.writer.as_writer_mut(), &self.filter, &exit_summary)
                 {
                     with_error_code(ErrorCode::TraceIncomplete, || {
                         log::warn!(
@@ -504,7 +504,7 @@ impl Tracer for RuntimeTracer {
             .require_trace_or_fail(&policy)
             .map_err(ffi::map_recorder_error)?;
         self.lifecycle
-            .finalise(&mut self.writer, &self.filter, &exit_summary)
+            .finalise(self.writer.as_writer_mut(), &self.filter, &exit_summary)
             .map_err(ffi::map_recorder_error)?;
         self.function_ids.clear();
         self.filter.reset();
@@ -522,7 +522,7 @@ impl RuntimeTracer {
         args: Vec<FullValueRecord>,
     ) {
         if let Ok(fid) = self.ensure_function_id(py, code) {
-            TraceWriter::register_call(&mut self.writer, fid, args);
+            TraceWriter::register_call(self.writer.as_writer_mut(), fid, args);
             self.mark_event();
         }
     }
@@ -561,7 +561,7 @@ impl RuntimeTracer {
 
         record_return_value(
             py,
-            &mut self.writer,
+            self.writer.as_writer_mut(),
             retval,
             value_policy,
             telemetry,

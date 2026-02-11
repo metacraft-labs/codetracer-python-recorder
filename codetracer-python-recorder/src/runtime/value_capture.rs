@@ -6,9 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 use recorder_errors::{usage, ErrorCode};
-use runtime_tracing::{
-    FullValueRecord, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord,
-};
+use runtime_tracing::{FullValueRecord, TraceWriter, TypeKind, ValueRecord};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
@@ -47,7 +45,7 @@ impl ValueFilterStats {
     }
 }
 
-fn redacted_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
+fn redacted_value(writer: &mut dyn TraceWriter) -> ValueRecord {
     let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Redacted");
     ValueRecord::Error {
         msg: REDACTED_SENTINEL.to_string(),
@@ -55,7 +53,7 @@ fn redacted_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
     }
 }
 
-fn dropped_value(writer: &mut NonStreamingTraceWriter) -> ValueRecord {
+fn dropped_value(writer: &mut dyn TraceWriter) -> ValueRecord {
     let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Dropped");
     ValueRecord::Error {
         msg: DROPPED_SENTINEL.to_string(),
@@ -99,7 +97,7 @@ fn record_drop(kind: ValueKind, candidate: &str, telemetry: Option<&mut ValueFil
 
 fn encode_with_policy<'py>(
     py: Python<'py>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     value: &Bound<'py, PyAny>,
     policy: Option<&ValuePolicy>,
     kind: ValueKind,
@@ -123,7 +121,7 @@ fn encode_with_policy<'py>(
 /// using the runtime tracer writer.
 pub fn capture_call_arguments<'py>(
     py: Python<'py>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     code: &CodeObjectWrapper,
     policy: Option<&ValuePolicy>,
     mut telemetry: Option<&mut ValueFilterStats>,
@@ -230,7 +228,7 @@ pub fn capture_call_arguments<'py>(
 /// Encode a single argument with the current value policy, producing a call argument record.
 pub fn encode_named_argument<'py>(
     py: Python<'py>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     value: &Bound<'py, PyAny>,
     name: &str,
     policy: Option<&ValuePolicy>,
@@ -251,7 +249,7 @@ pub fn encode_named_argument<'py>(
 /// Record all visible variables from the provided frame snapshot into the writer.
 pub fn record_visible_scope(
     py: Python<'_>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     snapshot: &FrameSnapshot<'_>,
     recorded: &mut HashSet<String>,
     policy: Option<&ValuePolicy>,
@@ -316,7 +314,7 @@ pub fn record_visible_scope(
 /// Encode and record a return value for the active trace.
 pub fn record_return_value(
     py: Python<'_>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     value: &Bound<'_, PyAny>,
     policy: Option<&ValuePolicy>,
     mut telemetry: Option<&mut ValueFilterStats>,

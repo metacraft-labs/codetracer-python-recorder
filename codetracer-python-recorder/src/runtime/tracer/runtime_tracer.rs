@@ -16,13 +16,75 @@ use crate::runtime::value_encoder::encode_value;
 use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyInt, PyString};
-use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
+use runtime_tracing::{
+    create_trace_writer, Line, NonStreamingTraceWriter, TraceEventsFileFormat, TraceWriter,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::ThreadId;
+
+/// Wrapper around the trace writer that supports both non-streaming (JSON,
+/// BinaryV0) and streaming (CBOR+zstd Binary) backends.
+///
+/// For JSON and BinaryV0 formats, the writer is a [`NonStreamingTraceWriter`]
+/// that accumulates events in memory and flushes them to disk on finish.
+/// For the modern Binary (CBOR+zstd) format, a streaming writer is used that
+/// writes events directly to disk as they are produced.
+///
+/// The enum makes the concrete [`NonStreamingTraceWriter`] accessible for tests
+/// that need to inspect the in-memory event buffer.
+pub(super) enum TraceWriterKind {
+    /// In-memory writer for JSON and legacy BinaryV0 formats.
+    NonStreaming(Box<NonStreamingTraceWriter>),
+    /// Streaming writer for modern CBOR+zstd Binary format.
+    Streaming(Box<dyn TraceWriter>),
+}
+
+// SAFETY: `NonStreamingTraceWriter` is composed entirely of owned, `Send`-safe
+// data.  The `CborZstdTraceWriter` returned by `create_trace_writer` for the
+// `Binary` format holds a `File` and a `zeekstd::Encoder<File>`, both of which
+// are `Send`.  The trait object (`Box<dyn TraceWriter>`) simply does not carry
+// the `Send` bound in its public API, so we must assert it manually here.
+unsafe impl Send for TraceWriterKind {}
+
+impl TraceWriterKind {
+    /// Create the appropriate writer for the requested format.
+    fn new(program: &str, args: &[String], format: TraceEventsFileFormat) -> Self {
+        match format {
+            TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+                let mut writer = NonStreamingTraceWriter::new(program, args);
+                writer.set_format(format);
+                TraceWriterKind::NonStreaming(Box::new(writer))
+            }
+            TraceEventsFileFormat::Binary => {
+                TraceWriterKind::Streaming(create_trace_writer(program, args, format))
+            }
+        }
+    }
+
+    /// Obtain a mutable trait-object reference, regardless of the backend.
+    pub(super) fn as_writer_mut(&mut self) -> &mut dyn TraceWriter {
+        match self {
+            TraceWriterKind::NonStreaming(w) => &mut **w,
+            TraceWriterKind::Streaming(w) => &mut **w,
+        }
+    }
+
+    /// Access the non-streaming writer directly. Panics if the writer is
+    /// streaming (Binary format). Only intended for tests that inspect the
+    /// in-memory event buffer.
+    #[cfg(test)]
+    pub(super) fn as_non_streaming(&self) -> &NonStreamingTraceWriter {
+        match self {
+            TraceWriterKind::NonStreaming(w) => w,
+            TraceWriterKind::Streaming(_) => {
+                panic!("as_non_streaming() called on a streaming writer (Binary format)")
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 enum ExitPayload {
@@ -119,8 +181,14 @@ impl SessionExitState {
 
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
+///
+/// The `writer` field is a [`TraceWriterKind`] enum so that it can hold either
+/// a [`NonStreamingTraceWriter`] (for JSON and legacy BinaryV0 formats) or a
+/// streaming CBOR+zstd writer (for the modern `Binary` format). The enum
+/// preserves access to the in-memory event buffer for tests while allowing
+/// production code to work through the `dyn TraceWriter` trait.
 pub struct RuntimeTracer {
-    pub(super) writer: NonStreamingTraceWriter,
+    pub(super) writer: TraceWriterKind,
     pub(super) format: TraceEventsFileFormat,
     pub(super) lifecycle: LifecycleController,
     pub(super) function_ids: HashMap<usize, runtime_tracing::FunctionId>,
@@ -139,8 +207,7 @@ impl RuntimeTracer {
         trace_filter: Option<Arc<TraceFilterEngine>>,
         module_name_from_globals: bool,
     ) -> Self {
-        let mut writer = NonStreamingTraceWriter::new(program, args);
-        writer.set_format(format);
+        let writer = TraceWriterKind::new(program, args, format);
         let lifecycle = LifecycleController::new(program, activation_path);
         Self {
             writer,
@@ -169,13 +236,13 @@ impl RuntimeTracer {
     }
 
     pub(super) fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if self.io.flush_before_step(thread_id, &mut self.writer) {
+        if self.io.flush_before_step(thread_id, self.writer.as_writer_mut()) {
             self.mark_event();
         }
     }
 
     pub(super) fn flush_pending_io(&mut self) {
-        if self.io.flush_all(&mut self.writer) {
+        if self.io.flush_all(self.writer.as_writer_mut()) {
             self.mark_event();
         }
     }
@@ -187,15 +254,15 @@ impl RuntimeTracer {
 
         self.flush_pending_io();
         let value = self.session_exit.as_bound(py);
-        let record = encode_value(py, &mut self.writer, &value);
-        TraceWriter::register_return(&mut self.writer, record);
+        let record = encode_value(py, self.writer.as_writer_mut(), &value);
+        TraceWriter::register_return(self.writer.as_writer_mut(), record);
         self.session_exit.mark_emitted();
     }
 
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
-            .begin(&mut self.writer, outputs, start_line)
+            .begin(self.writer.as_writer_mut(), outputs, start_line)
             .map_err(ffi::map_recorder_error)?;
         Ok(())
     }
@@ -266,7 +333,7 @@ impl RuntimeTracer {
         let filename = code.filename(py)?;
         let first_line = code.first_line(py)?;
         let function_id = TraceWriter::ensure_function_id(
-            &mut self.writer,
+            self.writer.as_writer_mut(),
             name.as_str(),
             Path::new(filename),
             Line(first_line as i64),
@@ -437,7 +504,7 @@ mod tests {
                     .expect("execute synthetic script");
             }
             assert!(
-                tracer.writer.events.is_empty(),
+                tracer.writer.as_non_streaming().events.is_empty(),
                 "expected no events for synthetic filename"
             );
             let outcome = last_outcome();
@@ -539,6 +606,7 @@ result = compute()\n"
 
             let returns: Vec<SimpleValue> = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .filter_map(|event| match event {
@@ -592,6 +660,7 @@ result = compute()\n"
 
             let last_step: StepRecord = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .rev()
@@ -676,6 +745,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .filter_map(|event| match event {
@@ -771,6 +841,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .filter_map(|event| match event {
@@ -880,6 +951,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .filter_map(|event| match event {
@@ -1135,7 +1207,7 @@ def start_call():
                 py.run(run_code_c.as_c_str(), None, None)
                     .expect("execute test script");
             }
-            collect_snapshots(&tracer.writer.events)
+            collect_snapshots(&tracer.writer.as_non_streaming().events)
         })
     }
 
@@ -1259,7 +1331,7 @@ sensitive("s3cr3t")
             }
 
             let mut variable_names: Vec<String> = Vec::new();
-            for event in &tracer.writer.events {
+            for event in &tracer.writer.as_non_streaming().events {
                 if let TraceLowLevelEvent::VariableName(name) = event {
                     variable_names.push(name.clone());
                 }
@@ -1275,6 +1347,7 @@ sensitive("s3cr3t")
                 .expect("password variable recorded");
             let password_value = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .find_map(|event| match event {
@@ -1289,7 +1362,7 @@ sensitive("s3cr3t")
                 ref other => panic!("expected password argument redacted, got {other:?}"),
             }
 
-            let snapshots = collect_snapshots(&tracer.writer.events);
+            let snapshots = collect_snapshots(&tracer.writer.as_non_streaming().events);
             let snapshot = find_snapshot_with_vars(
                 &snapshots,
                 &["secret", "public", "shared_secret", "password"],
@@ -1318,6 +1391,7 @@ sensitive("s3cr3t")
 
             let return_record = tracer
                 .writer
+                .as_non_streaming()
                 .events
                 .iter()
                 .find_map(|event| match event {
@@ -1437,7 +1511,7 @@ dropper()
 
             let mut variable_names: Vec<String> = Vec::new();
             let mut return_values: Vec<ValueRecord> = Vec::new();
-            for event in &tracer.writer.events {
+            for event in &tracer.writer.as_non_streaming().events {
                 match event {
                     TraceLowLevelEvent::VariableName(name) => variable_names.push(name.clone()),
                     TraceLowLevelEvent::Return(record) => {
@@ -1525,7 +1599,7 @@ initializer("omega")
 
             let mut call_count = 0usize;
             let mut return_count = 0usize;
-            for event in &tracer.writer.events {
+            for event in &tracer.writer.as_non_streaming().events {
                 match event {
                     TraceLowLevelEvent::Call(_) => call_count += 1,
                     TraceLowLevelEvent::Return(_) => return_count += 1,
@@ -1569,7 +1643,7 @@ initializer("omega")
             tracer.finish(py).expect("finish tracer");
 
             let mut exit_value: Option<ValueRecord> = None;
-            for event in &tracer.writer.events {
+            for event in &tracer.writer.as_non_streaming().events {
                 if let TraceLowLevelEvent::Return(record) = event {
                     exit_value = Some(record.return_value.clone());
                 }

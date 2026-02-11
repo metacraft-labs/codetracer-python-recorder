@@ -2,14 +2,14 @@
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
-use runtime_tracing::{NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
+use runtime_tracing::{TraceWriter, TypeKind, ValueRecord, NONE_VALUE};
 
 /// Convert Python values into `ValueRecord` instances understood by
 /// `runtime_tracing`. Nested containers are encoded recursively and reuse the
 /// tracer's type registry to ensure deterministic identifiers.
 pub fn encode_value<'py>(
     py: Python<'py>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     if value.is_none() {

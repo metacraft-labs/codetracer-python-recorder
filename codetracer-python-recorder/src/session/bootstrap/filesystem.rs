@@ -31,14 +31,19 @@ pub fn ensure_trace_directory(path: &Path) -> Result<()> {
 }
 
 /// Convert a user-provided format string into the runtime representation.
+///
+/// `"binary"` maps to the modern CBOR+zstd format ([`TraceEventsFileFormat::Binary`]).
+/// `"binaryv0"` and its aliases preserve access to the legacy capnproto format.
 pub fn resolve_trace_format(value: &str) -> Result<TraceEventsFileFormat> {
     match value.to_ascii_lowercase().as_str() {
         "json" => Ok(TraceEventsFileFormat::Json),
-        // Accept historical aliases for the binary format.
-        "binary" | "binaryv0" | "binary_v0" | "b0" => Ok(TraceEventsFileFormat::BinaryV0),
+        // Modern CBOR+zstd binary format.
+        "binary" | "bin" => Ok(TraceEventsFileFormat::Binary),
+        // Legacy capnproto binary format, kept for backward compatibility.
+        "binaryv0" | "binary_v0" | "b0" => Ok(TraceEventsFileFormat::BinaryV0),
         other => Err(usage!(
             ErrorCode::UnsupportedFormat,
-            "unsupported trace format '{}'. Expected one of: json, binary",
+            "unsupported trace format '{}'. Expected one of: json, binary, binaryv0",
             other
         )),
     }
@@ -109,6 +114,10 @@ mod tests {
         ));
         assert!(matches!(
             resolve_trace_format("binary").expect("binary format"),
+            TraceEventsFileFormat::Binary
+        ));
+        assert!(matches!(
+            resolve_trace_format("binaryv0").expect("binaryv0 format"),
             TraceEventsFileFormat::BinaryV0
         ));
     }

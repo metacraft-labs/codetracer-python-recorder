@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use recorder_errors::{enverr, ErrorCode};
-use runtime_tracing::{Line, NonStreamingTraceWriter, TraceEventsFileFormat, TraceWriter};
+use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
 
 use crate::errors::Result;
 
@@ -49,7 +49,7 @@ impl TraceOutputPaths {
     /// initial start location.
     pub fn configure_writer(
         &self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         start_path: &Path,
         start_line: u32,
     ) -> Result<()> {
@@ -76,7 +76,7 @@ impl TraceOutputPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runtime_tracing::{Line, TraceLowLevelEvent};
+    use runtime_tracing::{Line, NonStreamingTraceWriter, TraceLowLevelEvent};
     use tempfile::tempdir;
 
     #[test]
