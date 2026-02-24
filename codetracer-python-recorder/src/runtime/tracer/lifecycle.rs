@@ -9,7 +9,6 @@ use crate::runtime::tracer::filtering::FilterCoordinator;
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
-use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use serde_json::{self, json};
 use std::fs;
@@ -50,7 +49,7 @@ impl LifecycleController {
 
     pub fn begin(
         &mut self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         outputs: &TraceOutputPaths,
         start_line: u32,
     ) -> RecorderResult<()> {
@@ -106,7 +105,7 @@ impl LifecycleController {
 
     pub fn finalise(
         &mut self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         filter: &FilterCoordinator,
         exit_summary: &ExitSummary,
     ) -> RecorderResult<()> {

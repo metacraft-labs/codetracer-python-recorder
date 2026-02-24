@@ -17,7 +17,7 @@ use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyInt, PyString};
 use codetracer_trace_types::Line;
-use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
+use codetracer_trace_writer::create_trace_writer;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer::TraceEventsFileFormat;
 use std::borrow::Cow;
@@ -122,7 +122,7 @@ impl SessionExitState {
 /// Minimal runtime tracer that maps Python sys.monitoring events to
 /// runtime_tracing writer operations.
 pub struct RuntimeTracer {
-    pub(super) writer: NonStreamingTraceWriter,
+    pub(super) writer: Box<dyn TraceWriter + Send>,
     pub(super) format: TraceEventsFileFormat,
     pub(super) lifecycle: LifecycleController,
     pub(super) function_ids: HashMap<usize, codetracer_trace_types::FunctionId>,
@@ -141,8 +141,7 @@ impl RuntimeTracer {
         trace_filter: Option<Arc<TraceFilterEngine>>,
         module_name_from_globals: bool,
     ) -> Self {
-        let mut writer = NonStreamingTraceWriter::new(program, args);
-        writer.set_format(format);
+        let writer = create_trace_writer(program, args, format);
         let lifecycle = LifecycleController::new(program, activation_path);
         Self {
             writer,
@@ -171,13 +170,13 @@ impl RuntimeTracer {
     }
 
     pub(super) fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if self.io.flush_before_step(thread_id, &mut self.writer) {
+        if self.io.flush_before_step(thread_id, &mut *self.writer) {
             self.mark_event();
         }
     }
 
     pub(super) fn flush_pending_io(&mut self) {
-        if self.io.flush_all(&mut self.writer) {
+        if self.io.flush_all(&mut *self.writer) {
             self.mark_event();
         }
     }
@@ -189,15 +188,15 @@ impl RuntimeTracer {
 
         self.flush_pending_io();
         let value = self.session_exit.as_bound(py);
-        let record = encode_value(py, &mut self.writer, &value);
-        TraceWriter::register_return(&mut self.writer, record);
+        let record = encode_value(py, &mut *self.writer, &value);
+        TraceWriter::register_return(&mut *self.writer, record);
         self.session_exit.mark_emitted();
     }
 
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
-            .begin(&mut self.writer, outputs, start_line)
+            .begin(&mut *self.writer, outputs, start_line)
             .map_err(ffi::map_recorder_error)?;
         Ok(())
     }
@@ -268,7 +267,7 @@ impl RuntimeTracer {
         let filename = code.filename(py)?;
         let first_line = code.first_line(py)?;
         let function_id = TraceWriter::ensure_function_id(
-            &mut self.writer,
+            &mut *self.writer,
             name.as_str(),
             Path::new(filename),
             Line(first_line as i64),
@@ -439,7 +438,7 @@ mod tests {
                     .expect("execute synthetic script");
             }
             assert!(
-                tracer.writer.events.is_empty(),
+                tracer.writer.events().is_empty(),
                 "expected no events for synthetic filename"
             );
             let outcome = last_outcome();
@@ -541,7 +540,7 @@ result = compute()\n"
 
             let returns: Vec<SimpleValue> = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     TraceLowLevelEvent::Return(record) => {
@@ -594,7 +593,7 @@ result = compute()\n"
 
             let last_step: StepRecord = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .rev()
                 .find_map(|event| match event {
@@ -678,7 +677,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     TraceLowLevelEvent::Event(record) => {
@@ -773,7 +772,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     TraceLowLevelEvent::Event(record) => {
@@ -882,7 +881,7 @@ result = compute()\n"
 
             let io_events: Vec<(IoMetadata, Vec<u8>)> = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .filter_map(|event| match event {
                     TraceLowLevelEvent::Event(record) => {
@@ -1137,7 +1136,7 @@ def start_call():
                 py.run(run_code_c.as_c_str(), None, None)
                     .expect("execute test script");
             }
-            collect_snapshots(&tracer.writer.events)
+            collect_snapshots(tracer.writer.events())
         })
     }
 
@@ -1261,7 +1260,7 @@ sensitive("s3cr3t")
             }
 
             let mut variable_names: Vec<String> = Vec::new();
-            for event in &tracer.writer.events {
+            for event in tracer.writer.events() {
                 if let TraceLowLevelEvent::VariableName(name) = event {
                     variable_names.push(name.clone());
                 }
@@ -1277,7 +1276,7 @@ sensitive("s3cr3t")
                 .expect("password variable recorded");
             let password_value = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .find_map(|event| match event {
                     TraceLowLevelEvent::Value(record) if record.variable_id.0 == password_index => {
@@ -1291,7 +1290,7 @@ sensitive("s3cr3t")
                 ref other => panic!("expected password argument redacted, got {other:?}"),
             }
 
-            let snapshots = collect_snapshots(&tracer.writer.events);
+            let snapshots = collect_snapshots(tracer.writer.events());
             let snapshot = find_snapshot_with_vars(
                 &snapshots,
                 &["secret", "public", "shared_secret", "password"],
@@ -1320,7 +1319,7 @@ sensitive("s3cr3t")
 
             let return_record = tracer
                 .writer
-                .events
+                .events()
                 .iter()
                 .find_map(|event| match event {
                     TraceLowLevelEvent::Return(record) => Some(record.clone()),
@@ -1439,7 +1438,7 @@ dropper()
 
             let mut variable_names: Vec<String> = Vec::new();
             let mut return_values: Vec<ValueRecord> = Vec::new();
-            for event in &tracer.writer.events {
+            for event in tracer.writer.events() {
                 match event {
                     TraceLowLevelEvent::VariableName(name) => variable_names.push(name.clone()),
                     TraceLowLevelEvent::Return(record) => {
@@ -1527,7 +1526,7 @@ initializer("omega")
 
             let mut call_count = 0usize;
             let mut return_count = 0usize;
-            for event in &tracer.writer.events {
+            for event in tracer.writer.events() {
                 match event {
                     TraceLowLevelEvent::Call(_) => call_count += 1,
                     TraceLowLevelEvent::Return(_) => return_count += 1,
@@ -1571,7 +1570,7 @@ initializer("omega")
             tracer.finish(py).expect("finish tracer");
 
             let mut exit_value: Option<ValueRecord> = None;
-            for event in &tracer.writer.events {
+            for event in tracer.writer.events() {
                 if let TraceLowLevelEvent::Return(record) = event {
                     exit_value = Some(record.return_value.clone());
                 }

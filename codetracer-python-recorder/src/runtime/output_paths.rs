@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use recorder_errors::{enverr, ErrorCode};
 use codetracer_trace_types::Line;
-use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer::TraceEventsFileFormat;
 
@@ -52,7 +51,7 @@ impl TraceOutputPaths {
     /// initial start location.
     pub fn configure_writer(
         &self,
-        writer: &mut NonStreamingTraceWriter,
+        writer: &mut dyn TraceWriter,
         start_path: &Path,
         start_line: u32,
     ) -> Result<()> {
@@ -80,6 +79,7 @@ impl TraceOutputPaths {
 mod tests {
     use super::*;
     use codetracer_trace_types::{Line, TraceLowLevelEvent};
+    use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
     use tempfile::tempdir;
 
     #[test]

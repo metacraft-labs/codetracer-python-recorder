@@ -248,9 +248,9 @@ dependencies = [
 
 [[package]]
 name = "codetracer_trace_writer"
-version = "0.17.1"
+version = "0.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b9bd7d736eee1c4e42a5dc100a85cecc05e642376e47a36f7831d39d06fb282"
+checksum = "baf512396d8a1ec4f7c317bd460b1534dbb10abb9ed5f55cff0a1024a224da8b"
 dependencies = [
  "cbor4ii",
  "codetracer_trace_format_capnp",

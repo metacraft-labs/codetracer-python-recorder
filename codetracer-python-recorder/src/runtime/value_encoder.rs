@@ -3,7 +3,6 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 use codetracer_trace_types::{TypeKind, ValueRecord, NONE_VALUE};
-use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Convert Python values into `ValueRecord` instances understood by
@@ -11,7 +10,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// tracer's type registry to ensure deterministic identifiers.
 pub fn encode_value<'py>(
     py: Python<'py>,
-    writer: &mut NonStreamingTraceWriter,
+    writer: &mut dyn TraceWriter,
     value: &Bound<'py, PyAny>,
 ) -> ValueRecord {
     if value.is_none() {
