@@ -64,7 +64,7 @@ impl ProxySink for IoEventSink {
 mod tests {
     use super::*;
     use crate::runtime::line_snapshots::LineSnapshotStore;
-    use runtime_tracing::{Line, PathId};
+    use codetracer_trace_types::{Line, PathId};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};

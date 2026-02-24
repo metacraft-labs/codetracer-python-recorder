@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use recorder_errors::{enverr, usage, ErrorCode};
-use runtime_tracing::TraceEventsFileFormat;
+use codetracer_trace_writer::TraceEventsFileFormat;
 
 use crate::errors::Result;
 

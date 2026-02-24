@@ -3,7 +3,7 @@ use crate::runtime::io_capture::mute::is_io_capture_muted;
 use crate::runtime::line_snapshots::LineSnapshotStore;
 use pyo3::types::PyAnyMethods;
 use pyo3::Python;
-use runtime_tracing::Line;
+use codetracer_trace_types::Line;
 use std::sync::Arc;
 
 pub struct EventEnricher {

@@ -1,7 +1,7 @@
 use super::types::{IoChunk, IoChunkConsumer, IoChunkFlags};
 use crate::runtime::io_capture::events::{IoOperation, IoStream, ProxyEvent};
 use crate::runtime::line_snapshots::FrameId;
-use runtime_tracing::{Line, PathId};
+use codetracer_trace_types::{Line, PathId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;

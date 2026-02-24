@@ -19,7 +19,9 @@ use crate::runtime::value_capture::{
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use recorder_errors::{bug, enverr, target, ErrorCode};
-use runtime_tracing::{FullValueRecord, Line, PathId, TraceEventsFileFormat, TraceWriter};
+use codetracer_trace_types::{FullValueRecord, Line, PathId};
+use codetracer_trace_writer::trace_writer::TraceWriter;
+use codetracer_trace_writer::TraceEventsFileFormat;
 use std::collections::HashSet;
 use std::path::Path;
 use std::thread;

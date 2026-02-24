@@ -1,6 +1,6 @@
 use crate::runtime::line_snapshots::FrameId;
 use pyo3::Python;
-use runtime_tracing::{Line, PathId};
+use codetracer_trace_types::{Line, PathId};
 use std::fmt;
 use std::thread::ThreadId;
 use std::time::Instant;

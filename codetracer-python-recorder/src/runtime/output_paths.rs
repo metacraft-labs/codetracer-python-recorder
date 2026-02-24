@@ -3,7 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use recorder_errors::{enverr, ErrorCode};
-use runtime_tracing::{Line, NonStreamingTraceWriter, TraceEventsFileFormat, TraceWriter};
+use codetracer_trace_types::Line;
+use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
+use codetracer_trace_writer::TraceEventsFileFormat;
 
 use crate::errors::Result;
 
@@ -76,7 +79,7 @@ impl TraceOutputPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runtime_tracing::{Line, TraceLowLevelEvent};
+    use codetracer_trace_types::{Line, TraceLowLevelEvent};
     use tempfile::tempdir;
 
     #[test]

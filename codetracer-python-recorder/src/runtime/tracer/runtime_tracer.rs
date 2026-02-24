@@ -16,8 +16,10 @@ use crate::runtime::value_encoder::encode_value;
 use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyInt, PyString};
-use runtime_tracing::NonStreamingTraceWriter;
-use runtime_tracing::{Line, TraceEventsFileFormat, TraceWriter};
+use codetracer_trace_types::Line;
+use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
+use codetracer_trace_writer::TraceEventsFileFormat;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
@@ -123,7 +125,7 @@ pub struct RuntimeTracer {
     pub(super) writer: NonStreamingTraceWriter,
     pub(super) format: TraceEventsFileFormat,
     pub(super) lifecycle: LifecycleController,
-    pub(super) function_ids: HashMap<usize, runtime_tracing::FunctionId>,
+    pub(super) function_ids: HashMap<usize, codetracer_trace_types::FunctionId>,
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
     pub(super) module_name_from_globals: bool,
@@ -258,7 +260,7 @@ impl RuntimeTracer {
         &mut self,
         py: Python<'_>,
         code: &CodeObjectWrapper,
-    ) -> PyResult<runtime_tracing::FunctionId> {
+    ) -> PyResult<codetracer_trace_types::FunctionId> {
         if let Some(fid) = self.function_ids.get(&code.id()) {
             return Ok(*fid);
         }
@@ -352,7 +354,7 @@ mod tests {
     use crate::trace_filter::config::TraceFilterConfig;
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
-    use runtime_tracing::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
+    use codetracer_trace_types::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
     use serde::Deserialize;
     use std::cell::Cell;
     use std::collections::BTreeMap;

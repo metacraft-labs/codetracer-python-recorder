@@ -1,7 +1,7 @@
 use crate::runtime::io_capture::events::IoStream;
 use crate::runtime::line_snapshots::FrameId;
 use bitflags::bitflags;
-use runtime_tracing::{Line, PathId};
+use codetracer_trace_types::{Line, PathId};
 use std::thread::ThreadId;
 use std::time::Instant;
 

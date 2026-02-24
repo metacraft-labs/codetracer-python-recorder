@@ -1,6 +1,6 @@
 //! Thread-local line snapshot store used to attribute IO to the most recent step.
 
-use runtime_tracing::{Line, PathId};
+use codetracer_trace_types::{Line, PathId};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::thread::ThreadId;
@@ -112,7 +112,7 @@ impl LineSnapshotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runtime_tracing::Line;
+    use codetracer_trace_types::Line;
     use std::sync::Arc;
     use std::thread;
 

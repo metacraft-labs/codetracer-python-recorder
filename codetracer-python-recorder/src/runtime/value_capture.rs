@@ -6,9 +6,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 use recorder_errors::{usage, ErrorCode};
-use runtime_tracing::{
-    FullValueRecord, NonStreamingTraceWriter, TraceWriter, TypeKind, ValueRecord,
-};
+use codetracer_trace_types::{FullValueRecord, TypeKind, ValueRecord};
+use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
