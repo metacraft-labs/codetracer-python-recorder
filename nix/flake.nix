@@ -127,9 +127,7 @@
               clippy
               rust-analyzer
               cargo-nextest
-              # cargo-llvm-cov is marked as broken in nixos-25.05 on some platforms
-              # Uncomment when fixed upstream
-              # cargo-llvm-cov
+              cargo-llvm-cov
               llvmPackages_latest.llvm
 
               # Build tooling for Python extensions
