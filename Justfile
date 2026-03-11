@@ -1,8 +1,11 @@
-mod agents 
+mod agents
 
 default:
     @just --list
-    
+
+alias t := test
+alias fmt := format
+
 # Development helpers for the monorepo
 
 # Python version used for development
@@ -27,9 +30,9 @@ clean:
 
 # Test that Nix packages build cleanly
 nix-test:
-    cd nix && nix flake check
-    cd nix && nix build .#codetracer-pure-python-recorder --no-link
-    cd nix && nix build .#codetracer-python-recorder --no-link
+    nix flake check
+    nix build .#codetracer-pure-python-recorder --no-link
+    nix build .#codetracer-python-recorder --no-link
 
 # Create a clean local virtualenv for Python tooling (without editable packages installed)
 venv version=PYTHON_DEFAULT_VERSION:
@@ -143,3 +146,25 @@ smoke-wheel artifact="wheel" interpreter=".venv/bin/python":
     FILE="$("$VENV_PY" scripts/select_recorder_artifact.py --wheel-dir codetracer-python-recorder/target/wheels --mode "{{artifact}}")"; \
     "$VENV_PY" -m pip install "$FILE"; \
     "$VENV_PY" -m codetracer_python_recorder --help >/dev/null
+
+# Format Rust code
+format-rust:
+    cargo fmt --manifest-path codetracer-python-recorder/Cargo.toml --all
+
+# Format Python code
+format-python:
+    uv run ruff format codetracer-python-recorder codetracer-pure-python-recorder
+
+# Format Nix files
+format-nix:
+    if command -v nixfmt >/dev/null; then find . -name '*.nix' -print0 | xargs -0 nixfmt; fi
+
+# Format all code
+format:
+    just format-rust
+    just format-python
+    just format-nix
+
+# Bump version across all pyproject.toml files (usage: just bump-version patch)
+bump-version component:
+    python3 scripts/bump_version.py {{component}} --all

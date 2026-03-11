@@ -27,14 +27,14 @@ forms share the same arguments:
 
 ```bash
 python -m codetracer_python_recorder \
-  --trace-dir ./trace-out \
+  --out-dir ./trace-out \
   --format json \
   --activation-path app/main.py \
   --trace-filter config/trace-filter.toml \
   app/main.py --arg=value
 ```
 
-- `--trace-dir` (default: `./trace-out`) – directory that will receive
+- `--out-dir` (default: `./trace-out`) – directory that will receive
   `trace.json`, `trace_metadata.json`, and `trace_paths.json`.
 - `--format` – trace serialisation format (`binary` or `json`). Use `json` for
   integration with the DB backend importer.
@@ -60,7 +60,7 @@ applying curated filters that skip framework internals while tracing your test c
 
 ```bash
 python -m codetracer_python_recorder \
-  --trace-dir ./trace-out \
+  --out-dir ./trace-out \
   --format json \
   --pytest tests/test_example.py::test_addition -v
 ```
@@ -73,7 +73,7 @@ verbosity flags (`-v`, `-vv`).
 
 ```bash
 python -m codetracer_python_recorder \
-  --trace-dir ./trace-out \
+  --out-dir ./trace-out \
   --format json \
   --unittest tests.test_module.TestClass.test_method -v
 ```
@@ -93,7 +93,7 @@ the automatic framework filter and use only your explicit filters:
 
 ```bash
 python -m codetracer_python_recorder \
-  --trace-dir ./trace-out \
+  --out-dir ./trace-out \
   --format json \
   --no-framework-filters \
   --pytest tests/test_example.py -v
