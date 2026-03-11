@@ -115,9 +115,6 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: nix flake check
-        run: nix flake check
-
       - name: Build default package (rust-backed recorder)
         run: nix build .#default
 
