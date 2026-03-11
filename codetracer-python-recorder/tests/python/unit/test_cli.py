@@ -22,21 +22,21 @@ def test_parse_args_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     assert config.script == script.resolve()
     assert config.script_args == []
-    assert config.trace_dir == (tmp_path / "trace-out").resolve()
+    assert config.out_dir == (tmp_path / "trace-out").resolve()
     assert config.format == formats.DEFAULT_FORMAT
     assert config.activation_path == script.resolve()
     assert config.trace_filter == ()
     assert config.policy_overrides == {}
 
 
-def test_parse_args_accepts_custom_trace_dir(tmp_path: Path) -> None:
+def test_parse_args_accepts_custom_out_dir(tmp_path: Path) -> None:
     script = tmp_path / "app.py"
     _write_script(script)
     trace_dir = tmp_path / "custom-trace"
 
-    config = _parse_args(["--trace-dir", str(trace_dir), str(script)])
+    config = _parse_args(["--out-dir", str(trace_dir), str(script)])
 
-    assert config.trace_dir == trace_dir.resolve()
+    assert config.out_dir == trace_dir.resolve()
 
 
 def test_parse_args_validates_format(tmp_path: Path) -> None:

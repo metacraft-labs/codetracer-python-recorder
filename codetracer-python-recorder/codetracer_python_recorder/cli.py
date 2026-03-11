@@ -20,7 +20,7 @@ from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, normalize_format
 class RecorderCLIConfig:
     """Resolved CLI options for a recorder invocation."""
 
-    trace_dir: Path
+    out_dir: Path
     format: str
     activation_path: Path | None
     script: Path | None
@@ -47,7 +47,14 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         allow_abbrev=False,
     )
     parser.add_argument(
-        "--trace-dir",
+        "--version",
+        "-V",
+        action="version",
+        version=f"codetracer-python-recorder {_resolve_package_version() or 'dev'}",
+    )
+    parser.add_argument(
+        "--out-dir",
+        "-o",
         type=Path,
         default=_default_trace_dir(),
         help=(
@@ -213,7 +220,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         if script_args and script_args[0] == "--":
             script_args = script_args[1:]
 
-    trace_dir = Path(known.trace_dir).expanduser().resolve()
+    trace_dir = Path(known.out_dir).expanduser().resolve()
     fmt = normalize_format(known.format)
     if fmt not in SUPPORTED_FORMATS:
         parser.error(
@@ -259,7 +266,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         policy["propagate_script_exit"] = known.propagate_script_exit
 
     return RecorderCLIConfig(
-        trace_dir=trace_dir,
+        out_dir=trace_dir,
         format=fmt,
         activation_path=activation_path,
         script=script_path,
@@ -363,7 +370,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         sys.stderr.write(f"Failed to parse arguments: {exc}\n")
         return 2
 
-    trace_dir = config.trace_dir
+    trace_dir = config.out_dir
     filter_specs = list(config.trace_filter)
     env_filter = os.getenv(ENV_TRACE_FILTER)
     if env_filter:

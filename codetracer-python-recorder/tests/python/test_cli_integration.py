@@ -48,7 +48,7 @@ def test_cli_emits_trace_artifacts(tmp_path: Path) -> None:
     trace_dir = tmp_path / "trace"
     env = _prepare_env()
     args = [
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--format",
         "json",
@@ -121,7 +121,7 @@ def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
     trace_dir = tmp_path / "trace"
     env = _prepare_env()
     args = [
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--trace-filter",
         str(override_filter),
@@ -170,7 +170,7 @@ def test_cli_honours_env_trace_filter(tmp_path: Path) -> None:
     env = _prepare_env()
     env["CODETRACER_TRACE_FILTER"] = str(filter_path)
 
-    result = _run_cli(["--trace-dir", str(trace_dir), str(script)], cwd=tmp_path, env=env)
+    result = _run_cli(["--out-dir", str(trace_dir), str(script)], cwd=tmp_path, env=env)
     assert result.returncode == 0
 
     metadata_file = trace_dir / "trace_metadata.json"

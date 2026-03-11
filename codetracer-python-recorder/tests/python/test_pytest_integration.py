@@ -62,7 +62,7 @@ def test_addition():
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -102,7 +102,7 @@ def test_addition():
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -139,7 +139,7 @@ def test_fast():
         env = _prepare_env()
         # Pass pytest-specific arguments like -k and -v
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -171,7 +171,7 @@ def test_fast():
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -220,7 +220,7 @@ if __name__ == "__main__":
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -261,7 +261,7 @@ class TestSimple(unittest.TestCase):
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -302,7 +302,7 @@ class TestMutualExclusion:
         # Try to pass both a script (positional) and --pytest
         # The argparse setup should prevent this or the CLI should error
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             str(script),  # positional script
             "--pytest",
@@ -342,7 +342,7 @@ def test_sync_addition():
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -384,7 +384,7 @@ def test_third():
         # Use pytest node ID format: path::test_name
         node_id = f"{test_file}::test_second"
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -423,7 +423,7 @@ class TestMath:
         # Use pytest node ID format for class method: path::ClassName::method_name
         node_id = f"{test_file}::TestMath::test_addition"
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -444,7 +444,7 @@ class TestErrorHandling:
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -468,7 +468,7 @@ class TestErrorHandling:
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -495,7 +495,7 @@ def test_broken(:  # Syntax error
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",
@@ -529,7 +529,7 @@ def test_with_helper():
         trace_dir = tmp_path / "trace"
         env = _prepare_env()
         args = [
-            "--trace-dir",
+            "--out-dir",
             str(trace_dir),
             "--format",
             "json",

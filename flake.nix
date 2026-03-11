@@ -1,9 +1,12 @@
 {
   description = "Development environment for CodeTracer recorders (pure-python and rust-backed)";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    pre-commit-hooks.url = "github:cachix/git-hooks.nix";
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, pre-commit-hooks }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
@@ -104,8 +107,25 @@
         python3Packages = final.python3.pkgs;
       };
 
+      checks = forEachSystem (system: {
+        pre-commit-check = pre-commit-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            lint = {
+              enable = true;
+              name = "Lint";
+              entry = "just lint";
+              language = "system";
+              pass_filenames = false;
+            };
+          };
+        };
+      });
+
       devShells = forEachSystem (system:
-        let pkgs = import nixpkgs { inherit system; };
+        let
+          pkgs = import nixpkgs { inherit system; };
+          preCommit = self.checks.${system}.pre-commit-check;
         in {
           default = pkgs.mkShell {
             packages = with pkgs; [
@@ -142,12 +162,16 @@
 
               # Benchmark visualisation
               gnuplot
-            ];
+
+              # Nix formatter
+              nixfmt-rfc-style
+            ] ++ preCommit.enabledPackages;
 
             shellHook = ''
               # When having more than one python version in the shell this variable breaks `maturin build`
               # because it always leads to having SOABI be the one from the highest version
               unset PYTHONPATH
+              ${preCommit.shellHook}
             '';
           };
         });

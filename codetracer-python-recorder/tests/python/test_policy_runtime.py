@@ -44,7 +44,7 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
 
     result = _run_cli(
         script,
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--format",
         "json",
@@ -76,7 +76,7 @@ def test_cli_abort_policy_propagates_internal_error(tmp_path: Path) -> None:
 
     result = _run_cli(
         script,
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--format",
         "json",
@@ -108,7 +108,7 @@ def test_cli_require_trace_fails_when_no_events_recorded(tmp_path: Path) -> None
 
     result = _run_cli(
         alias,
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--format",
         "json",
@@ -140,7 +140,7 @@ def test_cli_json_errors_emits_trailer(tmp_path: Path) -> None:
 
     result = _run_cli(
         script,
-        "--trace-dir",
+        "--out-dir",
         str(trace_dir),
         "--format",
         "json",
