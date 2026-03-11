@@ -23,16 +23,16 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Prepare dev environment
-        run: nix develop ./nix --command bash -lc 'just venv ${{matrix.python-version}} dev'
+        run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
 
       - name: Verify recorder version metadata
-        run: nix develop ./nix --command bash -lc 'python3 scripts/check_recorder_version.py'
+        run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
 
       - name: Rust tests
-        run: nix develop ./nix --command bash -lc 'just cargo-test'
+        run: nix develop --command bash -lc 'just cargo-test'
 
       - name: Python tests
-        run: nix develop ./nix --command bash -lc 'just py-test'
+        run: nix develop --command bash -lc 'just py-test'
 
   coverage:
     name: Coverage (Python 3.12)
@@ -52,17 +52,17 @@ jobs:
             experimental-features = nix-command flakes
 
       - name: Prepare dev environment (Python 3.12)
-        run: nix develop ./nix --command bash -lc 'just venv 3.12 dev'
+        run: nix develop --command bash -lc 'just venv 3.12 dev'
 
       - name: Collect coverage
         id: coverage-run
-        run: nix develop ./nix --command bash -lc 'just coverage'
+        run: nix develop --command bash -lc 'just coverage'
 
       - name: Generate coverage comment
         if: steps.coverage-run.outcome == 'success'
         run: |
           ROOT="$(pwd)"
-          nix develop ./nix --command bash -lc "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
+          nix develop --command bash -lc "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
             --rust-summary codetracer-python-recorder/target/coverage/rust/summary.json \
             --python-json codetracer-python-recorder/target/coverage/python/coverage.json \
             --output codetracer-python-recorder/target/coverage/coverage-comment.md \
@@ -104,28 +104,22 @@ jobs:
           identifier: coverage-summary
           body-path: codetracer-python-recorder/target/coverage/coverage-comment.md
 
-  # rust-tests:
-  #   name: Rust module test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
-  #   runs-on: ${{ matrix.os }}
-  #   strategy:
-  #     matrix:
-  #       os: [ubuntu-latest, macos-latest, windows-latest]
-  #       python-version: ["10", "11", "12", "13"]
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.${{ matrix.python-version }}
-  #     - uses: astral-sh/setup-uv@v4
-  #     - uses: messense/maturin-action@v1
-  #       with:
-  #         command: build
-  #         args: --interpreter python3.${{ matrix.python-version }} -m crates/codetracer-python-recorder/Cargo.toml --release
-  #     - name: Install and test built wheel with uv (pytest)
-  #       shell: bash
-  #       run: |
-  #         v=${{matrix.python-version}}
-  #         file=(crates/codetracer-python-recorder/target/wheels/*.whl)
-  #         file="${file[0]}"
-  #         uv run -p python3.$v --with "${file}" --with pytest -- \
-  #           python -m pytest crates/codetracer-python-recorder/test tests/test_codetracer_api.py -q
+  nix-build:
+    name: Verify nix flake packages build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: nix flake check
+        run: nix flake check
+
+      - name: Build default package (rust-backed recorder)
+        run: nix build .#default
+
+      - name: Build pure-python recorder
+        run: nix build .#codetracer-pure-python-recorder
