@@ -635,6 +635,15 @@ mod tests {
         let config = TraceFilterConfig::from_inline_and_paths(&[("inline", inline)], &[])?;
 
         Python::with_gil(|py| -> RecorderResult<()> {
+            // Remove stale sys.modules entries left by prior tests that used
+            // PyModule::from_code with module name "app.foo". Without this,
+            // py.import("app.foo") returns the cached module whose __file__
+            // points at a deleted temp directory.
+            let sys = py.import("sys").expect("import sys");
+            let modules = sys.getattr("modules").expect("sys.modules");
+            let _ = modules.call_method1("pop", ("app.foo", py.None()));
+            let _ = modules.call_method1("pop", ("app", py.None()));
+
             let project = tempdir().expect("project");
             let project_root = project.path();
             let app_dir = project_root.join("app");
@@ -647,7 +656,6 @@ mod tests {
             .expect("write module");
 
             fs::write(app_dir.join("__init__.py"), "\n").expect("write __init__");
-            let sys = py.import("sys").expect("import sys");
             let sys_path_any = sys.getattr("path").expect("sys.path");
             let sys_path: Bound<'_, PyList> =
                 sys_path_any.downcast_into::<PyList>().expect("path list");
@@ -674,7 +682,10 @@ mod tests {
             assert_eq!(resolution.module_name(), Some("app.foo"));
             assert_eq!(resolution.exec(), ExecDecision::Skip);
 
+            // Clean up sys.path and sys.modules so later tests are not affected.
             sys_path.del_item(0).expect("restore sys.path");
+            let _ = modules.call_method1("pop", ("app.foo", py.None()));
+            let _ = modules.call_method1("pop", ("app", py.None()));
             Ok(())
         })
     }
@@ -765,6 +776,16 @@ mod tests {
                 err
             )
         })?;
+
+        // PyModule::from_code registers the module in sys.modules as a
+        // side-effect.  Remove it immediately so stale entries do not
+        // contaminate later tests (e.g. inline_pkg_rule_uses_sys_modules_fallback).
+        if let Ok(sys) = py.import("sys") {
+            if let Ok(modules) = sys.getattr("modules") {
+                let _ = modules.call_method1("pop", (module_name, py.None()));
+            }
+        }
+
         Ok(module.into())
     }
 

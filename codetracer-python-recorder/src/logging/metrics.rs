@@ -1,4 +1,4 @@
-use once_cell::sync::OnceCell;
+use std::sync::RwLock;
 
 /// Metrics interface allowing pluggable sinks (default: no-op).
 pub trait RecorderMetrics: Send + Sync {
@@ -14,40 +14,49 @@ struct NoopMetrics;
 
 impl RecorderMetrics for NoopMetrics {}
 
-static METRICS_SINK: OnceCell<Box<dyn RecorderMetrics>> = OnceCell::new();
+static METRICS_SINK: RwLock<Option<Box<dyn RecorderMetrics>>> = RwLock::new(None);
 
-fn metrics_sink() -> &'static dyn RecorderMetrics {
-    METRICS_SINK
-        .get_or_init(|| Box::new(NoopMetrics) as Box<dyn RecorderMetrics>)
-        .as_ref()
+fn with_metrics_sink<F, R>(f: F) -> R
+where
+    F: FnOnce(&dyn RecorderMetrics) -> R,
+{
+    let guard = METRICS_SINK.read().expect("metrics sink lock");
+    match guard.as_ref() {
+        Some(sink) => f(sink.as_ref()),
+        None => {
+            // No sink installed; use inline no-op to avoid allocation.
+            f(&NoopMetrics)
+        }
+    }
 }
 
-/// Install a custom metrics sink. Intended for embedding or tests.
+/// Install a custom metrics sink. Replaces any previously installed sink.
+/// Intended for embedding or tests.
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn install_metrics(metrics: Box<dyn RecorderMetrics>) -> Result<(), Box<dyn RecorderMetrics>> {
-    METRICS_SINK.set(metrics)
+pub fn install_metrics(metrics: Box<dyn RecorderMetrics>) {
+    let mut guard = METRICS_SINK.write().expect("metrics sink lock");
+    *guard = Some(metrics);
 }
 
 /// Record that we abandoned a monitoring location (e.g., synthetic filename).
 pub fn record_dropped_event(reason: &'static str) {
-    metrics_sink().record_dropped_event(reason);
+    with_metrics_sink(|sink| sink.record_dropped_event(reason));
 }
 
 /// Record that we detached per-policy or due to unrecoverable failure.
 pub fn record_detach(reason: &'static str, error_code: Option<&str>) {
-    metrics_sink().record_detach(reason, error_code);
+    with_metrics_sink(|sink| sink.record_detach(reason, error_code));
 }
 
 /// Record that we caught a panic at the FFI boundary.
 pub fn record_panic(label: &'static str) {
-    metrics_sink().record_panic(label);
+    with_metrics_sink(|sink| sink.record_panic(label));
 }
 
 #[cfg(test)]
 pub mod test_support {
     use super::*;
-    use once_cell::sync::OnceCell;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     #[derive(Clone, Default)]
     pub struct CapturingMetrics {
@@ -96,12 +105,18 @@ pub mod test_support {
         }
     }
 
-    static CAPTURING: OnceCell<CapturingMetrics> = OnceCell::new();
+    static CAPTURING: OnceLock<CapturingMetrics> = OnceLock::new();
 
+    /// Install a `CapturingMetrics` sink into the global `METRICS_SINK`.
+    ///
+    /// Because `METRICS_SINK` is now an `RwLock` (not a `OnceCell`), this
+    /// call always succeeds regardless of whether an earlier test already
+    /// triggered the no-op fallback path. The `CapturingMetrics` instance
+    /// itself is created only once and reused across calls.
     pub fn install() -> &'static CapturingMetrics {
         CAPTURING.get_or_init(|| {
             let metrics = CapturingMetrics::default();
-            let _ = super::install_metrics(Box::new(metrics.clone()));
+            super::install_metrics(Box::new(metrics.clone()));
             metrics
         })
     }

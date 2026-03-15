@@ -34,6 +34,36 @@ jobs:
       - name: Python tests
         run: nix develop --command bash -lc 'just py-test'
 
+  windows-tests:
+    name: Windows – Python ${{matrix.python-version}}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12","3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{matrix.python-version}}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install capnproto
+        shell: pwsh
+        run: choco install capnproto -y
+      - name: Install uv
+        shell: bash
+        run: pip install uv
+      - name: Build
+        shell: bash
+        working-directory: codetracer-python-recorder
+        run: uv sync && uv run maturin develop
+      - name: Rust tests
+        shell: bash
+        working-directory: codetracer-python-recorder
+        run: cargo test
+      - name: Python tests
+        shell: bash
+        run: uv run pytest codetracer-python-recorder/tests/ -x
+
   coverage:
     name: Coverage (Python 3.12)
     needs: nix-tests

@@ -116,6 +116,16 @@ mod tests {
     use pyo3::{Bound, Python};
     use std::ffi::CString;
 
+    /// Build a test path that resolves identically whether used as a `Path`
+    /// argument to `ActivationController::new` (which calls
+    /// `std::path::absolute`) or as the filename string baked into a Python
+    /// code object.  On Unix `/tmp/<name>` is already absolute; on Windows
+    /// bare `/tmp/<name>` gets prefixed with the current drive by
+    /// `std::path::absolute`, so we use `std::env::temp_dir()` instead.
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     fn build_code(py: Python<'_>, name: &str, filename: &str) -> CodeObjectWrapper {
         let module_src = format!("def {name}():\n    return 42\n");
         let c_src = CString::new(module_src).expect("source");
@@ -128,6 +138,15 @@ mod tests {
             c_module.as_c_str(),
         )
         .expect("compile module");
+
+        // PyModule::from_code registers "m" in sys.modules; remove it to
+        // avoid contaminating later tests.
+        if let Ok(sys) = py.import("sys") {
+            if let Ok(modules) = sys.getattr("modules") {
+                let _ = modules.call_method1("pop", ("m", py.None()));
+            }
+        }
+
         let func = module.getattr(name).expect("fetch function");
         let code: Bound<'_, PyCode> = func
             .getattr("__code__")
@@ -146,8 +165,10 @@ mod tests {
     #[test]
     fn remains_inactive_until_activation_code_runs() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = test_path("target.py");
+            let target_str = target.to_str().expect("valid utf-8");
+            let code = build_code(py, "target", target_str);
+            let mut controller = ActivationController::new(Some(&target));
             assert!(!controller.is_active());
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
@@ -157,8 +178,11 @@ mod tests {
     #[test]
     fn ignores_non_matching_code_objects() {
         Python::with_gil(|py| {
-            let code = build_code(py, "other", "/tmp/other.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let other = test_path("other.py");
+            let other_str = other.to_str().expect("valid utf-8");
+            let target = test_path("target.py");
+            let code = build_code(py, "other", other_str);
+            let mut controller = ActivationController::new(Some(&target));
             assert!(!controller.should_process_event(py, &code));
             assert!(!controller.is_active());
         });
@@ -167,8 +191,10 @@ mod tests {
     #[test]
     fn deactivates_after_activation_return() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = test_path("target.py");
+            let target_str = target.to_str().expect("valid utf-8");
+            let code = build_code(py, "target", target_str);
+            let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
             assert!(controller.handle_exit(code.id(), ActivationExitKind::Completed));
@@ -180,8 +206,10 @@ mod tests {
     #[test]
     fn suspension_keeps_tracing_active() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = test_path("target.py");
+            let target_str = target.to_str().expect("valid utf-8");
+            let code = build_code(py, "target", target_str);
+            let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
             assert!(!controller.handle_exit(code.id(), ActivationExitKind::Suspended));
@@ -195,9 +223,11 @@ mod tests {
 
     #[test]
     fn start_path_prefers_activation_path() {
-        let controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
-        let fallback = Path::new("/tmp/fallback.py");
-        assert_eq!(controller.start_path(fallback), Path::new("/tmp/target.py"));
+        let target = test_path("target.py");
+        let controller = ActivationController::new(Some(&target));
+        let fallback = test_path("fallback.py");
+        let expected = std::path::absolute(&target).expect("absolute");
+        assert_eq!(controller.start_path(&fallback), expected.as_path());
     }
 }
 

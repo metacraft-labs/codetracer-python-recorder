@@ -72,6 +72,38 @@ the file system (i.e. depending on the programming language, the
 operating system and the package manager being used, they should
 be in their standard location).
 
+# Windows development
+
+### Environment setup
+```bash
+# Bootstrap (first time)
+pwsh -File non-nix-build/windows/bootstrap-windows-diy.ps1
+
+# Git Bash / MSYS2
+source non-nix-build/windows/env.sh
+
+# PowerShell
+. .\non-nix-build\windows\env.ps1
+```
+
+### Build (Windows)
+```bash
+uv sync                    # create venv and install deps
+uv run maturin develop     # build Rust extension into venv
+```
+
+### Test (Windows)
+```bash
+cargo test                 # Rust unit tests
+uv run pytest              # Python integration tests
+```
+
+### Dependencies
+- Rust 1.92.0 (via bootstrap)
+- Cap'n Proto 1.3.0 (via bootstrap)
+- uv 0.9.28 (via bootstrap)
+- Python 3.12+ (managed by uv)
+
 # Code quality guidelines
 
 - ALWAYS strive to achieve high code quality.
