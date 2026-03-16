@@ -126,7 +126,21 @@
         let
           pkgs = import nixpkgs { inherit system; };
           preCommit = self.checks.${system}.pre-commit-check;
+          pureRecorderPkg = (mkCodetracerPackages pkgs pkgs.python312).codetracer-pure-python-recorder;
         in {
+          # Minimal shell for running the pure-Python recorder in downstream
+          # projects (e.g. CodeTracer flow tests on macOS without a full nix
+          # dev shell). Provides Python 3.12 + the recorder pre-installed.
+          python-recorder = pkgs.mkShell {
+            packages = [
+              (pkgs.python312.withPackages (_: [ pureRecorderPkg ]))
+            ];
+            shellHook = ''
+              export CODETRACER_PYTHON_CMD="${pkgs.python312}/bin/python3"
+              export CODETRACER_PYTHON_RECORDER_PATH="${./codetracer-pure-python-recorder/src/trace.py}"
+            '';
+          };
+
           default = pkgs.mkShell {
             packages = with pkgs; [
               bashInteractive
