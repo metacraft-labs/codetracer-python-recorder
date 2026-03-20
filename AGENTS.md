@@ -80,10 +80,10 @@ be in their standard location).
 pwsh -File non-nix-build/windows/bootstrap-windows-diy.ps1
 
 # Git Bash / MSYS2
-source non-nix-build/windows/env.sh
+source env.sh
 
 # PowerShell
-. .\non-nix-build\windows\env.ps1
+. .\env.ps1
 ```
 
 ### Build (Windows)

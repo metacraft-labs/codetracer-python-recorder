@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # codetracer-python-recorder Windows dev environment (Git Bash / MSYS2)
-# Usage: source non-nix-build/windows/env.sh
+# Usage: source env.sh
 
 # Source-safe shell option handling: save caller's options and restore on RETURN.
 # Do NOT use `set -euo pipefail` here -- this file is meant to be sourced into
@@ -26,7 +26,7 @@ _ct_pyenv_error() {
     exit 1
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/non-nix-build/windows" && pwd)"
 
 # Parse toolchain versions
 declare -A TOOLCHAIN

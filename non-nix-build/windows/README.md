@@ -13,12 +13,12 @@ pwsh -File non-nix-build\windows\bootstrap-windows-diy.ps1
 
 **Git Bash:**
 ```sh
-source non-nix-build/windows/env.sh
+source env.sh
 ```
 
 **PowerShell:**
 ```powershell
-. .\non-nix-build\windows\env.ps1
+. .\env.ps1
 ```
 
 ### Build & test

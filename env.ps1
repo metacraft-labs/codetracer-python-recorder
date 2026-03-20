@@ -1,8 +1,8 @@
 # codetracer-python-recorder Windows dev environment (PowerShell)
-# Usage: . .\non-nix-build\windows\env.ps1
+# Usage: . .\env.ps1
 
 $ErrorActionPreference = "Stop"
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$scriptDir = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) "non-nix-build\windows"
 
 # Parse toolchain versions
 $toolchainFile = Join-Path $scriptDir "toolchain-versions.env"
