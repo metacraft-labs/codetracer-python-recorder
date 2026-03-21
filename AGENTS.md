@@ -74,11 +74,8 @@ be in their standard location).
 
 # Windows development
 
-### Environment setup
+### Environment setup (auto-installs tools on first run)
 ```bash
-# Bootstrap (first time)
-pwsh -File non-nix-build/windows/bootstrap-windows-diy.ps1
-
 # Git Bash / MSYS2
 source env.sh
 

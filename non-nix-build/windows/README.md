@@ -4,12 +4,7 @@ Standalone Windows dev environment for the Python recorder.
 
 ## Quick start
 
-### Bootstrap (first time)
-```powershell
-pwsh -File non-nix-build\windows\bootstrap-windows-diy.ps1
-```
-
-### Activate environment
+### Activate environment (auto-installs tools on first run)
 
 **Git Bash:**
 ```sh
