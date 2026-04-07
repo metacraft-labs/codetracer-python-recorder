@@ -79,7 +79,7 @@ def start(
     path:
         Destination directory for generated trace artefacts.
     format:
-        Trace events serialisation format (``"binary"`` or ``"json"``).
+        Trace events serialisation format (``"ctfs"``, ``"binary"``, or ``"json"``).
     start_on_enter:
         Optional path that delays trace activation until the interpreter enters
         the referenced file.
