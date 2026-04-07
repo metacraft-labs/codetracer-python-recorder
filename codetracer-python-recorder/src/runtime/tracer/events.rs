@@ -441,7 +441,7 @@ impl Tracer for RuntimeTracer {
                     )
                 })?;
             }
-            TraceEventsFileFormat::Binary => {
+            TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
                 // Streaming writer: no partial flush to avoid closing the stream.
             }
         }
