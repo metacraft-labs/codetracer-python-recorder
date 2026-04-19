@@ -214,10 +214,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "codetracer_ctfs"
+version = "0.1.0"
+
+[[package]]
 name = "codetracer_trace_format_capnp"
 version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cb1c07c51e563be24edd025e14044b07f716ea7fa548403c5280ce2c3f821bd"
 dependencies = [
  "capnp",
  "capnpc",
@@ -227,14 +229,10 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_format_cbor_zstd"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49be80d50bce87f88251c9488c54e5441569ee60f0f0056a63792f6944ff2d9"
 
 [[package]]
 name = "codetracer_trace_types"
 version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e3fa86ad2085b47fc6824f4fb8aa196586563b89dfb2317889eb2cde039dc1a"
 dependencies = [
  "base64",
  "num-derive",
@@ -249,10 +247,9 @@ dependencies = [
 [[package]]
 name = "codetracer_trace_writer"
 version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf512396d8a1ec4f7c317bd460b1534dbb10abb9ed5f55cff0a1024a224da8b"
 dependencies = [
  "cbor4ii",
+ "codetracer_ctfs",
  "codetracer_trace_format_capnp",
  "codetracer_trace_format_cbor_zstd",
  "codetracer_trace_types",
