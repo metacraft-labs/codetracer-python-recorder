@@ -154,6 +154,7 @@ impl ThreadBuffers {
         match stream {
             IoStream::Stdout => &mut self.stdout,
             IoStream::Stderr => &mut self.stderr,
+            #[allow(clippy::panic)]
             IoStream::Stdin => panic!("stdin does not use output buffers"),
         }
     }

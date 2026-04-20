@@ -20,8 +20,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use recorder_errors::{bug, enverr, target, ErrorCode};
 use codetracer_trace_types::{FullValueRecord, Line, PathId};
-use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use std::collections::HashSet;
 use std::path::Path;
 use std::thread;
@@ -433,7 +433,9 @@ impl Tracer for RuntimeTracer {
         self.flush_pending_io();
         // For non-streaming formats we can update the events file.
         match self.format {
-            TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+            TraceEventsFileFormat::Json
+            | TraceEventsFileFormat::BinaryV0
+            | TraceEventsFileFormat::Ctfs => {
                 TraceWriter::finish_writing_trace_events(&mut *self.writer).map_err(|err| {
                     ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
