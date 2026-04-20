@@ -146,6 +146,11 @@ impl LifecycleController {
         };
 
         let path = outputs.metadata();
+        // With the Nim CTFS writer, metadata lives inside the .ct container file
+        // rather than as a separate JSON file. Skip gracefully if it doesn't exist.
+        if !path.exists() {
+            return Ok(());
+        }
         let original = fs::read_to_string(path).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to read trace metadata")
                 .with_context("path", path.display().to_string())
@@ -192,6 +197,11 @@ impl LifecycleController {
         };
 
         let path = outputs.metadata();
+        // With the Nim CTFS writer, metadata lives inside the .ct container file
+        // rather than as a separate JSON file. Skip gracefully if it doesn't exist.
+        if !path.exists() {
+            return Ok(());
+        }
         let original = fs::read_to_string(path).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to read trace metadata")
                 .with_context("path", path.display().to_string())
