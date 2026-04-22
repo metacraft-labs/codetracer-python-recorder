@@ -17,6 +17,24 @@ jobs:
         python-version: ["3.12","3.13"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-25.05
@@ -45,6 +63,24 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-25.05
