@@ -134,16 +134,16 @@ mod tests {
         Python::with_gil(|py| {
             let sink = Arc::new(RecordingSink::new());
             with_string_io(py, sink.clone(), |_| {
-                let code = CString::new("print('hello', end='')").unwrap();
+                let code = CString::new("print('hello', end='')").expect("CString");
                 py.run(code.as_c_str(), None, None)?;
                 Ok(())
             })
-            .unwrap();
+            .expect("with_string_io stdout");
             let events = sink.events();
             assert!(!events.is_empty());
             assert_eq!(events[0].stream, IoStream::Stdout);
             assert_eq!(events[0].operation, IoOperation::Write);
-            assert_eq!(std::str::from_utf8(&events[0].payload).unwrap(), "hello");
+            assert_eq!(std::str::from_utf8(&events[0].payload).expect("utf8 payload"), "hello");
         });
     }
 
@@ -152,16 +152,16 @@ mod tests {
         Python::with_gil(|py| {
             let sink = Arc::new(RecordingSink::new());
             with_string_io(py, sink.clone(), |_| {
-                let code = CString::new("import sys\nsys.stderr.write('oops')").unwrap();
+                let code = CString::new("import sys\nsys.stderr.write('oops')").expect("CString");
                 py.run(code.as_c_str(), None, None)?;
                 Ok(())
             })
-            .unwrap();
+            .expect("with_string_io stderr");
             let events = sink.events();
             assert!(!events.is_empty());
             assert_eq!(events[0].stream, IoStream::Stderr);
             assert_eq!(events[0].operation, IoOperation::Write);
-            assert_eq!(std::str::from_utf8(&events[0].payload).unwrap(), "oops");
+            assert_eq!(std::str::from_utf8(&events[0].payload).expect("utf8 payload"), "oops");
         });
     }
 
@@ -170,17 +170,17 @@ mod tests {
         Python::with_gil(|py| {
             let sink = Arc::new(RecordingSink::new());
             with_string_io(py, sink.clone(), |_| {
-                let code = CString::new("import sys\n_ = sys.stdin.readline()").unwrap();
+                let code = CString::new("import sys\n_ = sys.stdin.readline()").expect("CString");
                 py.run(code.as_c_str(), None, None)?;
                 Ok(())
             })
-            .unwrap();
+            .expect("with_string_io stdin");
             let events = sink.events();
             assert!(!events.is_empty());
-            let latest = events.last().unwrap();
+            let latest = events.last().expect("at least one event");
             assert_eq!(latest.stream, IoStream::Stdin);
             assert_eq!(latest.operation, IoOperation::ReadLine);
-            assert_eq!(std::str::from_utf8(&latest.payload).unwrap(), "line1\n");
+            assert_eq!(std::str::from_utf8(&latest.payload).expect("utf8 payload"), "line1\n");
         });
     }
 
@@ -204,11 +204,11 @@ mod tests {
         Python::with_gil(|py| {
             let sink = Arc::new(Reentrant::default());
             with_string_io(py, sink.clone(), |_| {
-                let code = CString::new("print('loop')").unwrap();
+                let code = CString::new("print('loop')").expect("CString");
                 py.run(code.as_c_str(), None, None)?;
                 Ok(())
             })
-            .unwrap();
+            .expect("with_string_io reentrant");
             let events = sink.inner.events();
             let payloads: Vec<&[u8]> = events
                 .iter()

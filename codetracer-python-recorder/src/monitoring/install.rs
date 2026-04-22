@@ -39,7 +39,7 @@ pub(super) fn uninstall_locked(py: Python<'_>, guard: &mut Option<Global>) -> Py
 
 /// Install a tracer and hook it into Python's `sys.monitoring`.
 pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
-    let mut guard = GLOBAL.lock().unwrap();
+    let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
     if guard.is_some() {
         return Err(ffi::map_recorder_error(usage!(
             ErrorCode::TracerInstallConflict,
@@ -71,13 +71,13 @@ pub fn install_tracer(py: Python<'_>, tracer: Box<dyn Tracer>) -> PyResult<()> {
 
 /// Remove the installed tracer if any.
 pub fn uninstall_tracer(py: Python<'_>) -> PyResult<()> {
-    let mut guard = GLOBAL.lock().unwrap();
+    let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
     uninstall_locked(py, &mut guard)
 }
 
 /// Flush the currently installed tracer if any.
 pub fn flush_installed_tracer(py: Python<'_>) -> PyResult<()> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+    if let Some(global) = GLOBAL.lock().expect("GLOBAL mutex poisoned").as_mut() {
         global.tracer.flush(py)?;
     }
     Ok(())
@@ -85,7 +85,7 @@ pub fn flush_installed_tracer(py: Python<'_>) -> PyResult<()> {
 
 /// Provide the session exit status to the active tracer if one is installed.
 pub fn update_exit_status(py: Python<'_>, exit_code: Option<i32>) -> PyResult<()> {
-    if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+    if let Some(global) = GLOBAL.lock().expect("GLOBAL mutex poisoned").as_mut() {
         global.tracer.set_exit_status(py, exit_code)?;
     }
     Ok(())

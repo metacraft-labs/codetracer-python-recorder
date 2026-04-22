@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn parse_capture_io_handles_aliases() {
-        assert_eq!(parse_capture_io("proxies+fd").unwrap(), (true, true));
-        assert_eq!(parse_capture_io("proxies").unwrap(), (true, false));
+        assert_eq!(parse_capture_io("proxies+fd").expect("parse proxies+fd"), (true, true));
+        assert_eq!(parse_capture_io("proxies").expect("parse proxies"), (true, false));
 
         assert!(parse_capture_io("invalid-token").is_err());
     }

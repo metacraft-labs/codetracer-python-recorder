@@ -113,7 +113,7 @@ pub(super) fn callback_call(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_call", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -132,7 +132,7 @@ pub(super) fn callback_line(
     lineno: u32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_line", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -151,7 +151,7 @@ pub(super) fn callback_instruction(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_instruction", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -174,7 +174,7 @@ pub(super) fn callback_jump(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_jump", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -194,7 +194,7 @@ pub(super) fn callback_branch(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_branch", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -216,7 +216,7 @@ pub(super) fn callback_py_start(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_start", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -238,7 +238,7 @@ pub(super) fn callback_py_resume(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_resume", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -261,7 +261,7 @@ pub(super) fn callback_py_return(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_return", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -284,7 +284,7 @@ pub(super) fn callback_py_yield(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_yield", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -307,7 +307,7 @@ pub(super) fn callback_py_throw(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_throw", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -330,7 +330,7 @@ pub(super) fn callback_py_unwind(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_unwind", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -353,7 +353,7 @@ pub(super) fn callback_raise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_raise", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -376,7 +376,7 @@ pub(super) fn callback_reraise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_reraise", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -399,7 +399,7 @@ pub(super) fn callback_exception_handled(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_exception_handled", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -424,7 +424,7 @@ pub(super) fn callback_exception_handled(
 //     instruction_offset: i32,
 //     exception: Bound<'_, PyAny>,
 // ) -> PyResult<()> {
-//     if let Some(global) = GLOBAL.lock().unwrap().as_mut() {
+//     if let Some(global) = GLOBAL.lock().expect("GLOBAL mutex poisoned").as_mut() {
 //         global
 //             .tracer
 //             .on_stop_iteration(py, &code, instruction_offset, &exception);
@@ -441,7 +441,7 @@ pub(super) fn callback_c_return(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_return", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -465,7 +465,7 @@ pub(super) fn callback_c_raise(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_raise", || {
-        let mut guard = GLOBAL.lock().unwrap();
+        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
         if guard.is_none() {
             return Ok(py.None());
         }

@@ -791,7 +791,7 @@ result = compute()\n"
                 "expected mirror event for stdout: {:?}",
                 io_events
             );
-            let stdout_payload = &stdout_mirror.unwrap().1;
+            let stdout_payload = &stdout_mirror.expect("stdout mirror event present").1;
             assert!(
                 String::from_utf8_lossy(stdout_payload).contains("fd stdout"),
                 "mirror stdout payload missing expected text"
@@ -805,7 +805,7 @@ result = compute()\n"
                 "expected mirror event for stderr: {:?}",
                 io_events
             );
-            let stderr_payload = &stderr_mirror.unwrap().1;
+            let stderr_payload = &stderr_mirror.expect("stderr mirror event present").1;
             assert!(
                 String::from_utf8_lossy(stderr_payload).contains("fd stderr"),
                 "mirror stderr payload missing expected text"
@@ -2010,7 +2010,7 @@ snapshot()
             .filter(|snap| snap.vars.contains_key("x"))
             .collect();
         assert!(!coroutine_steps.is_empty());
-        let final_coroutine_step = coroutine_steps.last().unwrap();
+        let final_coroutine_step = coroutine_steps.last().expect("at least one coroutine step");
         assert_var(final_coroutine_step, "total", SimpleValue::Int(6));
 
         let coroutine_result_snapshot = find_snapshot_with_vars(&snapshots, &["coroutine_result"]);

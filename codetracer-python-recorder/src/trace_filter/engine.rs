@@ -655,7 +655,7 @@ mod tests {
                 .insert(0, project_root.to_string_lossy().to_string())
                 .expect("insert project root");
             let absolute_path =
-                normalise_to_posix(Path::new(file_path.to_string_lossy().as_ref())).unwrap();
+                normalise_to_posix(Path::new(file_path.to_string_lossy().as_ref())).expect("normalise path");
 
             let module = py.import("app.foo").expect("import app.foo");
             let func: Bound<'_, PyAny> = module.getattr("foo").expect("get foo");
@@ -711,7 +711,7 @@ mod tests {
         let temp = tempdir().expect("temp dir");
         let project_root = temp.path();
         let codetracer_dir = project_root.join(".codetracer");
-        fs::create_dir(&codetracer_dir).unwrap();
+        fs::create_dir(&codetracer_dir).expect("create .codetracer dir");
 
         let filter_path = codetracer_dir.join("filters.toml");
         write_filter(&filter_path, body);
@@ -719,15 +719,15 @@ mod tests {
         let config = TraceFilterConfig::from_paths(&[filter_path])?;
 
         let file_path = project_root.join("app").join("foo.py");
-        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(file_path.parent().expect("file has parent dir")).expect("create parent dirs");
         // Touch the file so the path exists for debugging.
-        fs::File::create(&file_path).unwrap();
+        fs::File::create(&file_path).expect("create file");
 
         Ok((config, file_path.to_string_lossy().to_string()))
     }
 
     fn write_filter(path: &Path, body: &str) {
-        let mut file = fs::File::create(path).unwrap();
+        let mut file = fs::File::create(path).expect("create filter file");
         writeln!(
             file,
             r#"
@@ -739,7 +739,7 @@ mod tests {
             "#,
             body.trim()
         )
-        .unwrap();
+        .expect("write filter content");
     }
 
     fn load_module<'py>(
