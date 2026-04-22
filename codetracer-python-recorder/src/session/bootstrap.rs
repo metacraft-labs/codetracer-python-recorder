@@ -14,7 +14,7 @@ use codetracer_trace_writer::TraceEventsFileFormat;
 use crate::errors::Result;
 use crate::trace_filter::engine::TraceFilterEngine;
 use filesystem::{ensure_trace_directory, resolve_trace_format};
-use filters::{load_trace_filter, load_trace_filter_with_framework};
+use filters::load_trace_filter_with_framework;
 use metadata::collect_program_metadata;
 
 /// Basic metadata about the currently running Python program.

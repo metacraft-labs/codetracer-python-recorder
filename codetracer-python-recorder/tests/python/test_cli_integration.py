@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -182,3 +183,109 @@ def test_cli_honours_env_trace_filter(tmp_path: Path) -> None:
         "<inline:builtin-default>",
         str(filter_path.resolve()),
     ]
+
+
+# CTFS magic bytes identifying a valid .ct binary trace file.
+# See: codetracer-trace-format specification.
+_CTFS_MAGIC = bytes([0xC0, 0xDE, 0x72, 0xAC, 0xE2])
+
+
+def test_cli_emits_binary_trace(tmp_path: Path) -> None:
+    """Recording with --format binary produces a valid .ct file."""
+    script = tmp_path / "program.py"
+    _write_script(script, "x = 42\nprint(x)\n")
+
+    trace_dir = tmp_path / "trace"
+    env = _prepare_env()
+    args = [
+        "--out-dir",
+        str(trace_dir),
+        "--format",
+        "binary",
+        "--on-recorder-error",
+        "disable",
+        "--require-trace",
+        "--keep-partial-trace",
+    ]
+    args.append(str(script))
+
+    result = _run_cli(args, cwd=tmp_path, env=env)
+    assert result.returncode == 0
+    assert trace_dir.is_dir()
+
+    # The binary format produces a single trace.bin file containing the CTFS
+    # container (magic bytes 0xC0 0xDE 0x72 0xAC 0xE2).
+    trace_bin = trace_dir / "trace.bin"
+    assert trace_bin.exists(), f"Expected trace.bin, found: {list(trace_dir.iterdir())}"
+    assert trace_bin.stat().st_size > 0, "trace.bin should not be empty"
+
+    # Verify the CTFS magic bytes at the start of the file.
+    with open(trace_bin, "rb") as f:
+        magic = f.read(len(_CTFS_MAGIC))
+    assert (
+        magic == _CTFS_MAGIC
+    ), f"Invalid CTFS magic: {magic.hex()}"
+
+
+def test_binary_trace_has_steps(tmp_path: Path) -> None:
+    """Binary trace contains step data for the recorded program."""
+    script = tmp_path / "program.py"
+    _write_script(script, "a = 1\nb = 2\nc = a + b\nprint(c)\n")
+
+    trace_dir = tmp_path / "trace"
+    env = _prepare_env()
+    args = [
+        "--out-dir",
+        str(trace_dir),
+        "--format",
+        "binary",
+        "--on-recorder-error",
+        "disable",
+        "--require-trace",
+    ]
+    args.append(str(script))
+
+    result = _run_cli(args, cwd=tmp_path, env=env)
+    assert result.returncode == 0
+
+    trace_bin = trace_dir / "trace.bin"
+    assert trace_bin.exists(), f"Expected trace.bin, found: {list(trace_dir.iterdir())}"
+
+    # The trace.bin file should have reasonable size (a few KB at minimum for
+    # 4 lines of traced Python).
+    assert trace_bin.stat().st_size > 1000, "Trace file suspiciously small"
+
+
+def test_binary_trace_records_exceptions(tmp_path: Path) -> None:
+    """Binary trace records exception events."""
+    script = tmp_path / "program.py"
+    _write_script(
+        script,
+        textwrap.dedent("""\
+            try:
+                x = 1 / 0
+            except ZeroDivisionError:
+                pass
+            print("survived")
+        """),
+    )
+
+    trace_dir = tmp_path / "trace"
+    env = _prepare_env()
+    args = [
+        "--out-dir",
+        str(trace_dir),
+        "--format",
+        "binary",
+        "--on-recorder-error",
+        "disable",
+        "--require-trace",
+    ]
+    args.append(str(script))
+
+    result = _run_cli(args, cwd=tmp_path, env=env)
+    assert result.returncode == 0
+    assert "survived" in result.stdout
+
+    trace_bin = trace_dir / "trace.bin"
+    assert trace_bin.exists(), f"Expected trace.bin, found: {list(trace_dir.iterdir())}"
