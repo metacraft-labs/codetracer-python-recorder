@@ -6,7 +6,7 @@ use crate::runtime::io_capture::{
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use pyo3::prelude::*;
 use codetracer_trace_types::{EventLogKind, Line, PathId, RecordEvent, TraceLowLevelEvent};
-use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;

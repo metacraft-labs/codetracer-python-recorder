@@ -9,7 +9,7 @@ use crate::runtime::tracer::filtering::FilterCoordinator;
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
-use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
 use serde_json::{self, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -281,8 +281,8 @@ mod tests {
     use crate::policy::RecorderPolicy;
     use crate::runtime::output_paths::TraceOutputPaths;
     use recorder_errors::ErrorCode;
-    use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
-    use codetracer_trace_writer_nim::TraceEventsFileFormat;
+    use codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter;
+    use codetracer_trace_writer::TraceEventsFileFormat;
 
     fn writer() -> NonStreamingTraceWriter {
         NonStreamingTraceWriter::new("program.py", &[])

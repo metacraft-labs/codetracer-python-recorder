@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use codetracer_trace_writer::TraceEventsFileFormat;
 
 use crate::errors::Result;
 use crate::trace_filter::engine::TraceFilterEngine;

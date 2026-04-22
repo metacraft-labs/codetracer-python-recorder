@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 use codetracer_trace_types::{TypeKind, ValueRecord, NONE_VALUE};
-use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Convert Python values into `ValueRecord` instances understood by
 /// `runtime_tracing`. Nested containers are encoded recursively and reuse the
