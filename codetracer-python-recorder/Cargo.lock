@@ -196,6 +196,7 @@ dependencies = [
  "bitflags",
  "codetracer_trace_types",
  "codetracer_trace_writer",
+ "codetracer_trace_writer_nim",
  "criterion",
  "dashmap",
  "globset",
@@ -261,6 +262,13 @@ dependencies = [
  "serde",
  "serde_json",
  "zeekstd",
+]
+
+[[package]]
+name = "codetracer_trace_writer_nim"
+version = "0.1.0"
+dependencies = [
+ "codetracer_trace_types",
 ]
 
 [[package]]

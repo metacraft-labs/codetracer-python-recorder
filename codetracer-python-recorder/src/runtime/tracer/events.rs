@@ -14,14 +14,15 @@ use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
 use crate::runtime::logging::log_event;
 use crate::runtime::value_capture::{
-    capture_call_arguments, encode_named_argument, record_return_value, record_visible_scope,
+    capture_call_arguments, encode_named_argument,
+    record_return_value_streaming, record_visible_scope_streaming,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use recorder_errors::{bug, enverr, target, ErrorCode};
 use codetracer_trace_types::{FullValueRecord, Line, PathId};
-use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use std::collections::HashSet;
 use std::path::Path;
 use std::thread;
@@ -309,9 +310,10 @@ impl Tracer for RuntimeTracer {
             None
         };
         let telemetry = telemetry_holder.as_deref_mut();
-        record_visible_scope(
+        record_visible_scope_streaming(
             py,
             &mut *self.writer,
+            &mut self.streaming_encoder,
             &snapshot,
             &mut recorded,
             value_policy,
@@ -563,9 +565,10 @@ impl RuntimeTracer {
 
         let candidate_name = capture_label.map(|label| label as &str).or(object_name);
 
-        record_return_value(
+        record_return_value_streaming(
             py,
             &mut *self.writer,
+            &mut self.streaming_encoder,
             retval,
             value_policy,
             telemetry,

@@ -24,6 +24,7 @@ default = ["extension-module"]
 pyo3 = { version = "0.25.1" }
 codetracer_trace_types = { path = "../../codetracer-trace-format/codetracer_trace_types" }
 codetracer_trace_writer = { path = "../../codetracer-trace-format/codetracer_trace_writer" }
+codetracer_trace_writer_nim = { path = "../../codetracer-trace-format/codetracer_trace_writer_nim" }
 bitflags = "2.4"
 once_cell = "1.19"
 dashmap = "5.5"

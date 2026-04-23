@@ -7,13 +7,14 @@ use pyo3::types::PyString;
 
 use recorder_errors::{usage, ErrorCode};
 use codetracer_trace_types::{FullValueRecord, TypeKind, ValueRecord};
-use codetracer_trace_writer::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::logging::record_dropped_event;
 use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
-use crate::runtime::value_encoder::encode_value;
+use crate::runtime::value_encoder::{encode_value, encode_value_streaming};
+use codetracer_trace_writer_nim::StreamingValueEncoder;
 use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
 
@@ -54,6 +55,7 @@ fn redacted_value(writer: &mut dyn TraceWriter) -> ValueRecord {
     }
 }
 
+#[allow(dead_code)]
 fn dropped_value(writer: &mut dyn TraceWriter) -> ValueRecord {
     let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Dropped");
     ValueRecord::Error {
@@ -247,7 +249,146 @@ pub fn encode_named_argument<'py>(
     .map(|encoded| TraceWriter::arg(writer, name, encoded))
 }
 
+// ---------------------------------------------------------------------------
+// Streaming variants (M58) — encode directly to CBOR, bypass ValueRecord
+// ---------------------------------------------------------------------------
+
+/// Streaming variant of [`encode_with_policy`]. Returns CBOR bytes instead of
+/// a `ValueRecord`. For redacted/dropped values, the sentinel is encoded via
+/// the streaming encoder.
+fn encode_with_policy_streaming<'py>(
+    py: Python<'py>,
+    writer: &mut dyn TraceWriter,
+    encoder: &mut StreamingValueEncoder,
+    value: &Bound<'py, PyAny>,
+    policy: Option<&ValuePolicy>,
+    kind: ValueKind,
+    candidate: &str,
+    telemetry: Option<&mut ValueFilterStats>,
+) -> Option<Vec<u8>> {
+    match policy.map(|p| p.decide(kind, candidate)) {
+        Some(ValueAction::Redact) => {
+            record_redaction(kind, candidate, telemetry);
+            // Encode the redacted sentinel via the streaming encoder.
+            let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Redacted");
+            encoder.reset();
+            encoder.write_error(REDACTED_SENTINEL, ty);
+            Some(encoder.get_bytes_copy())
+        }
+        Some(ValueAction::Drop) => {
+            record_drop(kind, candidate, telemetry);
+            None
+        }
+        _ => Some(encode_value_streaming(py, writer, encoder, value)),
+    }
+}
+
+/// Streaming variant of [`record_visible_scope`]. Encodes Python values
+/// directly to CBOR bytes and passes them to `register_variable_cbor`,
+/// avoiding intermediate `ValueRecord` tree allocations.
+pub fn record_visible_scope_streaming(
+    py: Python<'_>,
+    writer: &mut dyn TraceWriter,
+    encoder: &mut StreamingValueEncoder,
+    snapshot: &FrameSnapshot<'_>,
+    recorded: &mut HashSet<String>,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
+) {
+    for (key, value) in snapshot.locals().iter() {
+        let name = match key.downcast::<PyString>() {
+            Ok(pystr) => match pystr.to_str() {
+                Ok(raw) => raw.to_owned(),
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+        let cbor = encode_with_policy_streaming(
+            py,
+            writer,
+            encoder,
+            &value,
+            policy,
+            ValueKind::Local,
+            &name,
+            telemetry.as_deref_mut(),
+        );
+        if let Some(cbor) = cbor {
+            TraceWriter::register_variable_cbor(writer, &name, &cbor);
+            recorded.insert(name);
+        }
+    }
+
+    if snapshot.locals_is_globals() {
+        return;
+    }
+
+    if let Some(globals_dict) = snapshot.globals() {
+        for (key, value) in globals_dict.iter() {
+            let name = match key.downcast::<PyString>() {
+                Ok(pystr) => match pystr.to_str() {
+                    Ok(raw) => raw,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+            if name == "__builtins__" || recorded.contains(name) {
+                continue;
+            }
+            let cbor = encode_with_policy_streaming(
+                py,
+                writer,
+                encoder,
+                &value,
+                policy,
+                ValueKind::Global,
+                name,
+                telemetry.as_deref_mut(),
+            );
+            if let Some(cbor) = cbor {
+                TraceWriter::register_variable_cbor(writer, name, &cbor);
+                recorded.insert(name.to_owned());
+            }
+        }
+    }
+}
+
+/// Streaming variant of [`record_return_value`]. Encodes the return value
+/// directly to CBOR bytes and passes them to `register_return_cbor`.
+pub fn record_return_value_streaming(
+    py: Python<'_>,
+    writer: &mut dyn TraceWriter,
+    encoder: &mut StreamingValueEncoder,
+    value: &Bound<'_, PyAny>,
+    policy: Option<&ValuePolicy>,
+    mut telemetry: Option<&mut ValueFilterStats>,
+    candidate: Option<&str>,
+) {
+    let name = candidate.unwrap_or("<return>");
+    let cbor = encode_with_policy_streaming(
+        py,
+        writer,
+        encoder,
+        value,
+        policy,
+        ValueKind::Return,
+        name,
+        telemetry.as_deref_mut(),
+    )
+    .unwrap_or_else(|| {
+        // Encode the dropped sentinel via the streaming encoder.
+        let ty = TraceWriter::ensure_type_id(writer, TypeKind::Raw, "Dropped");
+        encoder.reset();
+        encoder.write_error(DROPPED_SENTINEL, ty);
+        encoder.get_bytes_copy()
+    });
+    TraceWriter::register_return_cbor(writer, &cbor);
+}
+
 /// Record all visible variables from the provided frame snapshot into the writer.
+///
+/// Legacy tree-based path. Prefer [`record_visible_scope_streaming`] for new code.
+#[allow(dead_code)]
 pub fn record_visible_scope(
     py: Python<'_>,
     writer: &mut dyn TraceWriter,
@@ -313,6 +454,9 @@ pub fn record_visible_scope(
 }
 
 /// Encode and record a return value for the active trace.
+///
+/// Legacy tree-based path. Prefer [`record_return_value_streaming`] for new code.
+#[allow(dead_code)]
 pub fn record_return_value(
     py: Python<'_>,
     writer: &mut dyn TraceWriter,

@@ -12,14 +12,15 @@ use crate::policy::RecorderPolicy;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::runtime::line_snapshots::LineSnapshotStore;
 use crate::runtime::output_paths::TraceOutputPaths;
-use crate::runtime::value_encoder::encode_value;
+use crate::runtime::value_encoder::encode_value_streaming;
 use crate::trace_filter::engine::TraceFilterEngine;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyInt, PyString};
 use codetracer_trace_types::Line;
-use codetracer_trace_writer::create_trace_writer;
-use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::create_trace_writer;
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::StreamingValueEncoder;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
@@ -129,6 +130,10 @@ pub struct RuntimeTracer {
     pub(super) io: IoCoordinator,
     pub(super) filter: FilterCoordinator,
     pub(super) module_name_from_globals: bool,
+    /// Streaming value encoder (M58). Encodes Python values directly to CBOR
+    /// bytes without building intermediate `ValueRecord` trees. Reused across
+    /// steps to avoid per-value allocation overhead.
+    pub(super) streaming_encoder: StreamingValueEncoder,
     session_exit: SessionExitState,
 }
 
@@ -151,6 +156,7 @@ impl RuntimeTracer {
             io: IoCoordinator::new(),
             filter: FilterCoordinator::new(trace_filter),
             module_name_from_globals,
+            streaming_encoder: StreamingValueEncoder::new(),
             session_exit: SessionExitState::default(),
         }
     }
@@ -188,8 +194,13 @@ impl RuntimeTracer {
 
         self.flush_pending_io();
         let value = self.session_exit.as_bound(py);
-        let record = encode_value(py, &mut *self.writer, &value);
-        TraceWriter::register_return(&mut *self.writer, record);
+        let cbor = encode_value_streaming(
+            py,
+            &mut *self.writer,
+            &mut self.streaming_encoder,
+            &value,
+        );
+        TraceWriter::register_return_cbor(&mut *self.writer, &cbor);
         self.session_exit.mark_emitted();
     }
 
