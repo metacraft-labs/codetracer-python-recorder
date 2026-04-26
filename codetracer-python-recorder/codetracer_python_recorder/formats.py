@@ -5,17 +5,19 @@ from typing import Iterable
 
 TRACE_BINARY: str = "binary"
 TRACE_JSON: str = "json"
-DEFAULT_FORMAT: str = TRACE_BINARY
-SUPPORTED_FORMATS: frozenset[str] = frozenset({TRACE_BINARY, TRACE_JSON})
+TRACE_CTFS: str = "ctfs"
+DEFAULT_FORMAT: str = TRACE_CTFS
+SUPPORTED_FORMATS: frozenset[str] = frozenset({TRACE_BINARY, TRACE_JSON, TRACE_CTFS})
 
 
 def normalize_format(value: str | None) -> str:
     """Normalise user-provided strings to the format names recognised by the backend.
 
-    The runtime currently accepts ``"binary"`` (plus legacy aliases handled
-    on the Rust side) and ``"json"``. Unknown formats fall back to the
-    lower-cased input so the backend can decide how to react; callers can
-    choose to guard against unsupported values by checking ``SUPPORTED_FORMATS``.
+    The runtime currently accepts ``"ctfs"`` (the default), ``"binary"``
+    (plus legacy aliases handled on the Rust side), and ``"json"``.
+    Unknown formats fall back to the lower-cased input so the backend can
+    decide how to react; callers can choose to guard against unsupported
+    values by checking ``SUPPORTED_FORMATS``.
     """
     if value is None:
         return DEFAULT_FORMAT
@@ -30,6 +32,7 @@ def is_supported(value: str) -> bool:
 __all__: Iterable[str] = (
     "DEFAULT_FORMAT",
     "TRACE_BINARY",
+    "TRACE_CTFS",
     "TRACE_JSON",
     "SUPPORTED_FORMATS",
     "is_supported",

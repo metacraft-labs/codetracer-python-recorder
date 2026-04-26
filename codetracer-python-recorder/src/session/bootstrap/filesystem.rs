@@ -38,9 +38,10 @@ pub fn resolve_trace_format(value: &str) -> Result<TraceEventsFileFormat> {
         "binary" | "bin" => Ok(TraceEventsFileFormat::Binary),
         // Legacy Cap'n Proto binary format.
         "binaryv0" | "binary_v0" | "b0" => Ok(TraceEventsFileFormat::BinaryV0),
+        "ctfs" => Ok(TraceEventsFileFormat::Ctfs),
         other => Err(usage!(
             ErrorCode::UnsupportedFormat,
-            "unsupported trace format '{}'. Expected one of: json, binary, binaryv0",
+            "unsupported trace format '{}'. Expected one of: json, binary, binaryv0, ctfs",
             other
         )),
     }
@@ -116,6 +117,10 @@ mod tests {
         assert!(matches!(
             resolve_trace_format("binaryv0").expect("binaryv0 format"),
             TraceEventsFileFormat::BinaryV0
+        ));
+        assert!(matches!(
+            resolve_trace_format("ctfs").expect("ctfs format"),
+            TraceEventsFileFormat::Ctfs
         ));
     }
 

@@ -26,6 +26,9 @@ impl TraceOutputPaths {
             TraceEventsFileFormat::Json => {
                 ("trace.json", "trace_metadata.json", "trace_paths.json")
             }
+            TraceEventsFileFormat::Ctfs => {
+                ("trace.ct", "trace_metadata.json", "trace_paths.json")
+            }
             _ => ("trace.bin", "trace_metadata.json", "trace_paths.json"),
         };
         Self {

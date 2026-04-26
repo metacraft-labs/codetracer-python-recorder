@@ -127,6 +127,10 @@ impl LifecycleController {
         );
         self.append_filter_metadata(filter)?;
         self.append_exit_metadata(exit_summary)?;
+        TraceWriter::close(writer).map_err(|err| {
+            enverr!(ErrorCode::Io, "failed to close trace writer")
+                .with_context("source", err.to_string())
+        })?;
         Ok(())
     }
 
