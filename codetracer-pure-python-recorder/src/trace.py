@@ -119,10 +119,14 @@ class Tracer:
         return self.types[name]
 
     def _value(self, val: Any) -> Dict[str, Any]:
-        if isinstance(val, int):
-            return {"kind": "Int", "type_id": self.types["Integer"], "i": val}
+        # Check bool BEFORE int because Python's bool is a subclass of int,
+        # so isinstance(True, int) returns True. Without this order,
+        # booleans are serialised as {"kind": "Int", "i": true} which
+        # fails Rust serde deserialisation (expects i64, not a JSON bool).
         if isinstance(val, bool):
             return {"kind": "Bool", "type_id": self.types["Bool"], "b": val}
+        if isinstance(val, int):
+            return {"kind": "Int", "type_id": self.types["Integer"], "i": val}
         if isinstance(val, str):
             return {"kind": "String", "type_id": self.types["String"], "text": val}
         if isinstance(val, list):
@@ -136,7 +140,11 @@ class Tracer:
         if val is None:
             return {"kind": "None", "type_id": self.types["No type"]}
         type_id = self._ensure_type(16, "Object")
-        return {"kind": "Raw", "type_id": type_id, "r": str(val)}
+        try:
+            r = str(val)
+        except Exception:
+            r = f"<repr failed: {type(val).__name__}>"
+        return {"kind": "Raw", "type_id": type_id, "r": r}
 
     # --------------------------------------------------------------- callbacks
     def handle_line(self, frame: types.FrameType) -> None:
