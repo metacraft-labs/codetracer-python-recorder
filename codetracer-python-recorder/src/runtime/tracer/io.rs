@@ -5,7 +5,7 @@ use crate::runtime::io_capture::{
 };
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
 use pyo3::prelude::*;
-use codetracer_trace_types::{EventLogKind, Line, PathId, RecordEvent, TraceLowLevelEvent};
+use codetracer_trace_types::{EventLogKind, Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use serde::Serialize;
 use std::path::Path;
@@ -133,14 +133,20 @@ impl IoCoordinator {
         let metadata = self.build_metadata(&chunk);
         let content = String::from_utf8_lossy(&chunk.payload).into_owned();
 
-        TraceWriter::add_event(
-            writer,
-            TraceLowLevelEvent::Event(RecordEvent {
-                kind,
-                metadata,
-                content,
-            }),
-        );
+        // `TraceWriter::add_event` is a no-op on the Nim multi-stream
+        // backend (`NimTraceWriter::add_event` returns immediately —
+        // see `codetracer-trace-format/codetracer_trace_writer_nim/
+        // src/lib.rs` line ~976) because the Nim writer streams events
+        // directly to disk via dedicated FFI procs.  For event-log
+        // entries (Write/WriteOther/Read), the dedicated proc is
+        // `register_special_event(kind, metadata, content)` which
+        // forwards to `trace_writer_register_special_event`.  Without
+        // this routing, Python `print(...)` calls reached the recorder
+        // but never landed in the trace, so the GUI's terminal-output
+        // pane stayed empty for every Python DB trace (the same
+        // architectural gap that hit the Ruby recorder's Call records,
+        // fixed by `5aa0502@codetracer-ruby-recorder`).
+        TraceWriter::register_special_event(writer, kind, &metadata, &content);
 
         true
     }
