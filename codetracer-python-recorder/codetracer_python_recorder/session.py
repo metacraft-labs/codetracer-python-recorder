@@ -16,6 +16,7 @@ from .codetracer_python_recorder import (
     configure_policy_from_env as _configure_policy_from_env,
     flush_tracing as _flush_backend,
     is_tracing as _is_tracing_backend,
+    managed_upload_materialized_trace as _managed_upload_materialized_backend,
     start_tracing as _start_backend,
     stop_tracing as _stop_backend,
 )
@@ -146,7 +147,10 @@ def stop(*, exit_code: int | None = None) -> None:
     global _active_session
     if not _is_tracing_backend():
         return
+    trace_path = _active_session.path if _active_session is not None else None
     _stop_backend(exit_code)
+    if trace_path is not None and _managed_upload_enabled():
+        _managed_upload_materialized_backend(str(trace_path))
     _active_session = None
 
 
@@ -159,6 +163,10 @@ def flush() -> None:
     """Flush buffered trace data."""
     if _is_tracing_backend():
         _flush_backend()
+
+
+def _managed_upload_enabled() -> bool:
+    return bool(os.getenv("CODETRACER_MANAGED_UPLOAD_URL"))
 
 
 @contextlib.contextmanager

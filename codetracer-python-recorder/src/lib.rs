@@ -25,6 +25,18 @@ pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing}
 
 use pyo3::prelude::*;
 
+#[pyfunction]
+fn managed_upload_materialized_trace(trace_dir: String) -> PyResult<String> {
+    let upload =
+        codetracer_ctfs::trace_storage::upload_materialized_artifacts_from_env(trace_dir, "python")
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.message))?;
+    Ok(upload
+        .uploads
+        .first()
+        .map(|upload| upload.receipt.object_key.clone())
+        .unwrap_or_default())
+}
+
 #[cfg(test)]
 mod shared_trace_storage_adapter_tests {
     use codetracer_ctfs::trace_storage::{
@@ -154,5 +166,6 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     m.add_function(wrap_pyfunction!(policy::configure_policy_py, m)?)?;
     m.add_function(wrap_pyfunction!(policy::py_configure_policy_from_env, m)?)?;
     m.add_function(wrap_pyfunction!(policy::py_policy_snapshot, m)?)?;
+    m.add_function(wrap_pyfunction!(managed_upload_materialized_trace, m)?)?;
     Ok(())
 }
