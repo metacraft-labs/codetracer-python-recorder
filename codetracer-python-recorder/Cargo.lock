@@ -194,6 +194,7 @@ name = "codetracer-python-recorder"
 version = "0.3.0"
 dependencies = [
  "bitflags",
+ "codetracer_ctfs",
  "codetracer_trace_types",
  "codetracer_trace_writer",
  "codetracer_trace_writer_nim",
@@ -218,6 +219,8 @@ dependencies = [
 name = "codetracer_ctfs"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "zstd",
 ]
 

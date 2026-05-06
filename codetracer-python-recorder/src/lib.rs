@@ -25,6 +25,41 @@ pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing}
 
 use pyo3::prelude::*;
 
+#[cfg(test)]
+mod shared_trace_storage_adapter_tests {
+    use codetracer_ctfs::trace_storage::{StorageMode, TraceStorageConfig, TRACE_STORAGE_SCHEMA};
+
+    #[test]
+    fn python_recorder_binds_shared_trace_storage_config() {
+        let config = TraceStorageConfig::from_json(include_str!(
+            "../../../codetracer-trace-format/codetracer_ctfs/tests/fixtures/trace_storage/storage_config.full.json"
+        ))
+        .expect("shared trace-storage fixture parses through codetracer_ctfs");
+
+        assert_eq!(config.schema, TRACE_STORAGE_SCHEMA);
+        assert_eq!(config.materialized_artifact_policy.pool, "artifacts-hot");
+        assert!(config.split_policy.enabled);
+    }
+
+    #[test]
+    fn python_recorder_binds_shared_managed_upload_storage_config() {
+        let config = TraceStorageConfig::from_json(include_str!(
+            "../../../codetracer-trace-format/codetracer_ctfs/tests/fixtures/trace_storage/storage_config.managed_upload.json"
+        ))
+        .expect("shared managed-upload trace-storage fixture parses through codetracer_ctfs");
+
+        assert_eq!(config.schema, TRACE_STORAGE_SCHEMA);
+        match config.mode {
+            StorageMode::ManagedUpload { control_plane_url } => {
+                assert_eq!(control_plane_url, "https://ci.example.test/managed-upload");
+            }
+            StorageMode::DirectStorage { .. } => panic!("expected managed upload storage mode"),
+        }
+        assert_eq!(config.storage_servers[1].credential_ref.provider, "vault");
+        assert_eq!(config.replication.target_replicas, 3);
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
