@@ -27,7 +27,11 @@ use pyo3::prelude::*;
 
 #[cfg(test)]
 mod shared_trace_storage_adapter_tests {
-    use codetracer_ctfs::trace_storage::{StorageMode, TraceStorageConfig, TRACE_STORAGE_SCHEMA};
+    use codetracer_ctfs::trace_storage::{
+        ManagedTraceSender, ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt,
+        SenderError, SenderHealth, SharedSenderBackend, StorageMode, TraceStorageConfig,
+        TRACE_STORAGE_SCHEMA,
+    };
 
     #[test]
     fn python_recorder_binds_shared_trace_storage_config() {
@@ -57,6 +61,82 @@ mod shared_trace_storage_adapter_tests {
         }
         assert_eq!(config.storage_servers[1].credential_ref.provider, "vault");
         assert_eq!(config.replication.target_replicas, 3);
+    }
+
+    #[derive(Default)]
+    struct PythonBindingBackend {
+        uploaded: Vec<String>,
+    }
+
+    impl SharedSenderBackend for PythonBindingBackend {
+        fn upload_slice(
+            &mut self,
+            object: &ManagedUploadObject,
+        ) -> Result<ManagedUploadReceipt, SenderError> {
+            self.upload(object)
+        }
+
+        fn upload_materialized_artifact(
+            &mut self,
+            object: &ManagedUploadObject,
+        ) -> Result<ManagedUploadReceipt, SenderError> {
+            self.upload(object)
+        }
+
+        fn upload_manifest(
+            &mut self,
+            object: &ManagedUploadObject,
+        ) -> Result<ManagedUploadReceipt, SenderError> {
+            self.upload(object)
+        }
+
+        fn finalize(
+            &mut self,
+            _request: &codetracer_ctfs::trace_storage::ManagedFinalizeRequest,
+        ) -> Result<(), SenderError> {
+            Ok(())
+        }
+
+        fn health(&self) -> SenderHealth {
+            SenderHealth {
+                healthy: true,
+                message: "python binding backend".to_string(),
+            }
+        }
+    }
+
+    impl PythonBindingBackend {
+        fn upload(
+            &mut self,
+            object: &ManagedUploadObject,
+        ) -> Result<ManagedUploadReceipt, SenderError> {
+            self.uploaded.push(object.object_key.clone());
+            Ok(ManagedUploadReceipt {
+                object_key: object.object_key.clone(),
+                storage_pool_id: "shared-local".to_string(),
+                storage_server_id: "local-storage-1".to_string(),
+                storage_endpoint_uri: "local://codetracer-ci/storage-service".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn python_recorder_uses_shared_managed_sender_for_materialized_artifacts() {
+        let mut sender =
+            ManagedTraceSender::new(PythonBindingBackend::default(), "python-finalize");
+        sender
+            .upload_materialized_artifact(ManagedUploadObject {
+                object_key: "traces/tenant/python/materialized-trace-v1.json".to_string(),
+                local_path: "/tmp/python/materialized-trace-v1.json".to_string(),
+                content_length: 256,
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                kind: ManagedUploadKind::MaterializedArtifact {
+                    artifact_kind: "materialized_trace_v1".to_string(),
+                },
+            })
+            .expect("shared managed sender accepts materialized artifact");
+        assert_eq!(sender.backend().uploaded.len(), 1);
     }
 }
 
