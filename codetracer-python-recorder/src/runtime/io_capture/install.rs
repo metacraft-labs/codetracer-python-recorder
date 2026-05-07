@@ -116,6 +116,12 @@ mod tests {
     {
         let sys = py.import("sys")?;
         let io = py.import("io")?;
+
+        // Save the real streams so we can restore them after the test.
+        let orig_stdout = sys.getattr("stdout")?.unbind();
+        let orig_stderr = sys.getattr("stderr")?.unbind();
+        let orig_stdin = sys.getattr("stdin")?.unbind();
+
         let stdout_buf = io.call_method0("StringIO")?;
         let stderr_buf = io.call_method0("StringIO")?;
         let stdin_buf = io.call_method1("StringIO", ("line1\nline2\n",))?;
@@ -126,6 +132,12 @@ mod tests {
         let mut proxies = IoStreamProxies::install(py, sink, None)?;
         let result = func(&mut proxies)?;
         proxies.uninstall(py)?;
+
+        // Restore the original streams so later tests are not affected.
+        sys.setattr("stdout", orig_stdout)?;
+        sys.setattr("stderr", orig_stderr)?;
+        sys.setattr("stdin", orig_stdin)?;
+
         Ok(result)
     }
 
