@@ -197,6 +197,46 @@ We'd be very happy if the community finds this useful, and if anyone wants to:
 * Contribute code to enhance the Python support of CodeTracer.
 * Provide [sponsorship](https://opencollective.com/codetracer), so we can hire dedicated full-time maintainers for this project.
 
+### Direct-storage upload (Enterprise on-prem)
+
+For Enterprise on-prem deployments, the recorder produces materialized
+trace artifacts on the local filesystem and a separate
+`codetracer-managed-upload direct-materialized-finalize` invocation
+PUTs them directly to the customer's storage server, then posts a
+metadata-only finalize to codetracer-ci. Trace bytes never traverse
+the codetracer-ci control plane.
+
+The `codetracer-managed-upload` helper is shipped in the
+`codetracer-trace-format` workspace
+(`codetracer_ctfs/src/bin/codetracer-managed-upload.rs`). It takes
+a static `codetracer.trace-storage.v1` JSON config that points at
+the storage server, the control plane, and the Enterprise lease
+checkout endpoint. After the recorder produces the materialized
+artifact set, drive the helper:
+
+```bash
+codetracer-managed-upload direct-materialized-finalize \
+  --storage-config /etc/codetracer/trace-storage.json \
+  --recording-id "${SESSION_ID}" \
+  --object-key-prefix "traces/${TENANT_ID}/${SESSION_ID}/python-direct" \
+  --idempotency-key "${SESSION_ID}-python" \
+  --artifact-dir "${RECORDER_OUT_DIR}" \
+  --language python
+```
+
+The full data-path overview, the static-config schema, and the
+Enterprise lease lifecycle are documented at
+[`codetracer-specs/Observability-Platform/docs/direct-storage-data-path.md`](../codetracer-specs/Observability-Platform/docs/direct-storage-data-path.md).
+The HTTP endpoint reference is at
+[`codetracer-ci/rewrite-docs/04-apis-events/http-api.md`](../codetracer-ci/rewrite-docs/04-apis-events/http-api.md)
+section 4.10.
+
+End-to-end coverage:
+`StoragePolicyModelTests.e2e_python_recorder_materialized_direct_upload_with_static_config`
+(M38 slice 5A) and the M39 NixOS test
+`codetracer-ci-rewrite-multitenant-infra-materialized-recorders-incus`
+(live recorder running inside an Incus container per tenant).
+
 ### Legal info
 
 LICENSE: MIT
