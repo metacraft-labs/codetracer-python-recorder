@@ -28,16 +28,22 @@ forms share the same arguments:
 ```bash
 python -m codetracer_python_recorder \
   --out-dir ./trace-out \
-  --format json \
   --activation-path app/main.py \
   --trace-filter config/trace-filter.toml \
   app/main.py --arg=value
 ```
 
-- `--out-dir` (default: `./trace-out`) – directory that will receive
-  `trace.json`, `trace_metadata.json`, and `trace_paths.json`.
-- `--format` – trace serialisation format (`binary` or `json`). Use `json` for
-  integration with the DB backend importer.
+- `--out-dir` / `-o` (default: `./trace-out`, or the value of
+  `CODETRACER_PYTHON_RECORDER_OUT_DIR` when set) – directory that will receive
+  the canonical CTFS trace bundle (`trace.ct`, `trace_metadata.json`, and
+  `trace_paths.json`). Per
+  [`Recorder-CLI-Conventions.md`](../../codetracer-specs/Recorder-CLI-Conventions.md)
+  §4 the recorder is **CTFS-only** — it does not accept a `--format` flag and
+  does not read a `CODETRACER_FORMAT` environment variable. To convert the
+  recorded CTFS trace to JSON or text for inspection or golden snapshot
+  fixtures, run [`ct print`](../../codetracer-trace-format-nim/) (shipped
+  with `codetracer-trace-format-nim`) on the produced `trace.ct`.
+- `--version` / `-V` – print the recorder version and exit.
 - `--activation-path` – optional gate that postpones tracing until the interpreter
   executes this file (defaults to the target script).
 - `--trace-filter` – path to a filter file. Provide multiple times or use `::`
@@ -51,6 +57,37 @@ All additional arguments are forwarded to the target script unchanged. The CLI
 reuses whichever interpreter launches it so wrappers such as `uv run`, `pipx`,
 or activated virtual environments behave identically to `python script.py`.
 
+### Environment variables
+
+| Variable                                 | CLI equivalent | Description                                                          |
+| ---------------------------------------- | -------------- | -------------------------------------------------------------------- |
+| `CODETRACER_PYTHON_RECORDER_OUT_DIR`     | `--out-dir`    | Default output directory; overridden by the CLI flag when both are set. |
+| `CODETRACER_PYTHON_RECORDER_DISABLED`    | —              | Set to `1` or `true` to skip recording entirely while still running the target. |
+| `CODETRACER_TRACE_FILTER`                | `--trace-filter` | Filter spec for env auto-start (`::`-separated paths).             |
+| `CODETRACER_TRACE`                       | —              | Auto-start path: when set, importing the recorder triggers tracing into this directory (library mode). |
+
+The recorder does **not** consult `CODETRACER_FORMAT`; the format is always
+CTFS.
+
+### Converting traces to JSON / text
+
+Because the recorder writes only CTFS, human-readable inspection is delegated
+to `ct print` from
+[`codetracer-trace-format-nim`](../../codetracer-trace-format-nim/):
+
+```bash
+# Render the events as line-delimited JSON
+ct-print --json ./trace-out/trace.ct
+
+# Or print a one-line summary
+ct-print --summary ./trace-out/trace.ct
+```
+
+This split between recording (CTFS) and conversion (`ct print`) is the
+contract enforced by every CodeTracer recorder; see
+[`Recorder-CLI-Conventions.md`](../../codetracer-specs/Recorder-CLI-Conventions.md)
+§4 and §9.
+
 ## Test framework integration
 
 The recorder supports direct integration with pytest and unittest, automatically
@@ -61,7 +98,6 @@ applying curated filters that skip framework internals while tracing your test c
 ```bash
 python -m codetracer_python_recorder \
   --out-dir ./trace-out \
-  --format json \
   --pytest tests/test_example.py::test_addition -v
 ```
 
@@ -74,7 +110,6 @@ verbosity flags (`-v`, `-vv`).
 ```bash
 python -m codetracer_python_recorder \
   --out-dir ./trace-out \
-  --format json \
   --unittest tests.test_module.TestClass.test_method -v
 ```
 
@@ -94,7 +129,6 @@ the automatic framework filter and use only your explicit filters:
 ```bash
 python -m codetracer_python_recorder \
   --out-dir ./trace-out \
-  --format json \
   --no-framework-filters \
   --pytest tests/test_example.py -v
 ```

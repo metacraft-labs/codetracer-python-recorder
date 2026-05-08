@@ -46,8 +46,6 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
         script,
         "--out-dir",
         str(trace_dir),
-        "--format",
-        "json",
         "--on-recorder-error",
         "disable",
         env=env,
@@ -57,10 +55,16 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert trace_dir.is_dir()
-    events = trace_dir / "trace.json"
+    # CTFS-only: the recorder writes ``trace.ct`` (no JSON sidecar);
+    # the disable-policy path must clean every artefact away.
+    events = trace_dir / "trace.ct"
+    legacy_events = trace_dir / "trace.json"
     metadata = trace_dir / "trace_metadata.json"
     paths = trace_dir / "trace_paths.json"
     assert not events.exists()
+    assert not legacy_events.exists(), (
+        "trace.json must never be written (CTFS-only)"
+    )
     assert not metadata.exists()
     assert not paths.exists()
     assert "test-injected failure" in result.stderr
@@ -78,8 +82,6 @@ def test_cli_abort_policy_propagates_internal_error(tmp_path: Path) -> None:
         script,
         "--out-dir",
         str(trace_dir),
-        "--format",
-        "json",
         "--on-recorder-error",
         "abort",
         env=env,
@@ -110,14 +112,14 @@ def test_cli_require_trace_fails_when_no_events_recorded(tmp_path: Path) -> None
         alias,
         "--out-dir",
         str(trace_dir),
-        "--format",
-        "json",
         "--require-trace",
         env=env,
     )
 
-    # Check injection support - events file existence indicates it's not working
-    events = trace_dir / "trace.json"
+    # Check injection support - events file existence indicates it's not working.
+    # CTFS-only: the recorder writes ``trace.ct``; ``trace.json`` is
+    # forbidden and would also indicate injection isn't wired up.
+    events = trace_dir / "trace.ct"
     if result.returncode == 0 and events.exists():
         pytest.fail(
             "Recorder built without integration-test hooks.\n"
@@ -142,8 +144,6 @@ def test_cli_json_errors_emits_trailer(tmp_path: Path) -> None:
         script,
         "--out-dir",
         str(trace_dir),
-        "--format",
-        "json",
         "--json-errors",
         "--on-recorder-error",
         "abort",

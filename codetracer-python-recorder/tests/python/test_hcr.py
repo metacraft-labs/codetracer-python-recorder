@@ -114,7 +114,6 @@ class TestHCR:
 
         args = [
             "--out-dir", str(trace_dir),
-            "--format", "ctfs",
             "--on-recorder-error", "disable",
             "--require-trace",
             "--keep-partial-trace",
@@ -208,7 +207,6 @@ class TestHCR:
 
         args = [
             "--out-dir", str(trace_dir),
-            "--format", "ctfs",
             "--on-recorder-error", "disable",
             "--require-trace",
             "--keep-partial-trace",
@@ -241,7 +239,6 @@ def _record_and_parse_json(hcr_workdir: Path) -> dict:
 
     args = [
         "--out-dir", str(trace_dir),
-        "--format", "ctfs",
         "--on-recorder-error", "disable",
         "--require-trace",
         "--keep-partial-trace",

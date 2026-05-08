@@ -44,10 +44,17 @@ class TracingApiTests(unittest.TestCase):
             self.assertEqual(_workload(), 10)
             codetracer.stop()
 
-            metadata = trace_dir / "trace_metadata.json"
-            paths = trace_dir / "trace_paths.json"
-            self.assertTrue(metadata.exists(), "expected trace_metadata.json to be created")
-            self.assertTrue(paths.exists(), "expected trace_paths.json to be created")
+            # Per Recorder-CLI-Conventions.md §4 the recorder is CTFS-only.
+            # The Nim writer emits a single multi-stream ``<program>.ct``
+            # container; the JSON sidecar files (``trace_metadata.json``,
+            # ``trace_paths.json``) only exist for the legacy JSON format
+            # path (kept around for API-level event-stream tests).
+            ct_files = list(trace_dir.glob("*.ct"))
+            self.assertTrue(
+                ct_files,
+                f"expected at least one CTFS .ct file in {trace_dir}; "
+                f"contents: {list(trace_dir.iterdir())}",
+            )
 
     def test_environment_auto_start(self) -> None:
         script = "import codetracer_python_recorder as codetracer, sys; sys.stdout.write(str(codetracer.is_tracing()))"

@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from codetracer_python_recorder import formats
-from codetracer_python_recorder.cli import _parse_args
+from codetracer_python_recorder.cli import (
+    ENV_DISABLED,
+    ENV_OUT_DIR,
+    _parse_args,
+    recording_disabled,
+    resolve_out_dir,
+)
 
 
 def _write_script(path: Path) -> None:
@@ -14,6 +20,7 @@ def _write_script(path: Path) -> None:
 
 
 def test_parse_args_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_OUT_DIR, raising=False)
     monkeypatch.chdir(tmp_path)
     script = Path("sample.py")
     _write_script(script)
@@ -23,7 +30,9 @@ def test_parse_args_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert config.script == script.resolve()
     assert config.script_args == []
     assert config.out_dir == (tmp_path / "trace-out").resolve()
+    # Format is hard-pinned to CTFS per Recorder-CLI-Conventions.md §4.
     assert config.format == formats.DEFAULT_FORMAT
+    assert config.format == "ctfs"
     assert config.activation_path == script.resolve()
     assert config.trace_filter == ()
     assert config.policy_overrides == {}
@@ -39,12 +48,69 @@ def test_parse_args_accepts_custom_out_dir(tmp_path: Path) -> None:
     assert config.out_dir == trace_dir.resolve()
 
 
-def test_parse_args_validates_format(tmp_path: Path) -> None:
+def test_parse_args_rejects_format_flag(tmp_path: Path) -> None:
+    """Per convention §4 the recorder is CTFS-only — `--format` must be rejected.
+
+    This replaces the old ``test_parse_args_validates_format`` which
+    asserted that ``--format yaml`` was rejected while ``--format json``
+    or ``--format binary`` were accepted; under the new convention
+    *all* ``--format`` invocations exit non-zero.
+    """
     script = tmp_path / "main.py"
     _write_script(script)
 
+    for value in ("json", "binary", "ctfs", "yaml"):
+        with pytest.raises(SystemExit) as excinfo:
+            _parse_args(["--format", value, str(script)])
+        # argparse uses exit code 2 for usage errors.
+        assert excinfo.value.code == 2
+
+    # The combined `--format=value` form must also be rejected so users
+    # can't sneak the flag in by collapsing the argv pair.
     with pytest.raises(SystemExit):
-        _parse_args(["--format", "yaml", str(script)])
+        _parse_args(["--format=json", str(script)])
+
+
+def test_resolve_out_dir_prefers_cli_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI ``--out-dir`` always wins over the env-var fallback (§5)."""
+    env_dir = tmp_path / "env-traces"
+    cli_dir = tmp_path / "cli-traces"
+    monkeypatch.setenv(ENV_OUT_DIR, str(env_dir))
+
+    assert resolve_out_dir(cli_dir) == cli_dir.resolve()
+
+
+def test_resolve_out_dir_uses_env_when_cli_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_dir = tmp_path / "env-traces"
+    monkeypatch.setenv(ENV_OUT_DIR, str(env_dir))
+
+    assert resolve_out_dir(None) == env_dir.resolve()
+
+
+def test_resolve_out_dir_falls_back_to_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_OUT_DIR, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert resolve_out_dir(None) == (tmp_path / "trace-out").resolve()
+
+
+def test_recording_disabled_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_DISABLED, raising=False)
+    assert recording_disabled() is False
+
+    for truthy in ("1", "true", "TRUE", "True"):
+        monkeypatch.setenv(ENV_DISABLED, truthy)
+        assert recording_disabled() is True, f"expected truthy for {truthy!r}"
+
+    for falsy in ("0", "false", "no", "", "yes-please"):
+        monkeypatch.setenv(ENV_DISABLED, falsy)
+        assert recording_disabled() is False, f"expected falsy for {falsy!r}"
 
 
 def test_parse_args_handles_activation_and_script_args(tmp_path: Path) -> None:

@@ -43,7 +43,16 @@ dev:
     uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
 
 # Run unit tests of dev build (dev ensures integration-test feature is built)
-test: dev cargo-test py-test
+test: dev cargo-test py-test verify-cli-convention
+
+# Verify the CLI matches Recorder-CLI-Conventions.md (§4 CTFS-only, §5 env vars).
+# Runs the shell guard at tests/verify-cli-convention-no-silent-skip.sh which
+# inspects --help output, source-level env-var references, and the absence of
+# any --format flag wiring.  Wired into both `just test` and `just lint` so the
+# convention contract cannot regress silently.
+verify-cli-convention:
+    PYTHON_RECORDER_PYTHON="$(uv run --directory codetracer-python-recorder which python)" \
+        bash codetracer-python-recorder/tests/verify-cli-convention-no-silent-skip.sh
 
 # Run Rust unit tests without default features to link Python C library
 cargo-test:
@@ -70,7 +79,7 @@ bench:
 py-test:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
 
-lint: lint-rust lint-errors
+lint: lint-rust lint-errors verify-cli-convention
 
 lint-rust:
     uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic

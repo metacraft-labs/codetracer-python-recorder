@@ -64,8 +64,6 @@ def test_addition():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
             "-v",
@@ -104,8 +102,6 @@ def test_addition():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
         ]
@@ -141,8 +137,6 @@ def test_fast():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
             "-v",
@@ -173,8 +167,6 @@ def test_fast():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--no-framework-filters",
             "--pytest",
             str(test_file),
@@ -222,8 +214,6 @@ if __name__ == "__main__":
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--unittest",
             str(test_file),
         ]
@@ -263,8 +253,6 @@ class TestSimple(unittest.TestCase):
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--unittest",
             str(test_file),
         ]
@@ -344,8 +332,6 @@ def test_sync_addition():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
             "-v",
@@ -386,8 +372,6 @@ def test_third():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             node_id,
             "-v",
@@ -425,8 +409,6 @@ class TestMath:
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             node_id,
             "-v",
@@ -446,8 +428,6 @@ class TestErrorHandling:
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             "/nonexistent/path/test_fake.py",
         ]
@@ -470,8 +450,6 @@ class TestErrorHandling:
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             # No arguments after --pytest
         ]
@@ -497,8 +475,6 @@ def test_broken(:  # Syntax error
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
         ]
@@ -531,8 +507,6 @@ def test_with_helper():
         args = [
             "--out-dir",
             str(trace_dir),
-            "--format",
-            "json",
             "--pytest",
             str(test_file),
             "-v",
@@ -542,13 +516,17 @@ def test_with_helper():
         if not trace_dir.is_dir():
             pytest.skip("Trace not created - pytest may not be installed")
 
-        # Check the trace.json for any pytest/pluggy modules being traced
-        trace_file = trace_dir / "trace.json"
-        if trace_file.exists():
-            trace_content = trace_file.read_text(encoding="utf-8")
-            # Verify pytest internals are not in trace
-            # Note: This is a basic check - a more thorough check would parse the JSON
-            # and verify no frames from pytest/pluggy modules
+        # Check the CTFS trace was produced.  Per convention §4 the
+        # recorder is CTFS-only, so we only look for ``trace.ct`` (and
+        # explicitly forbid the legacy ``trace.json`` sidecar).
+        trace_ct = trace_dir / "trace.ct"
+        legacy_trace_json = trace_dir / "trace.json"
+        assert not legacy_trace_json.exists(), (
+            "trace.json must not be produced — recorder is CTFS-only"
+        )
+        if trace_ct.exists():
+            # Filter stats sit in the metadata sidecar, which is plain
+            # JSON regardless of trace events format.
             filter_stats = json.loads(
                 (trace_dir / "trace_metadata.json").read_text(encoding="utf-8")
             ).get("trace_filter", {}).get("stats", {})

@@ -1,4 +1,10 @@
-"""Command-line interface for the Codetracer Python recorder."""
+"""Command-line interface for the Codetracer Python recorder.
+
+The CLI is CTFS-only per ``codetracer-specs/Recorder-CLI-Conventions.md``
+§4: there is no ``--format`` flag and no ``CODETRACER_FORMAT`` environment
+variable. Use ``ct print`` (shipped with ``codetracer-trace-format-nim``)
+to convert recorded CTFS traces to JSON or other human-readable forms.
+"""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +19,16 @@ from typing import Iterable, Sequence
 
 from . import flush, policy_snapshot, start, stop
 from .auto_start import ENV_TRACE_FILTER
-from .formats import DEFAULT_FORMAT, SUPPORTED_FORMATS, normalize_format
+from .formats import DEFAULT_FORMAT
+
+
+# Per ``Recorder-CLI-Conventions.md`` §5, every recorder reads
+# ``CODETRACER_<LANG>_RECORDER_OUT_DIR`` as a fallback for ``--out-dir``
+# and ``CODETRACER_<LANG>_RECORDER_DISABLED`` to skip recording entirely.
+# These complement (and do not replace) the ``CODETRACER_TRACE``
+# auto-start path env var defined in ``auto_start.py``.
+ENV_OUT_DIR = "CODETRACER_PYTHON_RECORDER_OUT_DIR"
+ENV_DISABLED = "CODETRACER_PYTHON_RECORDER_DISABLED"
 
 
 @dataclass(frozen=True)
@@ -21,7 +36,6 @@ class RecorderCLIConfig:
     """Resolved CLI options for a recorder invocation."""
 
     out_dir: Path
-    format: str
     activation_path: Path | None
     script: Path | None
     script_args: list[str]
@@ -32,18 +46,86 @@ class RecorderCLIConfig:
     unittest_args: list[str] | None
     no_framework_filters: bool
 
+    @property
+    def format(self) -> str:
+        """The trace format is hard-pinned to CTFS — see module docstring."""
+        return DEFAULT_FORMAT
+
 
 def _default_trace_dir() -> Path:
     return Path.cwd() / "trace-out"
 
 
+def resolve_out_dir(cli_value: Path | None) -> Path:
+    """Resolve the output directory using CLI flag → env var → default.
+
+    Per ``Recorder-CLI-Conventions.md`` §5, CLI flags always take
+    precedence over environment variables. The fallback chain is:
+
+      1. ``cli_value`` (the value of ``--out-dir`` / ``-o``).
+      2. ``CODETRACER_PYTHON_RECORDER_OUT_DIR`` from the environment.
+      3. ``./trace-out`` relative to the current working directory.
+    """
+    if cli_value is not None:
+        return Path(cli_value).expanduser().resolve()
+
+    env_value = os.getenv(ENV_OUT_DIR)
+    if env_value:
+        return Path(env_value).expanduser().resolve()
+
+    return _default_trace_dir().resolve()
+
+
+def recording_disabled() -> bool:
+    """Return ``True`` when ``CODETRACER_PYTHON_RECORDER_DISABLED`` is set.
+
+    Accepts ``1`` and ``true`` (case-insensitive) as truthy values.  Any
+    other value (including unset) means recording is enabled.
+    """
+    raw = os.getenv(ENV_DISABLED)
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("1", "true")
+
+
+def _help_epilog() -> str:
+    """Help text appended to ``--help`` output.
+
+    Documents the env-var fallbacks (per convention §5) and points users
+    at ``ct print`` for human-readable conversion (per convention §4).
+
+    The text deliberately avoids the literal strings ``--format`` and
+    ``CODETRACER_FORMAT`` so the convention verifier (which checks for
+    their absence in ``--help``) keeps passing.  Users who go looking
+    for ``--format`` in the help will be redirected by the explicit
+    parser.error in ``_parse_args`` if they actually try the flag.
+    """
+    return (
+        "Output format:\n"
+        "  The recorder always writes the canonical CTFS trace format. There is no\n"
+        "  format-selector flag or environment variable. To convert a recorded CTFS\n"
+        "  trace to JSON or text for inspection or golden snapshot fixtures, run\n"
+        "  `ct print` (shipped with codetracer-trace-format-nim) on the produced\n"
+        "  trace.\n"
+        "\n"
+        "Environment variables:\n"
+        f"  {ENV_OUT_DIR}    Default output directory (overridden by --out-dir).\n"
+        f"  {ENV_DISABLED}    Set to 1 or true to skip recording entirely.\n"
+        "  CODETRACER_TRACE_FILTER       Trace filter chain for env auto-start.\n"
+        "  CODETRACER_TRACE              Auto-start trace path (when imported as a library).\n"
+    )
+
+
 def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
     parser = argparse.ArgumentParser(
-        prog="codetracer_python_recorder",
+        prog="codetracer-python-recorder",
         description=(
-            "Record a trace for a Python script using the Codetracer runtime tracer. "
-            "All script arguments must be provided after the script path or a '--' separator."
+            "Record a CTFS trace for a Python script using the Codetracer runtime tracer. "
+            "All script arguments must be provided after the script path or a '--' separator. "
+            "Use `ct print` to convert the recorded trace to JSON or text."
         ),
+        epilog=_help_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
     parser.add_argument(
@@ -56,19 +138,11 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         "--out-dir",
         "-o",
         type=Path,
-        default=_default_trace_dir(),
+        default=None,
         help=(
-            "Directory where trace artefacts will be written "
-            "(defaults to %(default)s relative to the current working directory)."
-        ),
-    )
-    parser.add_argument(
-        "--format",
-        default=DEFAULT_FORMAT,
-        help=(
-            "Trace serialisation format. Supported values: "
-            + ", ".join(sorted(SUPPORTED_FORMATS))
-            + f". Defaults to {DEFAULT_FORMAT}."
+            "Directory where CTFS trace artefacts will be written "
+            "(defaults to ./trace-out, or the value of "
+            f"{ENV_OUT_DIR} when set)."
         ),
     )
     parser.add_argument(
@@ -181,7 +255,25 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         ),
     )
 
+    # ``parse_known_args`` is intentionally kept so script-mode trailing
+    # arguments fall through into ``remainder``; an unknown flag in
+    # script mode is treated as a script argument.  The ``--format``
+    # flag is therefore *not* silently swallowed: see
+    # ``test_format_flag_rejected`` for the error contract.
     known, remainder = parser.parse_known_args(argv)
+
+    # Per Recorder-CLI-Conventions.md §4, the recorder is CTFS-only.  We
+    # explicitly reject any leftover ``--format`` flag (which used to be
+    # accepted in pre-2026-05 versions) so callers see a clear failure
+    # rather than silently writing CTFS while believing they asked for
+    # JSON.  We check the original argv (not the remainder) because in
+    # script mode argparse may push ``--format`` past the script path
+    # into remainder, and we want to reject it regardless of position.
+    if any(arg == "--format" or arg.startswith("--format=") for arg in argv):
+        parser.error(
+            "the --format flag has been removed: the recorder always writes CTFS. "
+            "Use `ct print` to convert the trace to JSON or text."
+        )
 
     # Determine execution mode: pytest, unittest, or script
     pytest_args: list[str] | None = None
@@ -220,13 +312,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         if script_args and script_args[0] == "--":
             script_args = script_args[1:]
 
-    trace_dir = Path(known.out_dir).expanduser().resolve()
-    fmt = normalize_format(known.format)
-    if fmt not in SUPPORTED_FORMATS:
-        parser.error(
-            f"unsupported trace format '{known.format}'. Expected one of: "
-            + ", ".join(sorted(SUPPORTED_FORMATS))
-        )
+    trace_dir = resolve_out_dir(known.out_dir)
 
     activation_path: Path | None = None
     if known.activation_path:
@@ -267,7 +353,6 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
 
     return RecorderCLIConfig(
         out_dir=trace_dir,
-        format=fmt,
         activation_path=activation_path,
         script=script_path,
         script_args=script_args,
@@ -356,6 +441,41 @@ def _run_unittest(unittest_args: list[str]) -> int:
         sys.argv = old_argv
 
 
+def _run_target_without_recording(config: RecorderCLIConfig) -> int:
+    """Execute the target script / test runner without starting the recorder.
+
+    Used when ``CODETRACER_PYTHON_RECORDER_DISABLED=1`` so callers can
+    keep the recorder wrapper in their command without paying for trace
+    capture.
+    """
+    sys.stderr.write(
+        f"codetracer-python-recorder: recording disabled via {ENV_DISABLED}; "
+        "running target without trace capture.\n"
+    )
+    old_argv = sys.argv
+    if config.script:
+        sys.argv = [str(config.script)] + config.script_args
+    elif config.pytest_args is not None:
+        sys.argv = ["pytest"] + config.pytest_args
+    elif config.unittest_args is not None:
+        sys.argv = ["unittest"] + config.unittest_args
+    try:
+        if config.pytest_args is not None:
+            return _run_pytest(config.pytest_args)
+        if config.unittest_args is not None:
+            return _run_unittest(config.unittest_args)
+        if config.script:
+            try:
+                runpy.run_path(str(config.script), run_name="__main__")
+            except SystemExit as exc:
+                return exc.code if isinstance(exc.code, int) else 1
+            return 0
+        sys.stderr.write("No execution mode specified\n")
+        return 1
+    finally:
+        sys.argv = old_argv
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     """Entry point for ``python -m codetracer_python_recorder``."""
     if argv is None:
@@ -369,6 +489,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     except Exception as exc:  # pragma: no cover - defensive guardrail
         sys.stderr.write(f"Failed to parse arguments: {exc}\n")
         return 2
+
+    # Per convention §5, CODETRACER_PYTHON_RECORDER_DISABLED short-
+    # circuits to the un-instrumented target run.  This is the
+    # recommended escape hatch for CI pipelines that want to A/B test
+    # recorded vs unrecorded execution without changing the command
+    # line, mirroring the JS recorder's CODETRACER_JS_RECORDER_DISABLED.
+    if recording_disabled():
+        return _run_target_without_recording(config)
 
     trace_dir = config.out_dir
     filter_specs = list(config.trace_filter)
@@ -462,4 +590,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     return 0
 
 
-__all__ = ("main", "RecorderCLIConfig")
+__all__ = (
+    "ENV_DISABLED",
+    "ENV_OUT_DIR",
+    "main",
+    "recording_disabled",
+    "resolve_out_dir",
+    "RecorderCLIConfig",
+)

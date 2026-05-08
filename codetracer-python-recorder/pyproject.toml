@@ -25,6 +25,13 @@ classifiers = [
 [project.scripts]
 codetracer-python-recorder = "codetracer_python_recorder.cli:main"
 
+# Convention-compliance shell guard.  Wired up so it can be invoked
+# directly via `python -m pytest -k verify_cli_convention` (the Python
+# tests cover the same surface but the shell guard remains the source
+# of truth; see tests/verify-cli-convention-no-silent-skip.sh).
+[tool.codetracer.scripts]
+verify-cli-convention = "tests/verify-cli-convention-no-silent-skip.sh"
+
 [project.urls]
 Homepage = "https://github.com/metacraft-labs/codetracer-python-recorder/tree/main/codetracer-python-recorder"
 Repository = "https://github.com/metacraft-labs/codetracer-python-recorder"
