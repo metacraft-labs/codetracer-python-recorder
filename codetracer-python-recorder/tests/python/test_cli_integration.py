@@ -451,16 +451,59 @@ def test_env_disabled_skips_recording(tmp_path: Path) -> None:
     reason="ct-print binary not built — run from a workspace with codetracer-trace-format-nim",
 )
 def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
-    """Record a real script and assert structural anchors from ``ct print --json``.
+    """Record a real script and assert exact decoded values via ``ct-print --full``.
 
-    The previous CLI integration suite read ``trace.json`` directly to
-    verify event content; under the CTFS-only contract the recorder no
-    longer writes that file, so we round-trip through ``ct print``
-    instead.  Only structural anchors (script filename + function /
-    variable names) are asserted: the cardano / circom / flow / fuel /
-    leo / miden / move / polkavm precedents document that integer
-    values may not round-trip through every recorder→encoder path, so
-    we deliberately do not assert on them here.
+    This test mirrors the cairo / cardano / circom / flow / fuel / leo /
+    miden / move / polkavm / solana / ton (Int round-trip), evm (Raw
+    byte) and js (String / Raw) precedents — record a real program,
+    then convert the produced CTFS bundle through
+    ``ct-print --full --strip-paths`` to obtain a deterministic JSON
+    oracle with every CBOR ``ValueRecord`` fully decoded.  See
+    ``Recorder-CLI-Conventions.md`` §4 — CTFS-only output, with
+    ``ct print`` as the canonical conversion tool.
+
+    Why exact-value assertions matter: the previous ``--json`` layer
+    only checked for substring presence ("does the trace mention
+    ``make_greeting`` somewhere"), so a recorder regression that
+    silently dropped or corrupted a value would not be caught.  The
+    new ``--full`` layer pins:
+
+      - **Strict ``value.kind`` invariant** — every step var, call arg
+        and return value must decode to one of the known
+        ``ValueRecord`` variants.  A new variant fires the test loudly
+        so the next maintainer can extend the assertion rather than
+        silently weakening it.
+      - **Exact (varname, value) pair assertions** — e.g.
+        ``make_greeting``'s ``target_name`` parameter decodes back to
+        ``ValueRecord::String { text: "world" }`` and its return value
+        is ``ValueRecord::String { text: "hello, world" }``.
+      - **Function / path / counts / call-sequence anchors** — 10 steps,
+        3 calls, 1 io; calls are ``<__main__> → main → make_greeting``;
+        path table contains the canonical fixture; function table
+        contains ``<__main__>``, ``main`` and ``make_greeting``.
+      - **IO event** — a single ``ioStdout`` write of ``"hello, world\\n"``.
+
+    The canonical fixture below exercises:
+
+        def make_greeting(target_name):           # line 1
+            greeting_value = "hello, " + target_name   # line 2
+            return greeting_value                 # line 3
+
+        def main():                               # line 6
+            person_name = "world"                 # line 7
+            result_text = make_greeting(person_name)   # line 8
+            print(result_text)                    # line 9
+
+        if __name__ == "__main__":                # line 12
+            main()                                # line 13
+
+    Each binding must surface in the trace as a step / call_entry event
+    with a decoded ``ValueRecord``.  The Python recorder uses the
+    ``String`` variant for typed string locals / args / return values,
+    and the ``Raw`` variant for non-serialisable / opaque objects
+    (function references, builtins lookups).  Both are valid current
+    behaviour; the strict invariant fires if a brand-new variant
+    appears (e.g. ``BigInt`` support for ``int`` overflow).
     """
     script_body = textwrap.dedent("""\
         def make_greeting(target_name):
@@ -489,24 +532,284 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     trace_ct = _find_ct_file(trace_dir)
 
     ct_print = _ct_print_binary()
+    # ``--strip-paths`` rewrites absolute workdir / tmp prefixes to
+    # placeholders (``<workdir>``, ``<tmpdir>``) so JSON stays
+    # diff-stable across machines and test runs.  The ``--full`` flag
+    # decodes every CBOR ``ValueRecord`` back to a structured JSON
+    # object — without it values would be opaque blobs we could only
+    # substring-match against.
+    #
+    # ``LD_LIBRARY_PATH`` may need to point at zstd's ``.so`` directory
+    # under Nix; callers running outside Nix can pre-set it (or use a
+    # system zstd build).  We deliberately do not paper over a missing
+    # zstd by skipping — that would mask a real environment break.
     proc = subprocess.run(
-        [str(ct_print), "--json", str(trace_ct)],
+        [str(ct_print), "--full", "--strip-paths", str(trace_ct)],
         capture_output=True,
         text=True,
         check=True,
     )
-    haystack = proc.stdout
+    bundle = json.loads(proc.stdout)
 
-    # Structural anchors: the script filename and the function /
-    # variable names we declared above must surface somewhere in the
-    # rendered JSON.  We assert on substrings rather than parsing the
-    # JSON shape because ``ct print``'s schema is allowed to evolve
-    # between releases (we only need a stable convention contract).
-    assert "ct_print_smoke.py" in haystack, (
-        f"script filename not found in ct-print output (first 500 chars): {haystack[:500]!r}"
+    # ------------------------------------------------------------------
+    # Function table — ``<__main__>``, ``main`` and ``make_greeting``.
+    # ------------------------------------------------------------------
+    # The Python recorder names the synthetic top-level frame
+    # ``<__main__>`` (mirrors JS's ``<module>``).  ``ends_with`` checks
+    # stay tolerant of any future namespacing prefix the recorder might
+    # add (e.g. ``mymod::main``).
+    assert any(
+        f.endswith("<__main__>") for f in bundle["functions"]
+    ), f"missing <__main__> in functions: {bundle['functions']!r}"
+    assert any(
+        f.endswith("main") and not f.endswith("<__main__>")
+        for f in bundle["functions"]
+    ), f"missing main in functions: {bundle['functions']!r}"
+    assert any(
+        f.endswith("make_greeting") for f in bundle["functions"]
+    ), f"missing make_greeting in functions: {bundle['functions']!r}"
+
+    # ------------------------------------------------------------------
+    # Path table — the canonical fixture path.
+    # ------------------------------------------------------------------
+    # ``--strip-paths`` rewrites ``/tmp/...`` → ``<tmp>/...`` so the
+    # trailing component is the only stable assertion.
+    assert any(
+        p.endswith("ct_print_smoke.py") for p in bundle["paths"]
+    ), f"missing ct_print_smoke.py in paths: {bundle['paths']!r}"
+
+    # ------------------------------------------------------------------
+    # Counts — stable for the canonical fixture.
+    # ------------------------------------------------------------------
+    # The Python recorder produces a deterministic event count for
+    # this fixture under sys.monitoring instrumentation:
+    #   - 10 step events (module prologue + line-by-line execution
+    #     across <__main__>, main, make_greeting)
+    #   - 3 call entries (<__main__> wrapper, main, make_greeting)
+    #   - 1 io event (the ``print(result_text)`` write to stdout)
+    # If these change, that's a real regression to investigate, not a
+    # flake — pin the values strictly.
+    assert bundle["counts"]["steps"] == 10, (
+        f"expected 10 steps, got {bundle['counts']['steps']}; full counts: {bundle['counts']!r}"
     )
-    for anchor in ("make_greeting", "main", "greeting_value", "result_text"):
-        assert anchor in haystack, (
-            f"expected anchor {anchor!r} in ct-print output; "
-            f"first 500 chars: {haystack[:500]!r}"
+    assert bundle["counts"]["calls"] == 3, (
+        f"expected 3 calls, got {bundle['counts']['calls']}; full counts: {bundle['counts']!r}"
+    )
+    assert bundle["counts"]["io_events"] == 1, (
+        f"expected 1 io_event, got {bundle['counts']['io_events']}; full counts: {bundle['counts']!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # Call sequence — <__main__> → main → make_greeting.
+    # ------------------------------------------------------------------
+    call_sequence = [
+        e["function"] for e in bundle["events"] if e["kind"] == "call_entry"
+    ]
+    assert len(call_sequence) == 3, (
+        f"expected 3 call_entry events, got {len(call_sequence)}: {call_sequence!r}"
+    )
+    assert call_sequence[0].endswith("<__main__>"), (
+        f"first call must enter <__main__>, got {call_sequence[0]!r}"
+    )
+    assert call_sequence[1].endswith("main"), (
+        f"second call must enter main, got {call_sequence[1]!r}"
+    )
+    assert call_sequence[2].endswith("make_greeting"), (
+        f"third call must enter make_greeting, got {call_sequence[2]!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # Strict ValueRecord variant invariant — every step var / call arg
+    # / return value must decode to a known kind.  If a brand-new
+    # variant appears, this fires loudly so the next maintainer
+    # extends the exact-value layer rather than silently accepting it.
+    # ------------------------------------------------------------------
+    allowed_kinds = {
+        "Int",
+        "Float",
+        "String",
+        "Bool",
+        "Raw",
+        "None",
+        "Void",
+        "Sequence",
+        "Struct",
+        "Tuple",
+    }
+
+    def _check_kinds(value: dict, ctx: str) -> None:
+        """Recursively verify ``value.kind`` for nested Sequence / Struct / Tuple."""
+        kind = value.get("kind")
+        assert kind in allowed_kinds, (
+            f"{ctx}: unknown ValueRecord kind={kind!r}; if a new variant has "
+            f"landed for the Python recorder, extend this test to assert on it "
+            f"explicitly rather than weakening the check"
         )
+        for nested in value.get("elements", []) or []:
+            _check_kinds(nested, ctx + ".elements[]")
+        for nested in value.get("field_values", []) or []:
+            _check_kinds(nested, ctx + ".field_values[]")
+
+    for ev in bundle["events"]:
+        if ev["kind"] == "step":
+            for v in ev["vars"]:
+                _check_kinds(
+                    v["value"],
+                    f"step {ev['step_index']} var {v['varname']!r}",
+                )
+        elif ev["kind"] == "call_entry":
+            for a in ev["args"]:
+                _check_kinds(
+                    a["value"],
+                    f"call_entry {ev['function']!r} arg {a['varname']!r}",
+                )
+        elif ev["kind"] == "call_exit":
+            _check_kinds(
+                ev["return_value"],
+                f"call_exit {ev['function']!r} return_value",
+            )
+
+    # ------------------------------------------------------------------
+    # Exact decoded call-arg value: make_greeting(target_name="world").
+    # ------------------------------------------------------------------
+    # The Python recorder uses ``ValueRecord::String`` for typed string
+    # call arguments — ``ct-print --full`` decodes it to
+    # ``{"kind":"String","text":"world",...}``.  This is the Python
+    # analogue of cairo's ``(a, 10)`` Int round-trip.
+    make_greeting_call = next(
+        (
+            e
+            for e in bundle["events"]
+            if e["kind"] == "call_entry" and e["function"].endswith("make_greeting")
+        ),
+        None,
+    )
+    assert make_greeting_call is not None, "no call_entry for make_greeting"
+    target_name_arg = next(
+        (a for a in make_greeting_call["args"] if a["varname"] == "target_name"),
+        None,
+    )
+    assert target_name_arg is not None, (
+        f"make_greeting call_entry missing target_name arg; "
+        f"args={make_greeting_call['args']!r}"
+    )
+    assert target_name_arg["value"]["kind"] == "String", (
+        f"target_name should decode as String, got "
+        f"{target_name_arg['value']['kind']!r}"
+    )
+    assert target_name_arg["value"]["text"] == "world", (
+        f"target_name should be 'world', got "
+        f"{target_name_arg['value'].get('text')!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # Exact decoded return value: make_greeting → "hello, world".
+    # ------------------------------------------------------------------
+    # ``"hello, " + "world"`` returns ``"hello, world"``.  The Python
+    # recorder snapshots the typed string return value via
+    # ``ValueRecord::String`` (not the textual ``Raw`` form the JS
+    # recorder uses).  The strict ``kind === "String"`` invariant
+    # means: if a future recorder upgrade emits a different variant,
+    # this fails loudly.
+    make_greeting_exit = next(
+        (
+            e
+            for e in bundle["events"]
+            if e["kind"] == "call_exit" and e["function"].endswith("make_greeting")
+        ),
+        None,
+    )
+    assert make_greeting_exit is not None, "no call_exit for make_greeting"
+    rv = make_greeting_exit["return_value"]
+    assert rv["kind"] == "String", (
+        f"make_greeting return_value should decode as String, got {rv['kind']!r}"
+    )
+    assert rv["text"] == "hello, world", (
+        f"make_greeting should return 'hello, world', got {rv.get('text')!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # main() returns None — strictly typed.
+    # ------------------------------------------------------------------
+    main_exit = next(
+        (
+            e
+            for e in bundle["events"]
+            if e["kind"] == "call_exit"
+            and e["function"].endswith("main")
+            and not e["function"].endswith("<__main__>")
+        ),
+        None,
+    )
+    assert main_exit is not None, "no call_exit for main"
+    assert main_exit["return_value"]["kind"] == "None", (
+        f"main return_value should decode as None, got "
+        f"{main_exit['return_value']['kind']!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # Exact (varname, value) step-var pairs.
+    # ------------------------------------------------------------------
+    # Collect every (varname, kind, text) triple surfaced by step
+    # events.  The Python recorder snapshots typed string locals via
+    # ``ValueRecord::String`` (so ``person_name = "world"`` and
+    # ``result_text = "hello, world"`` and ``greeting_value =
+    # "hello, world"`` and ``target_name = "world"`` all surface
+    # with the ``String`` kind).  This is the Python analogue of
+    # cairo's ``a=10, b=32, sum_val=42, ...`` round-trip.
+    observed_step_vars: list[tuple[str, str, str | None]] = []
+    for ev in bundle["events"]:
+        if ev["kind"] != "step":
+            continue
+        for v in ev["vars"]:
+            if v["varname"].startswith("__"):
+                # Filter out the dunders the Python module-level frame
+                # surfaces by default (__name__, __file__, ...) — those
+                # are environment-dependent and not part of our
+                # convention contract.
+                continue
+            observed_step_vars.append(
+                (
+                    v["varname"],
+                    v["value"]["kind"],
+                    # Both ``String.text`` and ``Raw.r`` carry textual
+                    # payload — the recorder picks one or the other.
+                    # Accept whichever is populated so the assertion
+                    # stays readable.
+                    v["value"].get("text") or v["value"].get("r"),
+                )
+            )
+
+    expected_step_vars = [
+        # main()'s body bindings.
+        ("person_name", "String", "world"),
+        ("result_text", "String", "hello, world"),
+        # make_greeting()'s body bindings.
+        ("target_name", "String", "world"),
+        ("greeting_value", "String", "hello, world"),
+    ]
+    for want in expected_step_vars:
+        assert want in observed_step_vars, (
+            f"expected step variable {want!r} in --full output; "
+            f"observed = {observed_step_vars!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # IO event — the single ``print(result_text)`` write to stdout.
+    # ------------------------------------------------------------------
+    io_events = [e for e in bundle["events"] if e["kind"] == "io"]
+    assert len(io_events) == 1, (
+        f"expected exactly 1 io event, got {len(io_events)}: {io_events!r}"
+    )
+    io = io_events[0]
+    assert io["io_kind"] == "ioStdout", (
+        f"io event should be ioStdout, got {io['io_kind']!r}"
+    )
+    # ``print`` appends a trailing newline; the recorder captures the
+    # raw bytes written to stdout, so the newline must be present.
+    assert io["text"] == "hello, world\n", (
+        f"io event text should be 'hello, world\\n', got {io['text']!r}"
+    )
+    assert io["bytes_len"] == len("hello, world\n"), (
+        f"io event bytes_len should be {len('hello, world\\n')}, got {io['bytes_len']}"
+    )
