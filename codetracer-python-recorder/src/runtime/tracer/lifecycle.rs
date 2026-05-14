@@ -109,6 +109,12 @@ impl LifecycleController {
         filter: &FilterCoordinator,
         exit_summary: &ExitSummary,
     ) -> RecorderResult<()> {
+        // TF-M7: thread the composed filter chain (builtin → auto-discovered
+        // → env-var → CLI `--trace-filter:`) into the CTFS meta.dat block
+        // BEFORE finish/close.  The Nim writer accumulates entries on the
+        // handle and emits them in `close()`, so we must populate before
+        // finish_*.
+        Self::publish_filter_provenance(writer, filter)?;
         TraceWriter::finish_writing_trace_metadata(writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace metadata")
                 .with_context("source", err.to_string())
@@ -131,6 +137,58 @@ impl LifecycleController {
             enverr!(ErrorCode::Io, "failed to close trace writer")
                 .with_context("source", err.to_string())
         })?;
+        Ok(())
+    }
+
+    /// TF-M7 (spec § 7 / Trace-Filters.md § 7): forward each composed
+    /// filter source's `(path, sha256)` pair to the CTFS writer so the
+    /// resulting `meta.dat` records the filter chain.  Closes the
+    /// regression flagged in `AUDIT-CTFS-2026-05.md`
+    /// § "Known coverage regression — trace-filter chain assertions"
+    /// where the pre-2026-05 JSON sidecar carried this provenance but
+    /// the CTFS-only migration dropped it.
+    ///
+    /// `FilterSummaryEntry::sha256` is hex-encoded by the shared crate;
+    /// we decode it back to the raw 32-byte digest the meta.dat wire
+    /// format expects.  Invalid hex / wrong length would indicate a
+    /// shared-crate bug, not a recorder one — propagate it loudly.
+    fn publish_filter_provenance(
+        writer: &mut dyn TraceWriter,
+        filter: &FilterCoordinator,
+    ) -> RecorderResult<()> {
+        let Some(engine) = filter.engine() else {
+            // Recorder ran without a filter coordinator (e.g. legacy
+            // entry points that pass `None`).  Spec § 7 says do not set
+            // the flag in that case — leave the writer untouched.
+            return Ok(());
+        };
+        let summary = engine.summary();
+        if summary.entries.is_empty() {
+            // Spec § 7: a filter-aware recorder with an empty chain
+            // SHOULD still emit a present-but-empty provenance block to
+            // distinguish "did not record" from "recorded empty".
+            writer.record_empty_filter_provenance().map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to record empty filter provenance")
+                    .with_context("source", err.to_string())
+            })?;
+            return Ok(());
+        }
+        for entry in &summary.entries {
+            let raw = decode_sha256_hex(&entry.sha256).map_err(|err| {
+                enverr!(ErrorCode::Unknown, "invalid sha256 hex in filter summary")
+                    .with_context("path", entry.path.display().to_string())
+                    .with_context("sha256", entry.sha256.clone())
+                    .with_context("source", err)
+            })?;
+            let path_str = entry.path.to_string_lossy();
+            writer
+                .add_filter_provenance(path_str.as_ref(), &raw)
+                .map_err(|err| {
+                    enverr!(ErrorCode::Io, "failed to record filter provenance")
+                        .with_context("path", path_str.into_owned())
+                        .with_context("source", err.to_string())
+                })?;
+        }
         Ok(())
     }
 
@@ -192,71 +250,22 @@ impl LifecycleController {
         }
     }
 
-    fn append_filter_metadata(&self, filter: &FilterCoordinator) -> RecorderResult<()> {
-        let Some(outputs) = &self.output_paths else {
-            return Ok(());
-        };
-        let Some(engine) = filter.engine() else {
-            return Ok(());
-        };
-
-        let path = outputs.metadata();
-        // With the Nim CTFS writer, metadata lives inside the .ct container file
-        // rather than as a separate JSON file. Skip gracefully if it doesn't exist.
-        if !path.exists() {
-            return Ok(());
-        }
-        let original = fs::read_to_string(path).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to read trace metadata")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        let mut metadata: serde_json::Value = serde_json::from_str(&original).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to parse trace metadata JSON")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        let filters = engine.summary();
-        let filters_json: Vec<serde_json::Value> = filters
-            .entries
-            .iter()
-            .map(|entry| {
-                json!({
-                    "path": entry.path.to_string_lossy(),
-                    "sha256": entry.sha256,
-                    "name": entry.name,
-                    "version": entry.version,
-                })
-            })
-            .collect();
-
-        if let serde_json::Value::Object(ref mut obj) = metadata {
-            obj.insert(
-                "trace_filter".to_string(),
-                json!({
-                    "filters": filters_json,
-                    "stats": filter.summary_json(),
-                }),
-            );
-            let serialised = serde_json::to_string(&metadata).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to serialise trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            fs::write(path, serialised).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to write trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            Ok(())
-        } else {
-            Err(
-                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
-                    .with_context("path", path.display().to_string()),
-            )
-        }
+    fn append_filter_metadata(&self, _filter: &FilterCoordinator) -> RecorderResult<()> {
+        // TF-M7: the trace-filter chain is now written into the CTFS
+        // `meta.dat` block by `publish_filter_provenance` (called
+        // earlier in `finalise`).  The pre-CTFS-migration sidecar
+        // approach this function used to take is no longer reachable —
+        // `outputs.metadata()` does not exist as a separate file under
+        // the CTFS-only contract.  Per-event filter *stats* (counts of
+        // skipped scopes, redacted values, …) are still a useful
+        // observability surface but the wire format spec § 7 explicitly
+        // limits meta.dat to *provenance* (path + sha256) so we drop
+        // the `stats` sidecar write rather than re-emit it under a key
+        // that doesn't survive into the materializer.  If we ever
+        // need recorder-side filter stats again, the right path is a
+        // CTFS internal file (e.g. `filter_stats.json`) rather than
+        // overloading meta.dat.
+        Ok(())
     }
 
     fn set_trace_id_active(&self) {
@@ -267,6 +276,46 @@ impl LifecycleController {
         self.set_trace_id_active();
         TraceIdScope
     }
+}
+
+/// TF-M7: decode a 64-character lowercase hex string (the shared
+/// `codetracer_trace_filter` crate's canonical encoding for
+/// `FilterSummaryEntry::sha256`) back into the raw 32-byte digest that
+/// the CTFS `meta.dat` wire format expects.  Returns an error string
+/// (not a structured `RecorderResult`) so the call site can layer its
+/// own diagnostic context onto the failure.  Wrong length or
+/// non-hexadecimal characters are caller-visible bugs in the shared
+/// crate; we surface them rather than silently truncate / pad.
+fn decode_sha256_hex(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err(format!(
+            "expected 64 hex characters, got {len}",
+            len = hex.len()
+        ));
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let high = match chunk[0] {
+            b'0'..=b'9' => chunk[0] - b'0',
+            b'a'..=b'f' => chunk[0] - b'a' + 10,
+            b'A'..=b'F' => chunk[0] - b'A' + 10,
+            b => return Err(format!("invalid hex byte 0x{:02x} at index {}", b, i * 2)),
+        };
+        let low = match chunk[1] {
+            b'0'..=b'9' => chunk[1] - b'0',
+            b'a'..=b'f' => chunk[1] - b'a' + 10,
+            b'A'..=b'F' => chunk[1] - b'A' + 10,
+            b => {
+                return Err(format!(
+                    "invalid hex byte 0x{:02x} at index {}",
+                    b,
+                    i * 2 + 1
+                ))
+            }
+        };
+        out[i] = (high << 4) | low;
+    }
+    Ok(out)
 }
 
 /// Guard that clears the active trace id when dropped.

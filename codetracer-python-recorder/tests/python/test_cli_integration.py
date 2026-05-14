@@ -141,17 +141,61 @@ def test_cli_emits_trace_artifacts(tmp_path: Path) -> None:
     assert magic == _CTFS_MAGIC, f"Invalid CTFS magic: {magic.hex()}"
 
 
-def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
-    """Smoke test: --trace-filter is accepted and the recording succeeds.
+def _extract_trace_filter_paths_from_ct(trace_ct: Path) -> list[str]:
+    """Run ``ct print --full`` on ``trace_ct`` and return the ordered
+    list of ``metadata.trace_filter.filters[].path`` strings.
 
-    Pre-2026-05 this test asserted on the trace-filter chain via the
-    ``trace_metadata.json`` sidecar produced by ``--format json``.
-    Under the CTFS-only contract the metadata sidecar is no longer
-    written separately (it is embedded in the CTFS container), so the
-    chain-content assertion has been moved to the API-level tests in
-    ``test_monitoring_events.py`` (which still exercise the JSON event
-    stream directly).  At the CLI layer we just verify that the
-    explicit-and-default-filter combo doesn't break recording.
+    TF-M7 (spec § 7 / Trace-Filters.md § 7): the CTFS ``meta.dat``
+    block now carries the active filter chain.  Materialising via
+    ``ct-print --full`` is the canonical way to inspect it — this
+    function is the test-side counterpart of the recorder's
+    ``publish_filter_provenance`` (see
+    ``src/runtime/tracer/lifecycle.rs``).
+
+    Raises an ``AssertionError`` with the raw output when the JSON
+    shape is unexpected so failures localise to either the writer
+    side (chain not recorded), the reader side (parser regression),
+    or the materializer (key shape changed).
+    """
+    ct_print = _ct_print_binary()
+    assert ct_print.exists(), f"ct-print binary missing at {ct_print}"
+    result = subprocess.run(
+        [str(ct_print), "--full", str(trace_ct)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    doc = json.loads(result.stdout)
+    metadata = doc.get("metadata")
+    assert isinstance(metadata, dict), f"metadata missing from ct-print output: {result.stdout[:400]}"
+    trace_filter = metadata.get("trace_filter")
+    assert isinstance(trace_filter, dict), (
+        "metadata.trace_filter missing from ct-print output — "
+        "recorder failed to embed the chain in meta.dat. "
+        f"Full metadata: {json.dumps(metadata)[:600]}"
+    )
+    filters = trace_filter.get("filters")
+    assert isinstance(filters, list), f"trace_filter.filters not a list: {trace_filter}"
+    return [entry["path"] for entry in filters]
+
+
+def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
+    """TF-M7 (AUDIT regression): the recorder embeds the composed
+    trace-filter chain in CTFS meta.dat so post-trace audit tooling
+    can verify which TOML files drove the recording.
+
+    This test was softened to a smoke test during the CTFS-only
+    migration (see ``AUDIT-CTFS-2026-05.md`` § "Known coverage
+    regression — trace-filter chain assertions").  Pre-2026-05 it
+    asserted the same shape against the ``trace_metadata.json``
+    sidecar produced by ``--format json``; that sidecar no longer
+    exists.  Under TF-M7 the recorder publishes the chain via the
+    Nim FFI's ``trace_writer_add_filter_provenance`` (see
+    ``src/runtime/tracer/lifecycle.rs::publish_filter_provenance``),
+    `meta.dat` carries it under flag bit 3, and ``ct-print --full``
+    materializes it as ``metadata.trace_filter.filters[]``.  The
+    assertion is back to the original shape, just sourced from
+    `meta.dat` instead of the legacy JSON sidecar.
     """
     script = tmp_path / "program.py"
     _write_script(script, "print('filter test')\n")
@@ -205,11 +249,44 @@ def test_cli_honours_trace_filter_chain(tmp_path: Path) -> None:
     assert result.returncode == 0
     # The CTFS container must exist; the recorder fails loudly if any
     # filter file is invalid or unreachable.
-    _find_ct_file(trace_dir)
+    trace_ct = _find_ct_file(trace_dir)
+
+    # AUDIT regression assertion (restored 2026-05-14 by TF-M7).
+    # Expected composition order per spec § 5:
+    #   1. builtin default       (`<inline:builtin-default>`)
+    #   2. auto-discovered file  (`.codetracer/trace-filter.toml`)
+    #   3. CLI --trace-filter:   (override-filter.toml)
+    chain = _extract_trace_filter_paths_from_ct(trace_ct)
+    assert chain[0] == "<inline:builtin-default>", (
+        f"first entry MUST be the builtin sentinel per spec § 5; got: {chain}"
+    )
+    # The default filter path is the absolute path the recorder
+    # walked up to from the script's directory.
+    assert any(entry == str(default_filter) for entry in chain), (
+        f"auto-discovered .codetracer/trace-filter.toml must appear in chain; got: {chain}"
+    )
+    assert any(entry == str(override_filter) for entry in chain), (
+        f"explicit --trace-filter override must appear in chain; got: {chain}"
+    )
+    # Composition order: default filter (auto-discovered) appears before
+    # the CLI override per spec § 5 (CLI args are layer 4, after env, after
+    # auto-discovery, after builtin).
+    default_idx = chain.index(str(default_filter))
+    override_idx = chain.index(str(override_filter))
+    assert default_idx < override_idx, (
+        f"auto-discovered filter (layer 2) must precede CLI filter (layer 4); got: {chain}"
+    )
 
 
 def test_cli_honours_env_trace_filter(tmp_path: Path) -> None:
-    """Smoke test: ``CODETRACER_TRACE_FILTER`` is accepted by the auto-start CLI path."""
+    """TF-M7 (AUDIT regression): ``CODETRACER_TRACE_FILTER`` filter
+    files are recorded in the CTFS meta.dat provenance chain.
+
+    Restored from smoke-test state per AUDIT-CTFS-2026-05.md § "Known
+    coverage regression — trace-filter chain assertions".  See the
+    sibling ``test_cli_honours_trace_filter_chain`` docstring for the
+    full rationale; this variant exercises the env-var loading path
+    rather than the CLI flag path."""
     script = tmp_path / "program.py"
     _write_script(script, "print('env filter test')\n")
 
@@ -238,7 +315,20 @@ def test_cli_honours_env_trace_filter(tmp_path: Path) -> None:
 
     result = _run_cli(["--out-dir", str(trace_dir), str(script)], cwd=tmp_path, env=env)
     assert result.returncode == 0
-    _find_ct_file(trace_dir)
+    trace_ct = _find_ct_file(trace_dir)
+
+    # AUDIT regression assertion (restored 2026-05-14 by TF-M7).
+    # Expected chain per spec § 5: builtin-default first, then the
+    # env-var-loaded filter (layer 3).  We do NOT auto-discover any
+    # `.codetracer/trace-filter.toml` here because the script lives
+    # in a fresh tmp_path without one.
+    chain = _extract_trace_filter_paths_from_ct(trace_ct)
+    assert chain[0] == "<inline:builtin-default>", (
+        f"first entry MUST be the builtin sentinel per spec § 5; got: {chain}"
+    )
+    assert any(entry == str(filter_path) for entry in chain), (
+        f"env-var-loaded filter must appear in chain; got: {chain}"
+    )
 
 
 def test_ctfs_trace_has_steps(tmp_path: Path) -> None:
