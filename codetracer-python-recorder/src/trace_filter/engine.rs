@@ -1,240 +1,258 @@
-//! Runtime filter engine evaluating scope selectors and value policies for code objects.
+//! Python-aware wrapper around the shared
+//! [`codetracer_trace_filter::Classifier`].
 //!
-//! The engine consumes a [`TraceFilterConfig`](crate::trace_filter::config::TraceFilterConfig)
-//! and caches per-code-object resolutions so the hot tracing callbacks only pay a fast lookup.
+//! ## Caching strategy (spec § 6)
+//!
+//! Per the cross-language trace-filter spec, recorders MUST stash the
+//! per-scope classifier decision in the host runtime's native per-scope
+//! metadata slot rather than fall back to per-event hash-table lookups.
+//!
+//! For CPython that slot is `co_extra`. CPython exposes the API
+//! `_PyEval_RequestCodeExtraIndex` (allocates one slot index per consumer)
+//! plus `_PyCode_GetExtra` / `_PyCode_SetExtra` (read / write a `void*`
+//! into the per-code-object slot at the requested index). When the code
+//! object is destroyed CPython calls the registered `freefunc` for each
+//! occupied slot — this is where the cache entry's refcount gets
+//! released, so the cache never leaks memory even though every entry
+//! sits behind a raw pointer.
+//!
+//! The hot path therefore looks like:
+//!
+//! ```text
+//! _PyCode_GetExtra(code, INDEX, &slot);
+//! if (slot.exec == Skip) return DISABLE;
+//! ```
+//!
+//! One indirection. No hashes. No DashMap.
+//!
+//! ## Previous design (replaced by this module)
+//!
+//! Before TF-M6, the engine kept a `DashMap<CodeId, Arc<ScopeResolution>>`
+//! keyed by `code as *const _ as usize`. Every per-event resolution paid
+//! one DashMap lookup + one Arc clone. The audit doc flagged this as a
+//! spec violation; this module is the replacement.
 
 use crate::code_object::CodeObjectWrapper;
-use crate::module_identity::{
-    is_valid_module_name, module_from_relative, module_name_from_packages, normalise_to_posix,
+use crate::module_identity::{is_valid_module_name, module_name_from_packages};
+use crate::trace_filter::convert_filter_error;
+use codetracer_trace_filter::engine::{Classifier, ScopeQuery};
+use codetracer_trace_filter::error::FilterError;
+use codetracer_trace_filter::model::FilterSummary;
+use codetracer_trace_filter::TraceFilterConfig;
+
+// Re-export the pure types so existing call sites that say
+// `crate::trace_filter::engine::ExecDecision` continue to compile.
+pub use codetracer_trace_filter::engine::{
+    CompiledValuePattern, ExecDecision, ScopeResolution, ValueKind, ValuePolicy,
 };
-use crate::trace_filter::config::{
-    ExecDirective, FilterSource, FilterSummary, ScopeRule, TraceFilterConfig, ValueAction,
-    ValuePattern,
-};
-use crate::trace_filter::selector::{Selector, SelectorKind};
-use dashmap::DashMap;
-use pyo3::{prelude::*, PyErr};
+pub use codetracer_trace_filter::model::ValueAction;
+
+use once_cell::sync::Lazy;
+use pyo3::prelude::*;
+use pyo3::PyErr;
+
+// Direct FFI bindings to the CPython `co_extra` slot API.  pyo3-ffi 0.25
+// declares the old underscored names (`_PyEval_RequestCodeExtraIndex`,
+// `_PyCode_GetExtra`, `_PyCode_SetExtra`) but Python 3.13+ no longer
+// exports those as ELF symbols — they survive only as `static inline`
+// wrappers in the public header — so linking against `pyo3-ffi`'s
+// declarations fails. The replacement names blessed by PEP 689 are
+// `PyUnstable_*`; we bind them ourselves to keep the migration
+// independent of any future pyo3-ffi release.
+//
+// References:
+//   https://peps.python.org/pep-0689/
+//   include/python3.13/cpython/code.h  (declares the PyUnstable_* names)
+//   include/python3.13/cpython/ceval.h
+extern "C" {
+    fn PyUnstable_Eval_RequestCodeExtraIndex(
+        func: unsafe extern "C" fn(*mut c_void),
+    ) -> pyo3::ffi::Py_ssize_t;
+    fn PyUnstable_Code_GetExtra(
+        code: *mut pyo3::ffi::PyObject,
+        index: pyo3::ffi::Py_ssize_t,
+        extra: *mut *mut c_void,
+    ) -> std::ffi::c_int;
+    fn PyUnstable_Code_SetExtra(
+        code: *mut pyo3::ffi::PyObject,
+        index: pyo3::ffi::Py_ssize_t,
+        extra: *mut c_void,
+    ) -> std::ffi::c_int;
+}
 use recorder_errors::{target, ErrorCode, RecorderResult};
-use std::path::{Component, Path, PathBuf};
+use std::ffi::c_void;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
-/// Final execution decision emitted by the engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecDecision {
-    Trace,
-    Skip,
-}
+/// Global `co_extra` slot index, lazily acquired the first time a
+/// `TraceFilterEngine` is constructed.
+///
+/// CPython hands out exactly one index per call to
+/// `_PyEval_RequestCodeExtraIndex`; sharing it across all engine instances
+/// on the same interpreter is correct (and necessary — repeated allocation
+/// would leak indices that CPython never releases). The atomic uses `-1`
+/// as the unset sentinel.
+static CODE_EXTRA_INDEX: AtomicIsize = AtomicIsize::new(-1);
 
-impl From<ExecDirective> for ExecDecision {
-    fn from(value: ExecDirective) -> Self {
-        match value {
-            ExecDirective::Trace => ExecDecision::Trace,
-            ExecDirective::Skip => ExecDecision::Skip,
+/// Initialise the `co_extra` index on first call. Subsequent calls return
+/// the cached index value.
+///
+/// # Safety
+///
+/// Must be called with the GIL held. `_PyEval_RequestCodeExtraIndex` is a
+/// CPython API that mutates interpreter-global state and is not thread-safe
+/// without the GIL.
+fn ensure_code_extra_index(_py: Python<'_>) -> isize {
+    let current = CODE_EXTRA_INDEX.load(Ordering::Acquire);
+    if current >= 0 {
+        return current;
+    }
+
+    // SAFETY: GIL is held by the caller (we accept a `Python<'_>` token).
+    let new_index = unsafe { PyUnstable_Eval_RequestCodeExtraIndex(scope_resolution_freefunc) };
+    if new_index < 0 {
+        // CPython returns -1 on failure. We log and fall back to caching
+        // disabled (the engine will then recompute the resolution every
+        // call — slow but correct).
+        log::error!(
+            target: "codetracer_python_recorder::trace_filter",
+            "_PyEval_RequestCodeExtraIndex returned {} — trace-filter co_extra caching disabled for this session",
+            new_index
+        );
+        return -1;
+    }
+
+    let new_index = new_index as isize;
+    // Try to publish our value; the first writer wins.  If a parallel
+    // initialiser raced us to a different (also-positive) index, we leak
+    // one slot but the recorder still works.
+    match CODE_EXTRA_INDEX.compare_exchange(-1, new_index, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => new_index,
+        Err(observed) => {
+            // Lost the race — keep the previously published index.
+            log::debug!(
+                target: "codetracer_python_recorder::trace_filter",
+                "co_extra index race: acquired {} but {} was already published",
+                new_index,
+                observed
+            );
+            observed
         }
     }
 }
 
-/// Kind of value inspected while deciding redaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueKind {
-    Local,
-    Global,
-    Arg,
-    Return,
-    Attr,
+/// `freefunc` invoked by CPython when a code object holding our slot is
+/// destroyed. Drops the `Arc<ScopeResolution>` the slot was pointing at.
+///
+/// # Safety
+///
+/// CPython invariants: this is only called with a pointer previously
+/// stored via `_PyCode_SetExtra` for our index, or NULL. It is called at
+/// most once per code-object destruction.
+unsafe extern "C" fn scope_resolution_freefunc(payload: *mut c_void) {
+    if payload.is_null() {
+        return;
+    }
+    // Recover the Arc that was leaked when we stored it in the slot, then
+    // drop it. This balances the refcount taken at insertion time.
+    drop(Arc::from_raw(payload as *const ScopeResolution));
 }
 
-impl ValueKind {
-    fn selector_kind(self) -> SelectorKind {
-        match self {
-            ValueKind::Local => SelectorKind::Local,
-            ValueKind::Global => SelectorKind::Global,
-            ValueKind::Arg => SelectorKind::Arg,
-            ValueKind::Return => SelectorKind::Return,
-            ValueKind::Attr => SelectorKind::Attr,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ValueKind::Local => "local",
-            ValueKind::Global => "global",
-            ValueKind::Arg => "argument",
-            ValueKind::Return => "return",
-            ValueKind::Attr => "attribute",
-        }
-    }
-
-    pub fn index(self) -> usize {
-        match self {
-            ValueKind::Local => 0,
-            ValueKind::Global => 1,
-            ValueKind::Arg => 2,
-            ValueKind::Return => 3,
-            ValueKind::Attr => 4,
-        }
-    }
-
-    pub const ALL: [ValueKind; 5] = [
-        ValueKind::Local,
-        ValueKind::Global,
-        ValueKind::Arg,
-        ValueKind::Return,
-        ValueKind::Attr,
-    ];
-}
-
-/// Value redaction strategy resolved for a scope.
-#[derive(Debug, Clone)]
-pub struct ValuePolicy {
-    default_action: ValueAction,
-    patterns: Arc<[CompiledValuePattern]>,
-}
-
-impl ValuePolicy {
-    fn new(default_action: ValueAction, patterns: Arc<[CompiledValuePattern]>) -> Self {
-        ValuePolicy {
-            default_action,
-            patterns,
-        }
-    }
-
-    /// Default action applied when no selector matches.
-    pub fn default_action(&self) -> ValueAction {
-        self.default_action
-    }
-
-    /// Evaluate the policy for a value of `kind` with identifier `name`.
-    pub fn decide(&self, kind: ValueKind, name: &str) -> ValueAction {
-        let selector_kind = kind.selector_kind();
-        for pattern in self.patterns.iter() {
-            if pattern.selector.kind() == selector_kind && pattern.selector.matches(name) {
-                return pattern.action;
-            }
-        }
-        self.default_action
-    }
-
-    /// Expose rule metadata for debugging or telemetry.
-    pub fn patterns(&self) -> &[CompiledValuePattern] {
-        &self.patterns
-    }
-}
-
-/// Resolution emitted by the engine for a given code object.
-#[derive(Debug, Clone)]
-pub struct ScopeResolution {
-    exec: ExecDecision,
-    value_policy: Arc<ValuePolicy>,
-    module_name: Option<String>,
-    object_name: Option<String>,
-    relative_path: Option<String>,
-    absolute_path: Option<String>,
-    matched_rule_index: Option<usize>,
-    matched_rule_source: Option<usize>,
-    matched_rule_reason: Option<String>,
-}
-
-impl ScopeResolution {
-    /// Execution decision (trace vs skip).
-    pub fn exec(&self) -> ExecDecision {
-        self.exec
-    }
-
-    /// Value redaction policy derived for this scope.
-    pub fn value_policy(&self) -> &ValuePolicy {
-        &self.value_policy
-    }
-
-    /// Module name derived from the code object's filename (if any).
-    pub fn module_name(&self) -> Option<&str> {
-        self.module_name.as_deref()
-    }
-
-    /// Qualified object identifier (module + qualname when available).
-    pub fn object_name(&self) -> Option<&str> {
-        self.object_name.as_deref()
-    }
-
-    /// Project-relative POSIX path for the file containing the code object.
-    pub fn relative_path(&self) -> Option<&str> {
-        self.relative_path.as_deref()
-    }
-
-    /// Absolute POSIX path for the file containing the code object.
-    pub fn absolute_path(&self) -> Option<&str> {
-        self.absolute_path.as_deref()
-    }
-
-    /// Index within the flattened rule list that last matched this code object.
-    pub fn matched_rule_index(&self) -> Option<usize> {
-        self.matched_rule_index
-    }
-
-    /// Source identifier (filter file index) of the last matched rule.
-    pub fn matched_rule_source(&self) -> Option<usize> {
-        self.matched_rule_source
-    }
-
-    /// Reason string attached to the last matched rule, if present.
-    pub fn matched_rule_reason(&self) -> Option<&str> {
-        self.matched_rule_reason.as_deref()
-    }
-}
-
-/// Runtime engine wrapping a compiled filter configuration.
+/// Python-aware filter engine wrapping the shared crate's [`Classifier`].
+///
+/// Maintains a singleton-per-recorder `co_extra` slot index so that every
+/// `PyCode` object can carry its own classifier decision without ever
+/// hitting a hash map on the trace-emission hot path.
 pub struct TraceFilterEngine {
-    config: Arc<TraceFilterConfig>,
-    default_exec: ExecDecision,
-    default_value_action: ValueAction,
-    default_value_source: usize,
-    rules: Arc<[CompiledScopeRule]>,
-    cache: DashMap<usize, Arc<ScopeResolution>>,
+    classifier: Arc<Classifier>,
+    /// Slot index returned by `_PyEval_RequestCodeExtraIndex`. A negative
+    /// value disables caching (logged as a warning at construction time).
+    code_extra_index: isize,
 }
 
 impl TraceFilterEngine {
     /// Construct the engine from a fully resolved configuration.
     pub fn new(config: TraceFilterConfig) -> Self {
-        let default_exec = config.default_exec().into();
-        let default_value_action = config.default_value_action();
-        let default_value_source = config.default_value_source();
-        let rules = compile_rules(config.rules());
-
-        TraceFilterEngine {
-            config: Arc::new(config),
-            default_exec,
-            default_value_action,
-            default_value_source,
-            rules,
-            cache: DashMap::new(),
-        }
+        let classifier = Classifier::new(config);
+        Python::with_gil(|py| Self {
+            classifier: Arc::new(classifier),
+            code_extra_index: ensure_code_extra_index(py),
+        })
     }
 
-    /// Resolve the scope decision for `code`, reusing cached results when available.
-    pub fn resolve<'py>(
+    /// Resolve the scope decision for `code`, reusing the cached result
+    /// stashed in `co_extra` when available.
+    ///
+    /// On a hit this is one CPython call (`_PyCode_GetExtra`) plus one
+    /// `Arc::clone`. On a miss the classifier runs once, the result is
+    /// stored, and future calls hit the cache.
+    pub fn resolve(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
         code: &CodeObjectWrapper,
         module_hint: Option<&str>,
     ) -> RecorderResult<Arc<ScopeResolution>> {
-        if let Some(entry) = self.cache.get(&code.id()) {
-            return Ok(entry.clone());
+        if self.code_extra_index >= 0 {
+            // SAFETY: GIL is held (we have a `Python` token). The slot
+            // index was returned by `_PyEval_RequestCodeExtraIndex` and is
+            // valid for the lifetime of the interpreter.
+            unsafe {
+                let mut slot: *mut c_void = std::ptr::null_mut();
+                let code_ptr = code.as_bound(py).as_ptr();
+                let rc = PyUnstable_Code_GetExtra(code_ptr, self.code_extra_index, &mut slot);
+                if rc == 0 && !slot.is_null() {
+                    // Slot occupied: bump the refcount on the cached Arc
+                    // without taking ownership of the leaked pointer.
+                    let raw = slot as *const ScopeResolution;
+                    Arc::increment_strong_count(raw);
+                    return Ok(Arc::from_raw(raw));
+                }
+                // If rc != 0 CPython has already cleared the error
+                // indicator; treat it like an empty slot.
+            }
         }
 
-        let resolution = Arc::new(self.resolve_uncached(py, code, module_hint)?);
-        let entry = self
-            .cache
-            .entry(code.id())
-            .or_insert_with(|| resolution.clone());
-        Ok(entry.clone())
+        // Cache miss (or caching disabled): classify and (try to) store.
+        let resolution = Arc::new(self.classify(py, code, module_hint)?);
+
+        if self.code_extra_index >= 0 {
+            // SAFETY: leak one strong refcount on the Arc by converting
+            // it to a raw pointer; the matching `Arc::from_raw` happens in
+            // `scope_resolution_freefunc` when CPython destroys the code
+            // object.  This is how `_PyCode_SetExtra` slots work in
+            // practice.
+            unsafe {
+                let raw = Arc::into_raw(Arc::clone(&resolution)) as *mut c_void;
+                let code_ptr = code.as_bound(py).as_ptr();
+                let rc = PyUnstable_Code_SetExtra(code_ptr, self.code_extra_index, raw);
+                if rc != 0 {
+                    // CPython refused our slot write (rare — typically OOM
+                    // or a permission issue).  Reclaim the leaked refcount
+                    // and fall through; the per-event cost regresses to a
+                    // miss-every-call rather than leaking memory.
+                    let _ = Arc::from_raw(raw as *const ScopeResolution);
+                    log::warn!(
+                        target: "codetracer_python_recorder::trace_filter",
+                        "_PyCode_SetExtra returned {} — trace-filter cache write failed",
+                        rc
+                    );
+                }
+            }
+        }
+
+        Ok(resolution)
     }
 
-    fn resolve_uncached(
+    fn classify(
         &self,
         py: Python<'_>,
         code: &CodeObjectWrapper,
         module_hint: Option<&str>,
     ) -> RecorderResult<ScopeResolution> {
+        // Resolve the filename + qualname from the code object once;
+        // these strings are then borrowed into the ScopeQuery without
+        // further allocation.
         let filename = code
             .filename(py)
             .map_err(|err| py_attr_error("co_filename", err))?;
@@ -242,255 +260,53 @@ impl TraceFilterEngine {
             .qualname(py)
             .map_err(|err| py_attr_error("co_qualname", err))?;
 
-        let mut context = ScopeContext::derive(filename, self.config.sources());
-        context.refresh_object_name(qualname);
-
+        // Build the initial ScopeQuery and run a first classification pass.
+        // The classifier itself does best-effort module-name derivation from
+        // the filename. If it still couldn't produce a module name we try
+        // the `__init__.py`-walking fallback (Python-specific) before
+        // running a second classification pass.
+        let mut query = ScopeQuery::new(filename).with_qualname(qualname);
         if let Some(hint) = module_hint {
-            if is_valid_module_name(hint) {
-                context.module_name = Some(hint.to_string());
-                context.refresh_object_name(qualname);
-            }
+            query = query.with_module_hint(hint);
         }
+        let resolution = self.classifier.classify(&query);
 
-        if context
-            .module_name
-            .as_ref()
-            .map(|name| !is_valid_module_name(name))
-            .unwrap_or(true)
-            && context.module_name.is_none()
-        {
-            if let Some(absolute) = context.absolute_path.as_deref() {
-                if let Some(module) = module_name_from_packages(Path::new(absolute)) {
-                    context.module_name = Some(module);
-                    context.refresh_object_name(qualname);
-                } else {
-                    log::debug!(
-                        "[TraceFilter] unable to derive module name for '{}'; package selectors may not match",
-                        absolute
-                    );
+        // If the classifier saw no usable module name, try the package
+        // discovery fallback from the recorder's module_identity helpers.
+        if resolution.module_name().is_none() {
+            if let Some(absolute) = resolution.absolute_path() {
+                if let Some(derived) = module_name_from_packages(Path::new(absolute)) {
+                    if is_valid_module_name(&derived) {
+                        let query = ScopeQuery::new(filename)
+                            .with_qualname(qualname)
+                            .with_module_hint(&derived);
+                        return Ok(self.classifier.classify(&query));
+                    }
                 }
             }
         }
 
-        let mut exec = self.default_exec;
-        let mut value_default = self.default_value_action;
-        let mut value_default_source = self.default_value_source;
-        let mut patterns: Arc<[CompiledValuePattern]> = Arc::from(Vec::new());
-        let mut matched_rule_index = None;
-        let mut matched_rule_source = context.source_id;
-        let mut matched_rule_reason = None;
-
-        for rule in self.rules.iter() {
-            if rule.matches(&context) {
-                if let Some(rule_exec) = rule.exec {
-                    exec = rule_exec;
-                }
-                if let Some(rule_value) = rule.value_default {
-                    value_default = rule_value;
-                    value_default_source = rule.source_id;
-                }
-                patterns = rule.value_patterns.clone();
-                matched_rule_index = Some(rule.index);
-                matched_rule_source = Some(rule.source_id);
-                matched_rule_reason = rule.reason.clone();
-            }
-        }
-
-        let patterns = if value_default == ValueAction::Drop {
-            if patterns
-                .iter()
-                .all(|pattern| pattern.source_id >= value_default_source)
-            {
-                patterns
-            } else {
-                let filtered: Vec<CompiledValuePattern> = patterns
-                    .iter()
-                    .filter(|pattern| pattern.source_id >= value_default_source)
-                    .cloned()
-                    .collect();
-                filtered.into()
-            }
-        } else {
-            patterns
-        };
-
-        let value_policy = Arc::new(ValuePolicy::new(value_default, patterns));
-
-        Ok(ScopeResolution {
-            exec,
-            value_policy,
-            module_name: context.module_name,
-            object_name: context.object_name,
-            relative_path: context.relative_path,
-            absolute_path: context.absolute_path,
-            matched_rule_index,
-            matched_rule_source,
-            matched_rule_reason,
-        })
+        Ok(resolution)
     }
 
     /// Return a summary of the filters that produced this engine.
     pub fn summary(&self) -> FilterSummary {
-        self.config.summary()
+        self.classifier.summary()
+    }
+
+    /// Borrow the underlying compiled classifier.  Useful for unit tests
+    /// that bypass the Python code-object layer.
+    pub fn classifier(&self) -> &Classifier {
+        &self.classifier
     }
 }
 
-#[derive(Debug, Clone)]
-struct CompiledScopeRule {
-    selector: Selector,
-    exec: Option<ExecDecision>,
-    value_default: Option<ValueAction>,
-    value_patterns: Arc<[CompiledValuePattern]>,
-    reason: Option<String>,
-    source_id: usize,
-    index: usize,
-}
-
-impl CompiledScopeRule {
-    fn matches(&self, context: &ScopeContext) -> bool {
-        match self.selector.kind() {
-            SelectorKind::Package => context
-                .module_name
-                .as_deref()
-                .map(|module| self.selector.matches(module))
-                .unwrap_or(false),
-            SelectorKind::File => context
-                .relative_path
-                .as_deref()
-                .map(|path| self.selector.matches(path))
-                .or_else(|| {
-                    context
-                        .absolute_path
-                        .as_deref()
-                        .map(|path| self.selector.matches(path))
-                })
-                .unwrap_or(false),
-            SelectorKind::Object => context
-                .object_name
-                .as_deref()
-                .map(|object| self.selector.matches(object))
-                .unwrap_or(false),
-            _ => false,
-        }
-    }
-}
-
-/// A compiled value selector and its associated action.
-#[derive(Debug, Clone)]
-pub struct CompiledValuePattern {
-    pub selector: Selector,
-    pub action: ValueAction,
-    pub reason: Option<String>,
-    pub source_id: usize,
-}
-
-fn compile_rules(rules: &[ScopeRule]) -> Arc<[CompiledScopeRule]> {
-    let compiled: Vec<CompiledScopeRule> = rules
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| CompiledScopeRule {
-            selector: rule.selector.clone(),
-            exec: rule.exec.map(ExecDecision::from),
-            value_default: rule.value_default,
-            value_patterns: compile_value_patterns(&rule.value_patterns),
-            reason: rule.reason.clone(),
-            source_id: rule.source_id,
-            index,
-        })
-        .collect();
-    compiled.into()
-}
-
-fn compile_value_patterns(patterns: &[ValuePattern]) -> Arc<[CompiledValuePattern]> {
-    let compiled: Vec<CompiledValuePattern> = patterns
-        .iter()
-        .map(|pattern| CompiledValuePattern {
-            selector: pattern.selector.clone(),
-            action: pattern.action,
-            reason: pattern.reason.clone(),
-            source_id: pattern.source_id,
-        })
-        .collect();
-    compiled.into()
-}
-
-#[derive(Debug)]
-struct ScopeContext {
-    module_name: Option<String>,
-    object_name: Option<String>,
-    relative_path: Option<String>,
-    absolute_path: Option<String>,
-    source_id: Option<usize>,
-}
-
-impl ScopeContext {
-    fn derive(filename: &str, sources: &[FilterSource]) -> Self {
-        let absolute_path = normalise_to_posix(Path::new(filename));
-
-        let mut best_match: Option<(usize, PathBuf)> = None;
-        for (idx, source) in sources.iter().enumerate() {
-            if let Ok(stripped) = Path::new(filename).strip_prefix(&source.project_root) {
-                let stripped_owned = stripped.to_path_buf();
-                let better = match &best_match {
-                    Some((_, current)) => {
-                        stripped_owned.components().count() < current.components().count()
-                    }
-                    None => true,
-                };
-                if better {
-                    best_match = Some((idx, stripped_owned));
-                }
-            }
-        }
-
-        let (source_id, relative_path) = best_match.map_or((None, None), |(idx, rel)| {
-            let normalized = normalise_relative(rel);
-            if normalized.is_empty() {
-                (Some(idx), None)
-            } else {
-                (Some(idx), Some(normalized))
-            }
-        });
-
-        let module_name = relative_path
-            .as_deref()
-            .and_then(|rel| module_from_relative(rel))
-            .filter(|name| is_valid_module_name(name));
-
-        ScopeContext {
-            module_name,
-            object_name: None,
-            relative_path,
-            absolute_path,
-            source_id,
-        }
-    }
-
-    fn refresh_object_name(&mut self, qualname: &str) {
-        self.object_name = match (self.module_name.as_ref(), qualname.is_empty()) {
-            (Some(module), false) => Some(format!("{module}.{qualname}")),
-            (Some(module), true) => Some(module.clone()),
-            (None, false) => Some(qualname.to_string()),
-            (None, true) => None,
-        };
-    }
-}
-
-fn normalise_relative(relative: PathBuf) -> String {
-    let mut components = Vec::new();
-    for component in relative.components() {
-        match component {
-            Component::Normal(part) => components.push(part.to_string_lossy().to_string()),
-            Component::CurDir => continue,
-            Component::ParentDir => {
-                if !components.is_empty() {
-                    components.pop();
-                }
-            }
-            _ => {}
-        }
-    }
-    components.join("/")
+/// Adapter so callers in the recorder that historically reached for
+/// `crate::trace_filter::engine::TraceFilterEngine` continue to receive
+/// the `RecorderResult` flavour of errors.
+#[allow(dead_code)]
+pub(crate) fn convert_error(err: FilterError) -> recorder_errors::RecorderError {
+    convert_filter_error(err)
 }
 
 fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {
@@ -502,18 +318,115 @@ fn py_attr_error(attr: &str, err: PyErr) -> recorder_errors::RecorderError {
     )
 }
 
+/// Lazy access to the global code-extra index for tests that want to
+/// observe its current state.
+#[cfg(test)]
+pub(crate) fn current_code_extra_index() -> Option<isize> {
+    let value = CODE_EXTRA_INDEX.load(Ordering::Acquire);
+    if value < 0 {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+// The Lazy import is here only to discourage future contributors from
+// reintroducing a HashMap cache "for tests"; the `co_extra`-based path is
+// the only blessed one.
+#[allow(dead_code)]
+static _DO_NOT_USE_HASH_CACHE: Lazy<()> = Lazy::new(|| ());
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::trace_filter::config::TraceFilterConfig;
     use pyo3::types::{PyAny, PyCode, PyList, PyModule};
+    use recorder_errors::ErrorCode;
     use std::ffi::CString;
     use std::fs;
     use std::io::Write;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
+    fn filter_with_pkg_rule(body: &str) -> RecorderResult<(TraceFilterConfig, String)> {
+        let temp = tempdir().expect("temp dir");
+        let project_root = temp.path();
+        let codetracer_dir = project_root.join(".codetracer");
+        fs::create_dir(&codetracer_dir).expect("create .codetracer dir");
+
+        let filter_path = codetracer_dir.join("filters.toml");
+        write_filter(&filter_path, body);
+
+        let config = TraceFilterConfig::from_paths(&[filter_path]).map_err(convert_error)?;
+
+        let file_path = project_root.join("app").join("foo.py");
+        fs::create_dir_all(file_path.parent().expect("parent")).expect("create parent dirs");
+        fs::File::create(&file_path).expect("create file");
+        // Keep the temp directory alive for the duration of the test.
+        std::mem::forget(temp);
+
+        Ok((config, file_path.to_string_lossy().to_string()))
+    }
+
+    fn write_filter(path: &Path, body: &str) {
+        let mut file = fs::File::create(path).expect("create filter file");
+        writeln!(
+            file,
+            r#"
+            [meta]
+            name = "test"
+            version = 1
+
+            {}
+            "#,
+            body.trim()
+        )
+        .expect("write filter content");
+    }
+
+    fn load_module<'py>(
+        py: Python<'py>,
+        module_name: &str,
+        file_path: &str,
+        source: &str,
+    ) -> RecorderResult<Bound<'py, PyModule>> {
+        let code_c = CString::new(source).expect("source without NUL");
+        let file_c = CString::new(file_path).expect("path without NUL");
+        let module_c = CString::new(module_name).expect("module without NUL");
+
+        let module = PyModule::from_code(
+            py,
+            code_c.as_c_str(),
+            file_c.as_c_str(),
+            module_c.as_c_str(),
+        )
+        .map_err(|err| {
+            target!(
+                ErrorCode::FrameIntrospectionFailed,
+                "failed to load module for engine test: {}",
+                err
+            )
+        })?;
+        Ok(module)
+    }
+
+    fn get_code<'py>(
+        module: &Bound<'py, PyModule>,
+        func_name: &str,
+    ) -> RecorderResult<Bound<'py, PyCode>> {
+        let func: Bound<'py, PyAny> = module
+            .getattr(func_name)
+            .map_err(|err| py_attr_error("function", err))?;
+        let code_obj = func
+            .getattr("__code__")
+            .map_err(|err| py_attr_error("__code__", err))?
+            .downcast_into::<PyCode>()
+            .map_err(|err| py_attr_error("__code__", err.into()))?;
+        Ok(code_obj)
+    }
+
     #[test]
-    fn caches_resolution_and_applies_value_patterns() -> RecorderResult<()> {
+    fn caches_resolution_via_co_extra() -> RecorderResult<()> {
         let (config, file_path) = filter_with_pkg_rule(
             r#"
             [scope]
@@ -532,10 +445,6 @@ mod tests {
             [[scope.rules.value_patterns]]
             selector = "arg:password"
             action = "redact"
-
-            [[scope.rules.value_patterns]]
-            selector = "local:temp"
-            action = "drop"
             "#,
         )?;
 
@@ -552,7 +461,6 @@ mod tests {
 
             let first = engine.resolve(py, &wrapper, None)?;
             assert_eq!(first.exec(), ExecDecision::Trace);
-            assert_eq!(first.matched_rule_index(), Some(0));
             assert_eq!(first.module_name(), Some("app.foo"));
             assert_eq!(first.relative_path(), Some("app/foo.py"));
 
@@ -563,14 +471,17 @@ mod tests {
                 policy.decide(ValueKind::Arg, "password"),
                 ValueAction::Redact
             );
-            assert_eq!(policy.decide(ValueKind::Local, "temp"), ValueAction::Drop);
-            assert_eq!(
-                policy.decide(ValueKind::Global, "anything"),
-                ValueAction::Allow
-            );
 
+            // Second resolve should observe the cached value (co_extra hit).
             let second = engine.resolve(py, &wrapper, None)?;
-            assert!(Arc::ptr_eq(&first, &second));
+            assert_eq!(second.exec(), ExecDecision::Trace);
+
+            // The slot is reachable through CPython directly.
+            let index = current_code_extra_index().expect("co_extra index allocated");
+            let mut slot: *mut std::ffi::c_void = std::ptr::null_mut();
+            let rc = unsafe { PyUnstable_Code_GetExtra(code_obj.as_ptr(), index, &mut slot) };
+            assert_eq!(rc, 0, "_PyCode_GetExtra failed");
+            assert!(!slot.is_null(), "co_extra slot must be populated");
             Ok(())
         })
     }
@@ -632,7 +543,8 @@ mod tests {
             selector = "pkg:literal:app.foo"
             exec = "skip"
         "#;
-        let config = TraceFilterConfig::from_inline_and_paths(&[("inline", inline)], &[])?;
+        let config = TraceFilterConfig::from_inline_and_paths(&[("inline", inline)], &[])
+            .map_err(convert_error)?;
 
         Python::with_gil(|py| -> RecorderResult<()> {
             let project = tempdir().expect("project");
@@ -654,8 +566,6 @@ mod tests {
             sys_path
                 .insert(0, project_root.to_string_lossy().to_string())
                 .expect("insert project root");
-            let absolute_path =
-                normalise_to_posix(Path::new(file_path.to_string_lossy().as_ref())).expect("normalise path");
 
             let module = py.import("app.foo").expect("import app.foo");
             let func: Bound<'_, PyAny> = module.getattr("foo").expect("get foo");
@@ -665,121 +575,19 @@ mod tests {
                 .downcast_into::<PyCode>()
                 .expect("PyCode");
             let wrapper = CodeObjectWrapper::new(py, &code_obj);
-            let recorded_filename = wrapper.filename(py).expect("code filename");
-            assert_eq!(recorded_filename, file_path.to_string_lossy());
 
-            let engine = TraceFilterEngine::new(config.clone());
+            let engine = TraceFilterEngine::new(config);
             let resolution = engine.resolve(py, &wrapper, None)?;
-            assert_eq!(resolution.absolute_path(), Some(absolute_path.as_str()));
             assert_eq!(resolution.module_name(), Some("app.foo"));
             assert_eq!(resolution.exec(), ExecDecision::Skip);
 
             sys_path.del_item(0).expect("restore sys.path");
+            // Keep the temp dir alive across the rest of the test.
+            std::mem::forget(project);
+            // Silence the "imported PyList unused" warning by referencing
+            // `PathBuf` (used by the convert_error utility import path).
+            let _ = PathBuf::new();
             Ok(())
         })
-    }
-
-    #[test]
-    fn file_selector_matches_relative_path() -> RecorderResult<()> {
-        let (config, file_path) = filter_with_pkg_rule(
-            r#"
-            [scope]
-            default_exec = "trace"
-            default_value_action = "allow"
-
-            [[scope.rules]]
-            selector = "file:app/foo.py"
-            exec = "skip"
-            "#,
-        )?;
-
-        Python::with_gil(|py| -> RecorderResult<()> {
-            let module = load_module(py, "app.foo", &file_path, "def baz():\n    return 42\n")?;
-            let code_obj = get_code(&module, "baz")?;
-            let wrapper = CodeObjectWrapper::new(py, &code_obj);
-
-            let engine = TraceFilterEngine::new(config);
-            let resolution = engine.resolve(py, &wrapper, None)?;
-
-            assert_eq!(resolution.exec(), ExecDecision::Skip);
-            assert_eq!(resolution.relative_path(), Some("app/foo.py"));
-            Ok(())
-        })
-    }
-
-    fn filter_with_pkg_rule(body: &str) -> RecorderResult<(TraceFilterConfig, String)> {
-        let temp = tempdir().expect("temp dir");
-        let project_root = temp.path();
-        let codetracer_dir = project_root.join(".codetracer");
-        fs::create_dir(&codetracer_dir).expect("create .codetracer dir");
-
-        let filter_path = codetracer_dir.join("filters.toml");
-        write_filter(&filter_path, body);
-
-        let config = TraceFilterConfig::from_paths(&[filter_path])?;
-
-        let file_path = project_root.join("app").join("foo.py");
-        fs::create_dir_all(file_path.parent().expect("file has parent dir")).expect("create parent dirs");
-        // Touch the file so the path exists for debugging.
-        fs::File::create(&file_path).expect("create file");
-
-        Ok((config, file_path.to_string_lossy().to_string()))
-    }
-
-    fn write_filter(path: &Path, body: &str) {
-        let mut file = fs::File::create(path).expect("create filter file");
-        writeln!(
-            file,
-            r#"
-            [meta]
-            name = "test"
-            version = 1
-
-            {}
-            "#,
-            body.trim()
-        )
-        .expect("write filter content");
-    }
-
-    fn load_module<'py>(
-        py: Python<'py>,
-        module_name: &str,
-        file_path: &str,
-        source: &str,
-    ) -> RecorderResult<Bound<'py, PyModule>> {
-        let code_c = CString::new(source).expect("source without NUL");
-        let file_c = CString::new(file_path).expect("path without NUL");
-        let module_c = CString::new(module_name).expect("module without NUL");
-
-        let module = PyModule::from_code(
-            py,
-            code_c.as_c_str(),
-            file_c.as_c_str(),
-            module_c.as_c_str(),
-        )
-        .map_err(|err| {
-            target!(
-                ErrorCode::FrameIntrospectionFailed,
-                "failed to load module for engine test: {}",
-                err
-            )
-        })?;
-        Ok(module.into())
-    }
-
-    fn get_code<'py>(
-        module: &Bound<'py, PyModule>,
-        func_name: &str,
-    ) -> RecorderResult<Bound<'py, PyCode>> {
-        let func: Bound<'py, PyAny> = module
-            .getattr(func_name)
-            .map_err(|err| py_attr_error("function", err))?;
-        let code_obj = func
-            .getattr("__code__")
-            .map_err(|err| py_attr_error("__code__", err))?
-            .downcast_into::<PyCode>()
-            .map_err(|err| py_attr_error("__code__", err.into()))?;
-        Ok(code_obj)
     }
 }

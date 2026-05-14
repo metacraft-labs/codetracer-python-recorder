@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::errors::Result;
 use crate::trace_filter::config::TraceFilterConfig;
+use crate::trace_filter::convert_filter_error;
 use crate::trace_filter::engine::TraceFilterEngine;
 
 use super::filesystem::resolve_program_directory;
@@ -63,7 +64,8 @@ pub fn load_trace_filter_with_framework(
         }
     }
 
-    let config = TraceFilterConfig::from_inline_and_paths(&inline_filters, &chain)?;
+    let config = TraceFilterConfig::from_inline_and_paths(&inline_filters, &chain)
+        .map_err(convert_filter_error)?;
     Ok(Some(Arc::new(TraceFilterEngine::new(config))))
 }
 

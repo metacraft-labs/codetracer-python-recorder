@@ -214,7 +214,7 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_py_start", None);
 
-        let scope_resolution = self.filter.cached_resolution(code.id());
+        let scope_resolution = self.filter.cached_resolution(py, code);
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
 
@@ -280,7 +280,7 @@ impl Tracer for RuntimeTracer {
 
         self.flush_io_before_step(thread::current().id());
 
-        let scope_resolution = self.filter.cached_resolution(code.id());
+        let scope_resolution = self.filter.cached_resolution(py, code);
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
 
@@ -372,7 +372,7 @@ impl Tracer for RuntimeTracer {
 
         log_event(py, code, "on_py_throw", None);
 
-        let scope_resolution = self.filter.cached_resolution(code.id());
+        let scope_resolution = self.filter.cached_resolution(py, code);
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
 
@@ -550,7 +550,7 @@ impl RuntimeTracer {
 
         self.flush_pending_io();
 
-        let scope_resolution = self.filter.cached_resolution(code.id());
+        let scope_resolution = self.filter.cached_resolution(py, code);
         let value_policy = scope_resolution.as_ref().map(|res| res.value_policy());
         let wants_telemetry = value_policy.is_some();
         let object_name = scope_resolution.as_ref().and_then(|res| res.object_name());

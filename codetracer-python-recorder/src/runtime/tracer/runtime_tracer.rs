@@ -314,7 +314,7 @@ impl RuntimeTracer {
             }
         }
 
-        let resolution = self.filter.cached_resolution(code.id());
+        let resolution = self.filter.cached_resolution(py, code);
         if let Some(resolution) = resolution.as_ref() {
             if let Some(name) = resolution.module_name() {
                 return Some(name.to_string());
