@@ -9,45 +9,34 @@ use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 use crate::errors::Result;
 
-/// File layout for a trace session. Encapsulates the metadata, event, and paths
-/// files that need to be initialised alongside the runtime tracer.
+/// File layout for a trace session. Encapsulates the events file
+/// (canonical `.ct` CTFS container in CTFS mode) that needs to be
+/// initialised alongside the runtime tracer.  The legacy
+/// `trace_metadata.json` and `trace_paths.json` operational sidecars
+/// were retired with the v3 CTFS rollout (follow-up #254 phase 2);
+/// program / paths metadata now lives in `meta.dat` inside the
+/// container.
 #[derive(Debug, Clone)]
 pub struct TraceOutputPaths {
     events: PathBuf,
-    metadata: PathBuf,
-    paths: PathBuf,
 }
 
 impl TraceOutputPaths {
     /// Build output paths for a given directory. The directory is expected to
     /// exist before initialisation; callers should ensure it is created.
     pub fn new(root: &Path, format: TraceEventsFileFormat) -> Self {
-        let (events_name, metadata_name, paths_name) = match format {
-            TraceEventsFileFormat::Json => {
-                ("trace.json", "trace_metadata.json", "trace_paths.json")
-            }
-            TraceEventsFileFormat::Ctfs => {
-                ("trace.ct", "trace_metadata.json", "trace_paths.json")
-            }
-            _ => ("trace.bin", "trace_metadata.json", "trace_paths.json"),
+        let events_name = match format {
+            TraceEventsFileFormat::Json => "trace.json",
+            TraceEventsFileFormat::Ctfs => "trace.ct",
+            _ => "trace.bin",
         };
         Self {
             events: root.join(events_name),
-            metadata: root.join(metadata_name),
-            paths: root.join(paths_name),
         }
     }
 
     pub fn events(&self) -> &Path {
         &self.events
-    }
-
-    pub fn metadata(&self) -> &Path {
-        &self.metadata
-    }
-
-    pub fn paths(&self) -> &Path {
-        &self.paths
     }
 
     /// Wire the trace writer to the configured output files and record the
@@ -58,16 +47,6 @@ impl TraceOutputPaths {
         start_path: &Path,
         start_line: u32,
     ) -> Result<()> {
-        TraceWriter::begin_writing_trace_metadata(writer, self.metadata()).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to begin trace metadata")
-                .with_context("path", self.metadata().display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-        TraceWriter::begin_writing_trace_paths(writer, self.paths()).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to begin trace paths")
-                .with_context("path", self.paths().display().to_string())
-                .with_context("source", err.to_string())
-        })?;
         TraceWriter::begin_writing_trace_events(writer, self.events()).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to begin trace events")
                 .with_context("path", self.events().display().to_string())
@@ -90,11 +69,6 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
         assert_eq!(paths.events(), tmp.path().join("trace.json").as_path());
-        assert_eq!(
-            paths.metadata(),
-            tmp.path().join("trace_metadata.json").as_path()
-        );
-        assert_eq!(paths.paths(), tmp.path().join("trace_paths.json").as_path());
     }
 
     #[test]

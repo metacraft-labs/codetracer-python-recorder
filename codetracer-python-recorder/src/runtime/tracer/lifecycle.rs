@@ -10,7 +10,6 @@ use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use serde_json::{self, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -90,7 +89,7 @@ impl LifecycleController {
 
     pub fn cleanup_partial_outputs(&self) -> RecorderResult<()> {
         if let Some(outputs) = &self.output_paths {
-            for path in [outputs.events(), outputs.metadata(), outputs.paths()] {
+            for path in [outputs.events()] {
                 if path.exists() {
                     fs::remove_file(path).map_err(|err| {
                         enverr!(ErrorCode::Io, "failed to remove partial trace file")
@@ -115,18 +114,16 @@ impl LifecycleController {
         // handle and emits them in `close()`, so we must populate before
         // finish_*.
         Self::publish_filter_provenance(writer, filter)?;
-        TraceWriter::finish_writing_trace_metadata(writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace metadata")
-                .with_context("source", err.to_string())
-        })?;
-        TraceWriter::finish_writing_trace_paths(writer).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to finalise trace paths")
-                .with_context("source", err.to_string())
-        })?;
         TraceWriter::finish_writing_trace_events(writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace events")
                 .with_context("source", err.to_string())
         })?;
+        writer
+            .write_meta_dat("codetracer-python-recorder")
+            .map_err(|err| {
+                enverr!(ErrorCode::Io, "failed to write trace meta.dat")
+                    .with_context("source", err.to_string())
+            })?;
         debug!(
             "[Lifecycle] writing exit metadata: code={:?}, label={:?}",
             exit_summary.code, exit_summary.label
@@ -202,52 +199,12 @@ impl LifecycleController {
         self.encountered_failure = false;
     }
 
-    fn append_exit_metadata(&self, exit_summary: &ExitSummary) -> RecorderResult<()> {
-        let Some(outputs) = &self.output_paths else {
-            return Ok(());
-        };
-
-        let path = outputs.metadata();
-        // With the Nim CTFS writer, metadata lives inside the .ct container file
-        // rather than as a separate JSON file. Skip gracefully if it doesn't exist.
-        if !path.exists() {
-            return Ok(());
-        }
-        let original = fs::read_to_string(path).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to read trace metadata")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        let mut metadata: serde_json::Value = serde_json::from_str(&original).map_err(|err| {
-            enverr!(ErrorCode::Io, "failed to parse trace metadata JSON")
-                .with_context("path", path.display().to_string())
-                .with_context("source", err.to_string())
-        })?;
-
-        if let serde_json::Value::Object(ref mut obj) = metadata {
-            let status = json!({
-                "code": exit_summary.code,
-                "label": exit_summary.label,
-            });
-            obj.insert("process_exit_status".to_string(), status);
-            let serialised = serde_json::to_string(&metadata).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to serialise trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            fs::write(path, serialised).map_err(|err| {
-                enverr!(ErrorCode::Io, "failed to write trace metadata")
-                    .with_context("path", path.display().to_string())
-                    .with_context("source", err.to_string())
-            })?;
-            Ok(())
-        } else {
-            Err(
-                enverr!(ErrorCode::Io, "trace metadata must be a JSON object")
-                    .with_context("path", path.display().to_string()),
-            )
-        }
+    fn append_exit_metadata(&self, _exit_summary: &ExitSummary) -> RecorderResult<()> {
+        // The legacy `trace_metadata.json` operational sidecar was retired
+        // with the v3 CTFS rollout (follow-up #254 phase 2).  Process exit
+        // status is no longer surfaced via a sidecar mutation — when a
+        // future CTFS spec entry adds it to `meta.dat`, plumb it in here.
+        Ok(())
     }
 
     fn append_filter_metadata(&self, _filter: &FilterCoordinator) -> RecorderResult<()> {
@@ -373,8 +330,6 @@ mod tests {
             .expect("begin lifecycle");
 
         std::fs::write(outputs.events(), "events").expect("write events");
-        std::fs::write(outputs.metadata(), "{}").expect("write metadata");
-        std::fs::write(outputs.paths(), "[]").expect("write paths");
 
         controller
             .cleanup_partial_outputs()
@@ -383,14 +338,6 @@ mod tests {
         assert!(
             !outputs.events().exists(),
             "expected events file removed after cleanup"
-        );
-        assert!(
-            !outputs.metadata().exists(),
-            "expected metadata file removed after cleanup"
-        );
-        assert!(
-            !outputs.paths().exists(),
-            "expected paths file removed after cleanup"
         );
     }
 
