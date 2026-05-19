@@ -2,15 +2,11 @@
   description = "Development environment for CodeTracer recorders (pure-python and rust-backed)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
-    # `prek` is not yet in nixos-25.05; this secondary pin tracks the newer
-    # channel that ships it, used only to expose the binary in the dev shell
-    # as the replacement for the legacy `pre-commit` workflow.
-    nixpkgs-prek.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-prek, pre-commit-hooks }:
+  outputs = { self, nixpkgs, pre-commit-hooks }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
@@ -129,7 +125,6 @@
       devShells = forEachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          pkgsPrek = import nixpkgs-prek { inherit system; };
           preCommit = self.checks.${system}.pre-commit-check;
           pureRecorderPkg = (mkCodetracerPackages pkgs pkgs.python312).codetracer-pure-python-recorder;
         in {
@@ -186,9 +181,8 @@
               nixfmt-rfc-style
             ]
             # `prek` replaces the legacy `pre-commit` workflow (workspace
-            # prek-migration directive 2026-05).  Sourced from a newer
-            # nixpkgs pin because it is not yet packaged in nixos-25.05.
-            ++ [ pkgsPrek.prek ]
+            # prek-migration directive 2026-05).
+            ++ [ pkgs.prek ]
             ++ preCommit.enabledPackages;
 
             shellHook = ''
