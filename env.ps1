@@ -100,14 +100,126 @@ if (Test-Path $uvExe) {
     Write-Host "Installed uv to $uvDir"
 }
 
+# --- Ensure Nim ---
+# The recorder's Rust crate depends on codetracer_trace_writer_nim, whose
+# build script compiles a Nim static library, so Nim must be on PATH.
+# The prebuilt Windows distribution bundles `vccexe`, which lets
+# `nim --cc:vcc` locate the MSVC toolchain itself.
+$nimVersion = $toolchain["NIM_VERSION"]
+$nimDir = Join-Path $installRoot "nim/$nimVersion/nim-$nimVersion"
+$nimExe = Join-Path $nimDir "bin/nim.exe"
+
+if (Test-Path $nimExe) {
+    Write-Host "Nim $nimVersion already installed"
+} else {
+    if ($arch -ne "x64") { throw "Nim provisioning in this script only supports x64." }
+    Write-Host "Installing Nim $nimVersion..."
+    $nimUrl = "https://nim-lang.org/download/nim-${nimVersion}_x64.zip"
+    $nimZip = Join-Path $env:TEMP "nim-$nimVersion.zip"
+    Invoke-WebRequest -Uri $nimUrl -OutFile $nimZip
+    $nimParent = Split-Path -Parent $nimDir
+    New-Item -ItemType Directory -Force -Path $nimParent | Out-Null
+    Expand-Archive -Path $nimZip -DestinationPath $nimParent -Force
+    Remove-Item $nimZip
+    Write-Host "Installed Nim to $nimDir"
+}
+
+# --- Ensure just ---
+# `just` runs the Justfile recipes (the documented dev interface).
+$justVersion = $toolchain["JUST_VERSION"]
+$justDir = Join-Path $installRoot "just/$justVersion"
+$justExe = Join-Path $justDir "just.exe"
+
+if (Test-Path $justExe) {
+    Write-Host "just $justVersion already installed"
+} else {
+    Write-Host "Installing just $justVersion..."
+    $justUrl = "https://github.com/casey/just/releases/download/$justVersion/just-$justVersion-x86_64-pc-windows-msvc.zip"
+    $justZip = Join-Path $env:TEMP "just-$justVersion.zip"
+    Invoke-WebRequest -Uri $justUrl -OutFile $justZip
+    New-Item -ItemType Directory -Force -Path $justDir | Out-Null
+    Expand-Archive -Path $justZip -DestinationPath $justDir -Force
+    Remove-Item $justZip
+    Write-Host "Installed just to $justDir"
+}
+
 # Set PATH
-$pathEntries = @("$cargoHome\bin", $capnpDir, $uvDir)
+$pathEntries = @("$cargoHome\bin", $capnpDir, $uvDir, (Join-Path $nimDir "bin"), $justDir)
 foreach ($entry in $pathEntries) {
     if ($env:Path -notlike "*$entry*") {
         $env:Path = "$entry;$($env:Path)"
     }
 }
 
+# --- Ensure cargo-nextest ---
+# `just cargo-test` runs `cargo nextest`. Install the prebuilt binary into
+# cargo's bin dir so `cargo nextest` resolves it.
+$nextestVersion = $toolchain["CARGO_NEXTEST_VERSION"]
+$nextestExe = Join-Path $cargoHome "bin/cargo-nextest.exe"
+if (Test-Path $nextestExe) {
+    Write-Host "cargo-nextest already installed"
+} else {
+    Write-Host "Installing cargo-nextest $nextestVersion..."
+    $nextestZip = Join-Path $env:TEMP "cargo-nextest-$nextestVersion.zip"
+    Invoke-WebRequest -Uri "https://get.nexte.st/$nextestVersion/windows" -OutFile $nextestZip
+    Expand-Archive -Path $nextestZip -DestinationPath (Join-Path $cargoHome "bin") -Force
+    Remove-Item $nextestZip
+    Write-Host "Installed cargo-nextest to $cargoHome\bin"
+}
+
+# --- Ensure maturin (PyO3 build backend / CLI) ---
+# maturin is provided by the Nix dev shell; on the DIY Windows env install
+# it as a uv-managed tool into the shared install root. `just dev` runs
+# `uv run ... maturin develop`, which resolves maturin from PATH.
+$uvToolDir = Join-Path $installRoot "uv-tools"
+$maturinBinDir = Join-Path $uvToolDir "bin"
+$env:UV_TOOL_DIR = Join-Path $uvToolDir "tools"
+$env:UV_TOOL_BIN_DIR = $maturinBinDir
+if (-not (Test-Path (Join-Path $maturinBinDir "maturin.exe"))) {
+    Write-Host "Installing maturin via uv..."
+    & uv tool install --quiet "maturin>=1.5,<2"
+    if ($LASTEXITCODE -ne 0) { throw "uv tool install maturin failed" }
+}
+if ($env:Path -notlike "*$maturinBinDir*") {
+    $env:Path = "$maturinBinDir;$($env:Path)"
+}
+
+# --- Python DLL directory on PATH (for PyO3 test binaries) ---
+# `cargo test` / `cargo nextest` test binaries for the PyO3 crate link
+# libpython and need python3XX.dll at runtime. uv's venv does NOT bundle
+# the DLL (it lives next to the base interpreter), so the test exes fail
+# to load with 0xc0000135 (DLL not found). Put the base interpreter dir
+# on PATH. The base is recorded in .venv/pyvenv.cfg once the venv exists;
+# before that, fall back to a uv-managed CPython installation.
+$repoRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)
+$pyHome = $null
+$pyvenvCfg = Join-Path $repoRoot ".venv\pyvenv.cfg"
+if (Test-Path $pyvenvCfg) {
+    $homeLine = Get-Content $pyvenvCfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1
+    if ($homeLine) { $pyHome = ($homeLine -replace '^\s*home\s*=\s*', '').Trim() }
+}
+if (-not $pyHome) {
+    foreach ($line in (& uv python list --only-installed 2>$null)) {
+        if ($line -match '(\S+\\python\.exe)\s*$') {
+            $cand = $matches[1]
+            if ((Test-Path $cand) -and ($cand -notmatch '\.venv')) {
+                $pyHome = Split-Path -Parent $cand
+                break
+            }
+        }
+    }
+}
+if ($pyHome -and (Test-Path $pyHome)) {
+    if ($env:Path -notlike "*$pyHome*") {
+        $env:Path = "$pyHome;$($env:Path)"
+    }
+    Write-Host "python libpython dir: $pyHome"
+} else {
+    Write-Host "WARNING: could not resolve the base Python dir; PyO3 cargo tests may fail to find python3XX.dll"
+}
+
 Write-Host "rustc: $((& rustc --version) 2>&1)"
 Write-Host "capnp: $((& capnp --version) 2>&1)"
 Write-Host "uv: $((& uv --version) 2>&1)"
+Write-Host "nim: $(((& nim --version 2>&1) | Select-Object -First 1))"
+Write-Host "just: $((& just --version) 2>&1)"

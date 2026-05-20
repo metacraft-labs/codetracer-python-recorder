@@ -137,6 +137,14 @@ mod tests {
         CodeObjectWrapper::new(py, &code)
     }
 
+    /// Build an absolute path under the OS temp dir. A `/tmp/...` literal
+    /// is not absolute on Windows, so `ActivationController::new`'s
+    /// `std::path::absolute` rewrites it (prepending a drive) and it no
+    /// longer equals the code object's verbatim filename.
+    fn abs_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     #[test]
     fn starts_active_when_no_activation_path() {
         let controller = ActivationController::new(None);
@@ -146,8 +154,9 @@ mod tests {
     #[test]
     fn remains_inactive_until_activation_code_runs() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = abs_path("target.py");
+            let code = build_code(py, "target", target.to_str().unwrap());
+            let mut controller = ActivationController::new(Some(&target));
             assert!(!controller.is_active());
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
@@ -157,8 +166,8 @@ mod tests {
     #[test]
     fn ignores_non_matching_code_objects() {
         Python::with_gil(|py| {
-            let code = build_code(py, "other", "/tmp/other.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let code = build_code(py, "other", abs_path("other.py").to_str().unwrap());
+            let mut controller = ActivationController::new(Some(&abs_path("target.py")));
             assert!(!controller.should_process_event(py, &code));
             assert!(!controller.is_active());
         });
@@ -167,8 +176,9 @@ mod tests {
     #[test]
     fn deactivates_after_activation_return() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = abs_path("target.py");
+            let code = build_code(py, "target", target.to_str().unwrap());
+            let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
             assert!(controller.handle_exit(code.id(), ActivationExitKind::Completed));
@@ -180,8 +190,9 @@ mod tests {
     #[test]
     fn suspension_keeps_tracing_active() {
         Python::with_gil(|py| {
-            let code = build_code(py, "target", "/tmp/target.py");
-            let mut controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
+            let target = abs_path("target.py");
+            let code = build_code(py, "target", target.to_str().unwrap());
+            let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
             assert!(!controller.handle_exit(code.id(), ActivationExitKind::Suspended));
@@ -195,9 +206,13 @@ mod tests {
 
     #[test]
     fn start_path_prefers_activation_path() {
-        let controller = ActivationController::new(Some(Path::new("/tmp/target.py")));
-        let fallback = Path::new("/tmp/fallback.py");
-        assert_eq!(controller.start_path(fallback), Path::new("/tmp/target.py"));
+        let target = abs_path("target.py");
+        let controller = ActivationController::new(Some(&target));
+        let fallback = abs_path("fallback.py");
+        assert_eq!(
+            controller.start_path(&fallback),
+            std::path::absolute(&target).unwrap().as_path()
+        );
     }
 }
 
