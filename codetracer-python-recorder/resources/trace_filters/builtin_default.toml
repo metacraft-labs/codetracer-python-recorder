@@ -9,12 +9,23 @@ default_exec = "trace"
 default_value_action = "allow"
 
 [[scope.rules]]
-selector = 'file:regex:.*[\\/](lib|Lib)[\\/]python\d+\.\d+[\/].*'
+# Match the CPython standard library on both layouts:
+#   * Unix:    `.../lib/pythonX.Y/...`   (lowercase `lib` + version dir)
+#   * Windows: `...\Lib\...`             (capital `Lib`, stdlib directly under it)
+# The capital-`Lib` branch is case-sensitive on purpose so it matches the
+# Windows CPython install convention without also catching an arbitrary
+# lowercase `lib/` project directory.  Without the Windows branch the stdlib
+# is fully traced on Windows, which makes recording pathologically slow
+# (e.g. tracing `re._compiler` line-by-line during `import pytest`).
+selector = 'file:regex:.*([\\/]lib[\\/]python\d+\.\d+[\\/]|[\\/]Lib[\\/]).*'
 exec = "skip"
 reason = "Skip Python standard library files"
 
 [[scope.rules]]
-selector = 'file:regex:.*[\\/](lib|Lib)[\\/]python\d+\.\d+[\/]site-packages[\/].*'
+# Re-enable third-party packages under `site-packages` for both layouts:
+#   * Unix:    `.../lib/pythonX.Y/site-packages/...`
+#   * Windows: `...\Lib\site-packages\...`
+selector = 'file:regex:.*([\\/]lib[\\/]python\d+\.\d+[\\/]site-packages[\\/]|[\\/]Lib[\\/]site-packages[\\/]).*'
 exec = "trace"
 reason = "Allow third-party packages under site-packages"
 

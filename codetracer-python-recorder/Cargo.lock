@@ -293,7 +293,10 @@ dependencies = [
 name = "codetracer_trace_writer_nim"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "codetracer_trace_types",
+ "serde_json",
+ "zstd-sys",
 ]
 
 [[package]]

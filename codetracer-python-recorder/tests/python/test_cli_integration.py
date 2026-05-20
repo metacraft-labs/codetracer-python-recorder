@@ -49,7 +49,16 @@ def _ct_print_binary() -> Path:
     override = os.environ.get("CT_PRINT")
     if override:
         return Path(override)
-    return Path(__file__).resolve().parents[4] / "codetracer-trace-format-nim" / "ct-print"
+    nim_dir = Path(__file__).resolve().parents[4] / "codetracer-trace-format-nim"
+    # The Nim build emits a bare ``ct-print`` on Unix and ``ct-print.exe`` on
+    # Windows.  Prefer whichever exists so the lookup is platform-correct.
+    for name in ("ct-print.exe", "ct-print"):
+        candidate = nim_dir / name
+        if candidate.exists():
+            return candidate
+    # Fall back to the platform-default name (drives the descriptive
+    # "binary missing" assertion at the call sites when it is absent).
+    return nim_dir / ("ct-print.exe" if os.name == "nt" else "ct-print")
 
 
 def _write_script(path: Path, body: str = "print('hello from recorder')\n") -> None:

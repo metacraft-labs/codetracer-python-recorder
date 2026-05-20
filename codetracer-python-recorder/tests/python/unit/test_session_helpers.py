@@ -1,6 +1,7 @@
 """Unit tests for session helper functions."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,28 @@ def test_coerce_format_rejects_unknown_value() -> None:
     assert "unsupported trace format" in str(excinfo.value)
 
 
+def _set_home(monkeypatch: pytest.MonkeyPatch, home_dir: Path) -> None:
+    """Point ``~`` expansion at *home_dir* on every platform.
+
+    ``os.path.expanduser`` consults ``HOME`` on POSIX but ``USERPROFILE``
+    (then ``HOMEDRIVE`` + ``HOMEPATH``) on Windows, so a test that only
+    sets ``HOME`` does not actually relocate ``~`` on Windows.  Set all of
+    them so the override is honoured regardless of platform.
+    """
+    home_str = str(home_dir)
+    monkeypatch.setenv("HOME", home_str)
+    monkeypatch.setenv("USERPROFILE", home_str)
+    drive, tail = os.path.splitdrive(home_str)
+    monkeypatch.setenv("HOMEDRIVE", drive)
+    monkeypatch.setenv("HOMEPATH", tail or os.sep)
+
+
 def test_validate_trace_path_expands_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     target = home_dir / "traces"
 
-    monkeypatch.setenv("HOME", str(home_dir))
+    _set_home(monkeypatch, home_dir)
     path = session._validate_trace_path(Path("~/traces"))
 
     assert path == target
@@ -49,7 +66,7 @@ def test_normalize_activation_path_expands_user(tmp_path: Path, monkeypatch: pyt
     script = home_dir / "script.py"
     script.write_text("print('hi')\n")
 
-    monkeypatch.setenv("HOME", str(home_dir))
+    _set_home(monkeypatch, home_dir)
     result = session._normalize_activation_path("~/script.py")
 
     assert result == str(script)
