@@ -1,69 +1,59 @@
-import json
-import runpy
-import tempfile
-from dataclasses import dataclass
+"""sys.monitoring event coverage for the Rust-backed Python recorder.
+
+Per ``codetracer-specs/Recorder-CLI-Conventions.md`` §4 the recorder is
+CTFS-only: it emits a single ``<program>.ct`` container and never the
+legacy ``trace.json`` / ``trace_metadata.json`` / ``trace_paths.json``
+JSON sidecars (retired in commit ``efcfe28``, "#254 Phase 2").  These
+tests previously asserted on those sidecars; they now record CTFS and
+decode the produced ``.ct`` container through ``ct-print --full`` (the
+canonical CTFS reader from ``codetracer-trace-format-nim``), exactly as
+``test_cli_integration.py`` does.  The asserted facts — PY_START call
+edges, PY_RETURN values, recorded call arguments, LINE step coverage,
+generator / coroutine balance, exception unwind values — are unchanged
+in both content and strength: a recorder that drops or corrupts any of
+them still fails the test loudly.
+"""
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import pytest
 
 import codetracer_python_recorder as codetracer
 
+from .support.ctfs import ParsedCtfsTrace, parse_ctfs_trace, record_script
 from .support import ensure_trace_dir
 
 
-@dataclass
-class ParsedTrace:
-    paths: List[str]
-    functions: List[Dict[str, Any]]  # index is function_id
-    calls: List[int]  # sequence of function_id values
-    returns: List[Dict[str, Any]]  # raw Return payloads (order preserved)
-    steps: List[Tuple[int, int]]  # (path_id, line)
-    varnames: List[str]  # index is variable_id
-    call_records: List[Dict[str, Any]]  # raw Call payloads (order preserved)
+def _arg_name(arg: Dict[str, Any]) -> str:
+    """Return the variable name carried by a decoded ``call_entry`` arg.
+
+    The CTFS ``ct-print --full`` arg objects intern the name inline
+    under ``varname`` (the writer's variable-id table is materialised
+    for the caller).  This mirrors the retired
+    ``parsed.varnames[arg["variable_id"]]`` indirection — same fact,
+    one fewer hop.
+    """
+    return arg["varname"]
 
 
-def _parse_trace(out_dir: Path) -> ParsedTrace:
-    events_path = out_dir / "trace.json"
-    paths_path = out_dir / "trace_paths.json"
+def _arg_value(arg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the decoded ``ValueRecord`` of a ``call_entry`` arg."""
+    return arg["value"]
 
-    events = json.loads(events_path.read_text())
-    paths: List[str] = json.loads(paths_path.read_text())
 
-    functions: List[Dict[str, Any]] = []
-    calls: List[int] = []
-    returns: List[Dict[str, Any]] = []
-    steps: List[Tuple[int, int]] = []
-    varnames: List[str] = []
-    call_records: List[Dict[str, Any]] = []
-
-    for item in events:
-        if "Function" in item:
-            functions.append(item["Function"])
-        elif "Call" in item:
-            calls.append(int(item["Call"]["function_id"]))
-            call_records.append(item["Call"])  # keep for arg assertions
-        elif "VariableName" in item:
-            varnames.append(item["VariableName"])  # index is VariableId
-        elif "Return" in item:
-            returns.append(item["Return"])  # keep raw payload for value checks
-        elif "Step" in item:
-            s = item["Step"]
-            steps.append((int(s["path_id"]), int(s["line"])))
-
-    return ParsedTrace(
-        paths=paths,
-        functions=functions,
-        calls=calls,
-        returns=returns,
-        steps=steps,
-        varnames=varnames,
-        call_records=call_records,
-    )
+def _function_ids(parsed: ParsedCtfsTrace, name: str, path_id: int) -> List[int]:
+    """All function_ids whose name is *name* and that live in *path_id*."""
+    return [
+        fid
+        for fid, fn in enumerate(parsed.functions)
+        if fn["name"] == name and fn["path_id"] == path_id
+    ]
 
 
 def _write_script(tmp: Path) -> Path:
-    # Keep lines compact and predictable to assert step line numbers
+    # Keep lines compact and predictable to assert step line numbers.
     code = (
         "# simple script\n\n"
         "def foo():\n"
@@ -80,48 +70,41 @@ def _write_script(tmp: Path) -> Path:
 
 
 def test_py_start_line_and_return_events_are_recorded(tmp_path: Path) -> None:
-    # Arrange: create a script and start tracing with activation restricted to that file
+    # Arrange: create a script and start tracing with activation restricted
+    # to that file.
     script = _write_script(tmp_path)
     out_dir = ensure_trace_dir(tmp_path)
 
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
+    # Act: record the script via the public recorder API.  The recorder
+    # emits a single CTFS ``.ct`` container; ``record_script`` returns it
+    # and asserts the legacy ``trace.json`` sidecar is NOT produced.
+    trace_ct = record_script(out_dir, script)
 
-    try:
-        # Act: execute the script as __main__ under tracing
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        # Ensure files are flushed and tracer is stopped even on error
-        codetracer.flush()
-        codetracer.stop()
-
-    # Assert: expected files exist and contain valid JSON
-    assert (out_dir / "trace.json").exists()
-    assert (out_dir / "trace_metadata.json").exists()
-    assert (out_dir / "trace_paths.json").exists()
-
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
 
     # The script path must be present (activation gating starts there, but
     # other helper modules like codecs may also appear during execution).
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
 
-    # One function named 'foo' should be registered for the script
-    foo_fids = [i for i, f in enumerate(parsed.functions) if f["name"] == "foo" and f["path_id"] == script_path_id]
+    # One function named 'foo' should be registered for the script.
+    foo_fids = _function_ids(parsed, "foo", script_path_id)
     assert foo_fids, "Expected function entry for foo()"
     foo_fid = foo_fids[0]
 
-    # A call to foo() must be present (PY_START) and matched by a later return (PY_RETURN)
+    # A call to foo() must be present (PY_START) and matched by a later
+    # return (PY_RETURN).
     assert foo_fid in parsed.calls, "Expected a call to foo() to be recorded"
 
-    # Returns are emitted in order; the first Return in this script should be the result of foo()
-    # and carry the concrete integer value 3 encoded by the writer
+    # Returns are emitted in order; the first Return in this script should
+    # be the result of foo() and carry the concrete integer value 3
+    # encoded by the writer.
     first_return = parsed.returns[0]
     rv = first_return.get("return_value", {})
     assert rv.get("kind") == "Int" and rv.get("i") == 3
 
-    # LINE events: confirm that the key lines within foo() were stepped
-    # Compute concrete line numbers by scanning the file content
+    # LINE events: confirm that the key lines within foo() were stepped.
+    # Compute concrete line numbers by scanning the file content.
     lines = script.read_text().splitlines()
     want_lines = {
         next(i + 1 for i, t in enumerate(lines) if t.strip() == "x = 1"),
@@ -134,16 +117,16 @@ def test_py_start_line_and_return_events_are_recorded(tmp_path: Path) -> None:
 
 def test_start_while_active_raises(tmp_path: Path) -> None:
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON)
+    codetracer.start(out_dir)
     try:
         with pytest.raises(RuntimeError):
-            codetracer.start(out_dir, format=codetracer.TRACE_JSON)
+            codetracer.start(out_dir)
     finally:
         codetracer.stop()
 
 
 def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
-    # Arrange: write a simple script with a function that accepts two args
+    # Arrange: write a simple script with a function that accepts two args.
     code = (
         "def foo(a, b):\n"
         "    return a if len(str(b)) > 0 else 0\n\n"
@@ -154,42 +137,30 @@ def test_call_arguments_recorded_on_py_start(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = tmp_path / "trace_out"
-    out_dir.mkdir()
+    trace_ct = record_script(out_dir, script)
 
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    parsed = parse_ctfs_trace(trace_ct)
 
-    parsed = _parse_trace(out_dir)
-
-    # Locate foo() function id in this script
+    # Locate foo() function id in this script.
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
-    foo_fids = [i for i, f in enumerate(parsed.functions) if f["name"] == "foo" and f["path_id"] == script_path_id]
+    foo_fids = _function_ids(parsed, "foo", script_path_id)
     assert foo_fids, "Expected function entry for foo()"
     foo_fid = foo_fids[0]
 
-    # Find the first Call to foo() and assert it carries two args with correct names/values
+    # Find the first Call to foo() and assert it carries two args with
+    # correct names/values.
     foo_calls = [cr for cr in parsed.call_records if int(cr["function_id"]) == foo_fid]
     assert foo_calls, "Expected a recorded call to foo()"
     call = foo_calls[0]
     args = call.get("args", [])
     assert len(args) == 2, f"Expected 2 args, got: {args}"
 
-    def arg_name(i: int) -> str:
-        return parsed.varnames[int(args[i]["variable_id"])]
-
-    def arg_value(i: int) -> Dict[str, Any]:
-        return args[i]["value"]
-
-    # Validate names and values
-    assert arg_name(0) == "a"
-    assert arg_value(0).get("kind") == "Int" and int(arg_value(0).get("i")) == 1
-    assert arg_name(1) == "b"
-    v1 = arg_value(1)
+    # Validate names and values.
+    assert _arg_name(args[0]) == "a"
+    assert _arg_value(args[0]).get("kind") == "Int" and int(_arg_value(args[0]).get("i")) == 1
+    assert _arg_name(args[1]) == "b"
+    v1 = _arg_value(args[1])
     # String encoding must be stable for Python str values.
     # Enforce canonical kind String and exact text payload.
     assert v1.get("kind") == "String", f"Expected String encoding for str, got: {v1}"
@@ -210,14 +181,9 @@ def test_module_imports_record_package_names(tmp_path: Path) -> None:
     )
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=runner)
-    try:
-        runpy.run_path(str(runner), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, runner)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     names = [f["name"] for f in parsed.functions]
     assert any(name == "<my_pkg.mod>" for name in names), f"missing module name in {names}"
 
@@ -227,21 +193,19 @@ def test_module_name_follows_globals_policy(tmp_path: Path) -> None:
     script.write_text("VALUE = 1\n", encoding="utf-8")
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
-        codetracer.configure_policy(module_name_from_globals=True)
+    trace_ct = record_script(
+        out_dir,
+        script,
+        configure_policy={"module_name_from_globals": True},
+    )
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     names = [f["name"] for f in parsed.functions]
     assert any(name == "<__main__>" for name in names), f"expected <__main__> in {names}"
 
 
 def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
-    # Arrange: write a script with a function using all Python argument kinds
+    # Arrange: write a script with a function using all Python argument kinds.
     code = (
         "def g(p, /, q, *args, r, **kwargs):\n"
         "    # Touch values to ensure they're present in locals\n"
@@ -253,50 +217,40 @@ def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = tmp_path / "trace_out"
-    out_dir.mkdir()
+    trace_ct = record_script(out_dir, script)
 
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    parsed = parse_ctfs_trace(trace_ct)
 
-    parsed = _parse_trace(out_dir)
-
-    # Locate g() function id
+    # Locate g() function id.
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
-    g_fids = [i for i, f in enumerate(parsed.functions) if f["name"] == "g" and f["path_id"] == script_path_id]
+    g_fids = _function_ids(parsed, "g", script_path_id)
     assert g_fids, "Expected function entry for g()"
     g_fid = g_fids[0]
 
-    # Find the first Call to g()
+    # Find the first Call to g().
     g_calls = [cr for cr in parsed.call_records if int(cr["function_id"]) == g_fid]
     assert g_calls, "Expected a recorded call to g()"
     call = g_calls[0]
     args = call.get("args", [])
     assert args, "Expected arguments for g() call"
 
-    # Build name -> value mapping for convenience
-    def arg_name(i: int) -> str:
-        return parsed.varnames[int(args[i]["variable_id"])]
+    # Build name -> value mapping for convenience.
+    name_to_val: Dict[str, Dict[str, Any]] = {
+        _arg_name(arg): _arg_value(arg) for arg in args
+    }
 
-    def arg_value(i: int) -> Dict[str, Any]:
-        return args[i]["value"]
-
-    name_to_val: Dict[str, Dict[str, Any]] = {arg_name(i): arg_value(i) for i in range(len(args))}
-
-    # Ensure we captured all kinds by name
+    # Ensure we captured all kinds by name.
     for expected in ("p", "q", "args", "r", "kwargs"):
         assert expected in name_to_val, f"Missing argument kind: {expected} in {list(name_to_val.keys())}"
 
-    # Validate some concrete values where encoding is unambiguous
+    # Validate some concrete values where encoding is unambiguous.
     assert name_to_val["p"].get("kind") == "Int" and int(name_to_val["p"].get("i")) == 10
     assert name_to_val["q"].get("kind") == "Int" and int(name_to_val["q"].get("i")) == 20
     assert name_to_val["r"].get("kind") == "Int" and int(name_to_val["r"].get("i")) == 50
 
-    # Varargs may be encoded as a structured sequence or as a Raw string; accept both
+    # Varargs may be encoded as a structured sequence or as a Raw string;
+    # accept both.
     varargs_val = name_to_val["args"]
     kind = varargs_val.get("kind")
     assert kind in ("Sequence", "Raw", "Tuple"), f"Unexpected *args encoding kind: {kind}"
@@ -306,11 +260,12 @@ def test_all_argument_kinds_recorded_on_py_start(tmp_path: Path) -> None:
         assert elems[0].get("kind") == "Int" and int(elems[0].get("i")) == 30
         assert elems[1].get("kind") == "Int" and int(elems[1].get("i")) == 40
     else:
-        # Raw textual fallback
+        # Raw textual fallback.
         r = varargs_val.get("r", "")
         assert "30" in r and "40" in r
 
-    # Kwargs must be encoded structurally as a sequence of (key, value) tuples
+    # Kwargs must be encoded structurally as a sequence of (key, value)
+    # tuples.
     kwargs_val = name_to_val["kwargs"]
     assert kwargs_val.get("kind") == "Sequence", f"Expected structured kwargs encoding, got: {kwargs_val}"
     elements = kwargs_val.get("elements")
@@ -343,22 +298,13 @@ def test_generator_yield_resume_events_are_balanced(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, script)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
 
-    ticker_fids = [
-        i
-        for i, f in enumerate(parsed.functions)
-        if f["name"] == "ticker" and f["path_id"] == script_path_id
-    ]
+    ticker_fids = _function_ids(parsed, "ticker", script_path_id)
     assert ticker_fids, "Expected ticker() to be registered"
     ticker_fid = ticker_fids[0]
 
@@ -397,22 +343,13 @@ def test_generator_throw_records_exception_argument(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, script)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
 
-    worker_fids = [
-        i
-        for i, f in enumerate(parsed.functions)
-        if f["name"] == "worker" and f["path_id"] == script_path_id
-    ]
+    worker_fids = _function_ids(parsed, "worker", script_path_id)
     assert worker_fids, "Expected worker() to be registered"
     worker_fid = worker_fids[0]
 
@@ -421,13 +358,10 @@ def test_generator_throw_records_exception_argument(tmp_path: Path) -> None:
     ]
     assert len(worker_calls) >= 2, "Expected multiple call records for worker()"
 
-    def arg_name(arg: Dict[str, Any]) -> str:
-        return parsed.varnames[int(arg["variable_id"])]
-
     exception_calls = [
         call
         for call in worker_calls
-        if any(arg_name(arg) == "exception" for arg in call.get("args", []))
+        if any(_arg_name(arg) == "exception" for arg in call.get("args", []))
     ]
     assert exception_calls, "Expected PY_THROW to register an 'exception' argument"
 
@@ -452,29 +386,20 @@ def test_coroutine_await_records_balanced_events(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, script)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
 
-    worker_fids = [
-        i
-        for i, f in enumerate(parsed.functions)
-        if f["name"] == "worker" and f["path_id"] == script_path_id
-    ]
+    worker_fids = _function_ids(parsed, "worker", script_path_id)
     assert worker_fids, "Expected worker() coroutine to be registered"
     worker_fid = worker_fids[0]
 
     worker_calls = [
         call for call in parsed.call_records if int(call["function_id"]) == worker_fid
     ]
-    # Expect initial PY_START and a later PY_RESUME call edge
+    # Expect initial PY_START and a later PY_RESUME call edge.
     assert len(worker_calls) >= 2, f"Expected multiple call edges for worker(), saw {len(worker_calls)}"
 
     assert any(
@@ -520,22 +445,13 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
     script.write_text(code)
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, script)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     assert str(script) in parsed.paths
     script_path_id = parsed.paths.index(str(script))
 
-    worker_fids = [
-        i
-        for i, f in enumerate(parsed.functions)
-        if f["name"] == "worker" and f["path_id"] == script_path_id
-    ]
+    worker_fids = _function_ids(parsed, "worker", script_path_id)
     assert worker_fids, "Expected worker() coroutine to be registered"
     worker_fid = worker_fids[0]
 
@@ -545,9 +461,6 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
     assert (
         len(worker_calls) == 4
     ), f"Expected two starts plus resume/throw edges, saw {len(worker_calls)}"
-
-    def arg_name(arg: Dict[str, Any]) -> str:
-        return parsed.varnames[int(arg["variable_id"])]
 
     def decode_text(value: Dict[str, Any]) -> str:
         if value.get("kind") == "String":
@@ -560,7 +473,7 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
         arg
         for call in worker_calls
         for arg in call.get("args", [])
-        if arg_name(arg) == "exception"
+        if _arg_name(arg) == "exception"
     ]
     assert exception_calls, "Expected coroutine throw to record an exception argument"
     assert any("boom" in decode_text(arg["value"]) for arg in exception_calls)
@@ -595,14 +508,9 @@ def test_py_unwind_records_exception_return(tmp_path: Path) -> None:
     script.write_text(code)
 
     out_dir = ensure_trace_dir(tmp_path)
-    session = codetracer.start(out_dir, format=codetracer.TRACE_JSON, start_on_enter=script)
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        codetracer.flush()
-        codetracer.stop()
+    trace_ct = record_script(out_dir, script)
 
-    parsed = _parse_trace(out_dir)
+    parsed = parse_ctfs_trace(trace_ct)
     assert any(
         (rv_value := rv.get("return_value"))
         and rv_value.get("kind") in {"Raw", "String"}

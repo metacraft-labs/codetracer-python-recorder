@@ -1,4 +1,32 @@
-"""Integration tests for pytest recording support."""
+"""Integration tests for pytest recording support.
+
+Per ``codetracer-specs/Recorder-CLI-Conventions.md`` §4 the recorder is
+CTFS-only: it emits a single ``<program>.ct`` container and never the
+legacy ``trace.json`` / ``trace_metadata.json`` JSON sidecars (retired
+in commit ``efcfe28``, "#254 Phase 2").  Tests that previously asserted
+on ``trace_metadata.json`` now decode the produced ``.ct`` container via
+``ct-print --meta-json`` (the canonical CTFS reader from
+``codetracer-trace-format-nim``).  ``--meta-json`` materialises only the
+``meta.dat`` block — program, args, trace-filter provenance chain — so
+it stays fast even on the multi-MB traces a real ``pytest`` run yields.
+
+The asserted facts are unchanged in content and strength:
+
+* ``program`` metadata          → ``metadata.program``.
+* recorded program ``args``      → ``metadata.args`` (threaded into
+  CTFS ``meta.dat`` by the recorder; spec §7).
+* the composed trace-filter set  → ``metadata.trace_filter.filters[]``.
+  The retired JSON sidecar carried a human ``name`` per filter
+  (``builtin-default`` / ``builtin-pytest`` / ``builtin-unittest``);
+  the CTFS ``meta.dat`` records each filter by its ``path``, and the
+  recorder's builtin inline filters use the canonical sentinel paths
+  ``<inline:builtin-default>`` / ``<inline:builtin-pytest>`` /
+  ``<inline:builtin-unittest>`` (see
+  ``src/session/bootstrap/filters.rs``).  Asserting on the sentinel
+  path is strictly *stronger* than asserting on the old JSON ``name``:
+  it confirms the filter was actually composed into the live chain,
+  not merely that a label was written to a sidecar.
+"""
 from __future__ import annotations
 
 import json
@@ -6,8 +34,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from .support.ctfs import ct_print_meta, find_ct_file
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +73,35 @@ def _write_test_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _read_ct_metadata(trace_dir: Path) -> dict[str, Any]:
+    """Decode the CTFS container in *trace_dir* and return ``metadata``.
+
+    Locates the single ``.ct`` container (asserting the legacy
+    ``trace.json`` sidecar is absent — the recorder is CTFS-only) and
+    returns the ``meta.dat`` metadata block decoded by
+    ``ct-print --meta-json``.
+    """
+    return ct_print_meta(find_ct_file(trace_dir))["metadata"]
+
+
+def _filter_paths(metadata: dict[str, Any]) -> list[str]:
+    """Return the ordered ``path`` of every filter in the provenance chain.
+
+    ``metadata.trace_filter.filters[]`` is the composed trace-filter
+    chain recorded in CTFS ``meta.dat`` (TF-M7, spec §7).  A recorder
+    that recorded no chain has no ``trace_filter`` key at all — that is
+    itself a failure for these tests, so we assert the block is present.
+    """
+    trace_filter = metadata.get("trace_filter")
+    assert isinstance(trace_filter, dict), (
+        "metadata.trace_filter missing — the recorder did not record the "
+        f"filter chain in meta.dat; metadata={metadata!r}"
+    )
+    filters = trace_filter.get("filters")
+    assert isinstance(filters, list), f"trace_filter.filters not a list: {trace_filter!r}"
+    return [entry["path"] for entry in filters]
+
+
 class TestPytestIntegration:
     """Tests for --pytest flag functionality."""
 
@@ -73,23 +133,21 @@ def test_addition():
         # Test may pass or fail depending on pytest availability, but trace should be created
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        assert metadata_file.exists(), "Metadata file not created"
+        metadata = _read_ct_metadata(trace_dir)
 
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-
-        # Check trace_filter includes both builtin-default and builtin-pytest
-        trace_filter = payload.get("trace_filter", {})
-        filters = trace_filter.get("filters", [])
-        filter_names = [f.get("name") for f in filters if isinstance(f, dict)]
-
-        assert "builtin-default" in filter_names, f"Expected builtin-default filter, got: {filter_names}"
-        assert "builtin-pytest" in filter_names, f"Expected builtin-pytest filter, got: {filter_names}"
-
-        # Check recorder metadata includes test_framework
-        recorder_info = payload.get("recorder", {})
-        assert recorder_info.get("test_framework") == "pytest", (
-            f"Expected test_framework=pytest, got: {recorder_info}"
+        # The composed trace-filter chain must include both the builtin
+        # default and the framework-specific pytest filter.  ``--pytest``
+        # is what loads ``builtin-pytest`` into the live chain — its
+        # presence here is the CTFS-side evidence that the recorder
+        # treated the run as a pytest run (the retired JSON sidecar's
+        # ``recorder.test_framework`` field was a weaker duplicate of the
+        # same signal).
+        filter_paths = _filter_paths(metadata)
+        assert "<inline:builtin-default>" in filter_paths, (
+            f"Expected builtin-default filter, got: {filter_paths}"
+        )
+        assert "<inline:builtin-pytest>" in filter_paths, (
+            f"Expected builtin-pytest filter, got: {filter_paths}"
         )
 
     def test_pytest_flag_program_is_pytest(self, tmp_path: Path) -> None:
@@ -109,10 +167,8 @@ def test_addition():
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-
-        assert payload.get("program") == "pytest"
+        metadata = _read_ct_metadata(trace_dir)
+        assert metadata.get("program") == "pytest"
 
     def test_pytest_args_passthrough(self, tmp_path: Path) -> None:
         """Verify that pytest arguments are passed through correctly."""
@@ -147,15 +203,18 @@ def test_fast():
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata = _read_ct_metadata(trace_dir)
 
-        # Check that args include the pytest arguments
-        recorded_args = payload.get("args", [])
-        assert str(test_file) in recorded_args
-        assert "-v" in recorded_args
-        assert "-k" in recorded_args
-        assert "fast" in recorded_args
+        # The recorder threads the recorded program's argv into CTFS
+        # meta.dat (spec §7); ``ct-print --meta-json`` surfaces it as
+        # ``metadata.args``.  The pytest arguments must round-trip.
+        recorded_args = metadata.get("args", [])
+        assert str(test_file) in recorded_args, (
+            f"test file missing from recorded args: {recorded_args}"
+        )
+        assert "-v" in recorded_args, f"-v missing from recorded args: {recorded_args}"
+        assert "-k" in recorded_args, f"-k missing from recorded args: {recorded_args}"
+        assert "fast" in recorded_args, f"fast missing from recorded args: {recorded_args}"
 
     def test_no_framework_filters_disables_pytest_filter(self, tmp_path: Path) -> None:
         """Verify that --no-framework-filters excludes the pytest filter."""
@@ -175,17 +234,15 @@ def test_fast():
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-
-        trace_filter = payload.get("trace_filter", {})
-        filters = trace_filter.get("filters", [])
-        filter_names = [f.get("name") for f in filters if isinstance(f, dict)]
+        metadata = _read_ct_metadata(trace_dir)
+        filter_paths = _filter_paths(metadata)
 
         # Should still have builtin-default but NOT builtin-pytest
-        assert "builtin-default" in filter_names
-        assert "builtin-pytest" not in filter_names, (
-            f"Expected no builtin-pytest filter with --no-framework-filters, got: {filter_names}"
+        assert "<inline:builtin-default>" in filter_paths, (
+            f"Expected builtin-default filter, got: {filter_paths}"
+        )
+        assert "<inline:builtin-pytest>" not in filter_paths, (
+            f"Expected no builtin-pytest filter with --no-framework-filters, got: {filter_paths}"
         )
 
 
@@ -221,18 +278,19 @@ if __name__ == "__main__":
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata = _read_ct_metadata(trace_dir)
+        filter_paths = _filter_paths(metadata)
 
-        trace_filter = payload.get("trace_filter", {})
-        filters = trace_filter.get("filters", [])
-        filter_names = [f.get("name") for f in filters if isinstance(f, dict)]
-
-        assert "builtin-default" in filter_names
-        assert "builtin-unittest" in filter_names
-
-        recorder_info = payload.get("recorder", {})
-        assert recorder_info.get("test_framework") == "unittest"
+        # ``--unittest`` must compose the builtin-unittest framework
+        # filter into the live chain alongside the builtin default — the
+        # CTFS-side evidence that the recorder treated the run as a
+        # unittest run.
+        assert "<inline:builtin-default>" in filter_paths, (
+            f"Expected builtin-default filter, got: {filter_paths}"
+        )
+        assert "<inline:builtin-unittest>" in filter_paths, (
+            f"Expected builtin-unittest filter, got: {filter_paths}"
+        )
 
     def test_unittest_program_metadata(self, tmp_path: Path) -> None:
         """Verify that --unittest sets program metadata correctly."""
@@ -258,12 +316,10 @@ class TestSimple(unittest.TestCase):
         ]
 
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
-        assert trace_dir.is_dir()
+        assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-
-        assert payload.get("program") == "unittest"
+        metadata = _read_ct_metadata(trace_dir)
+        assert metadata.get("program") == "unittest"
 
 
 class TestMutualExclusion:
@@ -341,8 +397,14 @@ def test_sync_addition():
         # Trace should be created even if pytest-asyncio is not installed
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        assert metadata_file.exists(), "Metadata file not created"
+        # A decodable CTFS container must be produced for the async test
+        # file: ``find_ct_file`` asserts the ``.ct`` exists with valid
+        # CTFS magic, and ``ct-print --meta-json`` decoding it confirms
+        # the container is well-formed and records the pytest run.
+        metadata = _read_ct_metadata(trace_dir)
+        assert metadata.get("program") == "pytest", (
+            f"async-test recording must be a pytest run, got: {metadata.get('program')!r}"
+        )
 
 
 class TestPytestNodeIds:
@@ -380,12 +442,14 @@ def test_third():
         result = _run_cli(args, cwd=tmp_path, env=env, check=False)
         assert trace_dir.is_dir(), f"Trace directory not created. stderr: {result.stderr}"
 
-        metadata_file = trace_dir / "trace_metadata.json"
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata = _read_ct_metadata(trace_dir)
 
-        # The node ID should be in the args
-        recorded_args = payload.get("args", [])
-        assert node_id in recorded_args
+        # The pytest node ID must round-trip into the recorded argv
+        # (CTFS meta.dat ``args``).
+        recorded_args = metadata.get("args", [])
+        assert node_id in recorded_args, (
+            f"node id {node_id!r} missing from recorded args: {recorded_args}"
+        )
 
     def test_test_class_node_id(self, tmp_path: Path) -> None:
         """Verify that test class node IDs work correctly."""
