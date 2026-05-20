@@ -1,9 +1,23 @@
 ## CodeTracer Recorders (Monorepo)
 
-This repository now hosts two related projects:
+This repository hosts **two recorders by design**:
 
-- codetracer-pure-python-recorder — a pure-Python tracer that still mirrors the early prototype.
-- codetracer-python-recorder — a Rust-backed Python extension (PyO3 + maturin) with structured errors and tighter tooling.
+- **codetracer-python-recorder** — the production recorder. A
+  Rust-backed Python extension (PyO3 + maturin) with structured errors
+  and tighter tooling; emits CTFS v3 binary trace bundles per
+  `codetracer-specs/Recorder-CLI-Conventions.md` §4. Use this in real
+  deployments.
+- **codetracer-pure-python-recorder** — a pure-Python *reference
+  implementation* that deliberately emits the legacy JSON trace
+  shape. It is the cross-validation oracle that keeps the native
+  recorder honest: the test suite runs the same programs through both
+  recorders and uses `ct print --json-events` to bring the native
+  recorder's CTFS output back into a comparable JSON shape (see
+  `codetracer-python-recorder/tests/python/test_cli_integration.py`).
+  **Do not migrate it to CTFS** without coordinating with the test
+  framework; see
+  [`codetracer-pure-python-recorder/README.md`](codetracer-pure-python-recorder/README.md)
+  for the full rationale.
 
 Both projects are still in motion. Expect breaking changes while we finish the error-handling rollout.
 

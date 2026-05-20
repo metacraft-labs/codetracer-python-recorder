@@ -29,17 +29,29 @@ just bench
 
 # Codebase structure
 
-This is a monorepo containing two separate recorder implementations:
+This is a monorepo containing **two separate recorder implementations, by design**:
 
-* `codetracer-python-recorder/` — The main Rust-backed recorder.
-  - `src/` — Rust source (PyO3 extension via maturin).
-  - `codetracer_python_recorder/` — Python wrapper package (CLI entry point
-    at `cli.py`, auto-start hook at `auto_start.py`, trace filters, etc.).
+* `codetracer-python-recorder/` — The production recorder. Rust-backed
+  (PyO3 + maturin), emits CTFS v3 binary trace bundles per
+  `codetracer-specs/Recorder-CLI-Conventions.md` §4.
+  - `src/` — Rust source.
+  - `codetracer_python_recorder/` — Python wrapper package (CLI entry
+    point at `cli.py`, auto-start hook at `auto_start.py`, trace
+    filters, etc.).
   - `tests/python/` — Python integration and unit tests.
   - `Cargo.toml` — Rust workspace member.
-* `codetracer-pure-python-recorder/` — A pure-Python fallback recorder
-  (no native extension needed). Used as a prototype and for environments
-  where Rust compilation is not available.
+* `codetracer-pure-python-recorder/` — A pure-Python **reference
+  implementation** that deliberately emits the legacy JSON trace
+  shape. Not a fallback; it is the cross-validation oracle that keeps
+  the native recorder honest. The test suite runs the same programs
+  through both recorders and uses `ct print --json-events` (from
+  `codetracer-trace-format-nim`) to bring the native recorder's CTFS
+  output back into a comparable JSON shape — see
+  `codetracer-python-recorder/tests/python/test_cli_integration.py`.
+  **Do not migrate it to CTFS** without coordinating with the test
+  framework; doing so would silently weaken the test suite by
+  removing the independent reference. See
+  `codetracer-pure-python-recorder/README.md` for the full rationale.
 * `scripts/` — Helper scripts (version bumping, coverage rendering, etc.).
 
 # You don't have access to the internet
