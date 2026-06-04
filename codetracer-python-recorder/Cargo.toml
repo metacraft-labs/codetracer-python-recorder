@@ -7,7 +7,7 @@ resolver = "2"
 name = "codetracer-python-recorder"
 version = "0.3.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 description = "Rust-backed Python module for CodeTracer recording (PyO3)"
 repository = "https://github.com/metacraft-labs/codetracer-python-recorder"
 

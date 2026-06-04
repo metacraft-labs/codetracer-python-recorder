@@ -2,7 +2,7 @@
 name = "recorder-errors"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 readme = "README.md"
 description = "Shared error facade for codetracer recorders"
 authors = ["CodeTracer Runtime Team"]
