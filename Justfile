@@ -177,3 +177,59 @@ format:
 # Bump version across all pyproject.toml files (usage: just bump-version patch)
 bump-version component:
     python3 scripts/bump_version.py {{component}} --all
+
+# --- M13: Packaging UX Standardization ---
+# Implements Repo-Requirements.md §2.8 packaging UX for the Python
+# language-ecosystem recorder. The Python recorder publishes a single
+# channel (pypi); the shortcuts are kept for symmetry with the spec.
+
+# Build a release artifact for the given channel.
+# Supported channels: pypi
+build-package channel:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{channel}}" in
+        pypi)
+            just build
+            ;;
+        *)
+            echo "::error::unknown channel '{{channel}}'. Python recorder only supports 'pypi'." >&2
+            exit 1
+            ;;
+    esac
+
+# Verify the artifact produced by `build-package <channel>`.
+verify-package channel:
+    #!/usr/bin/env python3
+    import os, shutil, subprocess, sys, zipfile
+    from pathlib import Path
+    ch = "{{channel}}"
+    strict = os.environ.get("CT_VERIFY_STRICT") == "1"
+    if ch != "pypi":
+        print(f"::error::unknown channel {ch!r}; Python recorder only supports 'pypi'")
+        sys.exit(1)
+    wheel_dir = Path("codetracer-python-recorder/target/wheels")
+    wheels = list(wheel_dir.glob("*.whl")) if wheel_dir.exists() else []
+    if not wheels:
+        print(f"[verify] no wheels in {wheel_dir} — run `just build-package pypi` first")
+        sys.exit(0 if not strict else 1)
+    if shutil.which("twine"):
+        subprocess.run(["twine", "check", *map(str, wheels)], check=True)
+    else:
+        if strict:
+            print("::error::twine required in strict mode"); sys.exit(1)
+        print("[verify] SKIP: twine not on PATH")
+    for w in wheels:
+        with zipfile.ZipFile(w) as zf:
+            names = zf.namelist()
+        if not any("codetracer_python_recorder" in n for n in names):
+            print(f"::error::wheel {w.name} missing codetracer_python_recorder package")
+            sys.exit(1)
+        print(f"[verify] wheel {w.name} OK")
+
+# Per-channel shortcuts (only pypi for Python).
+build-wheel:
+    just build-package pypi
+
+verify-wheel:
+    just verify-package pypi
