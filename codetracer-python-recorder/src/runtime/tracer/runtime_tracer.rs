@@ -9,18 +9,19 @@ use crate::module_identity::{
 };
 use crate::monitoring::CallbackOutcome;
 use crate::policy::RecorderPolicy;
+use crate::runtime::assignment_reconstructor::AssignmentReconstructor;
 use crate::runtime::io_capture::{IoCaptureSettings, ScopedMuteIoCapture};
 use crate::runtime::line_snapshots::LineSnapshotStore;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::value_encoder::encode_value_streaming;
 use crate::trace_filter::engine::TraceFilterEngine;
-use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyInt, PyString};
 use codetracer_trace_types::Line;
 use codetracer_trace_writer_nim::create_trace_writer;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use codetracer_trace_writer_nim::StreamingValueEncoder;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyInt, PyString};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
@@ -134,6 +135,24 @@ pub struct RuntimeTracer {
     /// bytes without building intermediate `ValueRecord` trees. Reused across
     /// steps to avoid per-value allocation overhead.
     pub(super) streaming_encoder: StreamingValueEncoder,
+    /// M15: Assignment reconstructor. Caches per-code-object bytecode tables
+    /// so we can reconstruct Assignment / BindVariable events on every
+    /// `on_line` callback without re-disassembling the function.
+    pub(super) assignment_reconstructor: AssignmentReconstructor,
+    /// M15: per-frame set of variable names already bound in scope. Used to
+    /// decide whether the next assignment should be preceded by a
+    /// `BindVariable` event.
+    pub(super) frame_bound_names: HashMap<u64, std::collections::HashSet<String>>,
+    /// M15: per-frame "last line we observed an on_line for". The
+    /// reconstructor emits Assignment events for the *previous* line on
+    /// every fresh `on_line` callback, because in Python 3.12 the LINE
+    /// event fires before the line executes — so when on_line(N) fires,
+    /// locals reflect the post-state of line N-1.
+    pub(super) last_line_per_frame: HashMap<u64, u32>,
+    /// M15: monotonic counter mirroring the writer's call-record index so we
+    /// can stamp `RValue::FunctionReturn { call_key }` with the
+    /// most-recently-popped call.
+    pub(super) last_call_key: i64,
     session_exit: SessionExitState,
 }
 
@@ -157,6 +176,10 @@ impl RuntimeTracer {
             filter: FilterCoordinator::new(trace_filter),
             module_name_from_globals,
             streaming_encoder: StreamingValueEncoder::new(),
+            assignment_reconstructor: AssignmentReconstructor::new(),
+            frame_bound_names: HashMap::new(),
+            last_line_per_frame: HashMap::new(),
+            last_call_key: -1,
             session_exit: SessionExitState::default(),
         }
     }
@@ -194,12 +217,8 @@ impl RuntimeTracer {
 
         self.flush_pending_io();
         let value = self.session_exit.as_bound(py);
-        let cbor = encode_value_streaming(
-            py,
-            &mut *self.writer,
-            &mut self.streaming_encoder,
-            &value,
-        );
+        let cbor =
+            encode_value_streaming(py, &mut *self.writer, &mut self.streaming_encoder, &value);
         TraceWriter::register_return_cbor(&mut *self.writer, &cbor);
         self.session_exit.mark_emitted();
     }
@@ -362,9 +381,9 @@ mod tests {
     use crate::policy;
     use crate::runtime::tracer::filtering::is_real_filename;
     use crate::trace_filter::config::TraceFilterConfig;
+    use codetracer_trace_types::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
     use pyo3::types::{PyAny, PyCode, PyModule};
     use pyo3::wrap_pyfunction;
-    use codetracer_trace_types::{FullValueRecord, StepRecord, TraceLowLevelEvent, ValueRecord};
     use serde::Deserialize;
     use std::cell::Cell;
     use std::collections::BTreeMap;
@@ -2270,5 +2289,349 @@ snapshot()
 
             reset_policy(py);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // M15: Python recorder Assignment events
+    // ------------------------------------------------------------------
+
+    /// Resolve a `VariableId` back to its source name by walking the
+    /// `VariableName` events emitted at the point the id was minted (the
+    /// NonStreamingTraceWriter assigns ids in the order names are first
+    /// observed; see `codetracer_trace_writer_nim::NonStreamingTraceWriter
+    /// ::ensure_variable_id`).
+    fn variable_name_for(
+        events: &[TraceLowLevelEvent],
+        id: codetracer_trace_types::VariableId,
+    ) -> Option<String> {
+        let mut counter = 0usize;
+        for event in events {
+            if let TraceLowLevelEvent::VariableName(name) = event {
+                if counter == id.0 {
+                    return Some(name.clone());
+                }
+                counter += 1;
+            }
+        }
+        None
+    }
+
+    /// Convenience: collect every `(target_name, RValue)` pair seen in
+    /// `events`, in order.
+    fn collect_assignments(
+        events: &[TraceLowLevelEvent],
+    ) -> Vec<(String, codetracer_trace_types::RValue)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                TraceLowLevelEvent::Assignment(rec) => Some((
+                    variable_name_for(events, rec.to).unwrap_or_else(|| format!("?{}", rec.to.0)),
+                    rec.from.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Convenience: collect every name that received a `BindVariable` event.
+    fn collect_bind_variable_names(events: &[TraceLowLevelEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                TraceLowLevelEvent::BindVariable(rec) => {
+                    Some(variable_name_for(events, rec.variable_id).unwrap_or_default())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Capture the buffered events from a script-driven trace.
+    ///
+    /// Like `run_traced_script` but exposes the raw events vector instead of
+    /// the simplified snapshots — needed so the M15 tests can inspect
+    /// `Assignment`, `BindVariable`, and the column on `StepRecord`.
+    fn run_traced_script_events(body: &str) -> Vec<TraceLowLevelEvent> {
+        Python::with_gil(|py| {
+            let mut tracer = RuntimeTracer::new(
+                "test.py",
+                &[],
+                TraceEventsFileFormat::Json,
+                None,
+                None,
+                false,
+            );
+            ensure_test_module(py);
+            let tmp = tempfile::tempdir().expect("create temp dir");
+            let script_path = tmp.path().join("script.py");
+            let script = format!("{PRELUDE}\n{body}");
+            std::fs::write(&script_path, &script).expect("write script");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute test script");
+            }
+            tracer.writer.events().to_vec()
+        })
+    }
+
+    #[test]
+    fn test_python_recorder_emits_assignment_for_simple_assignment() {
+        // `a = 10` must surface as Assignment { from: Literal }. The trailing
+        // `snapshot()` triggers an extra on_line event so the Assignment for
+        // the previous line gets flushed (see the on_line emit-on-previous
+        // ordering in `events.rs::on_line`).
+        let body = r#"
+a = 10
+snapshot()
+"#;
+        let events = run_traced_script_events(body);
+        let assignments = collect_assignments(&events);
+        let a_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "a")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Assignment for `a`, got assignments={:?}",
+                    assignments
+                )
+            });
+        assert!(
+            matches!(a_assign.1, codetracer_trace_types::RValue::Literal),
+            "expected RValue::Literal for `a = 10`, got {:?}",
+            a_assign.1
+        );
+
+        let binds = collect_bind_variable_names(&events);
+        assert!(
+            binds.contains(&"a".to_string()),
+            "expected BindVariable for `a`, got {:?}",
+            binds
+        );
+    }
+
+    #[test]
+    fn test_python_recorder_emits_assignment_for_local_copy() {
+        // `b = a` must surface as Assignment { from: Simple(var_id(a)) }.
+        let body = r#"
+a = 10
+b = a
+snapshot()
+"#;
+        let events = run_traced_script_events(body);
+        let assignments = collect_assignments(&events);
+        let b_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Assignment for `b`, got assignments={:?}",
+                    assignments
+                )
+            });
+        match &b_assign.1 {
+            codetracer_trace_types::RValue::Simple(id) => {
+                let src = variable_name_for(&events, *id).unwrap_or_default();
+                assert_eq!(
+                    src, "a",
+                    "expected RValue::Simple(a), got Simple({:?})",
+                    src
+                );
+            }
+            other => panic!("expected RValue::Simple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_python_recorder_emits_function_return_rvalue() {
+        // `result = foo()` must surface as Assignment { from: FunctionReturn{call_key} }.
+        //
+        // The test harness drives the tracer manually via PRELUDE helpers:
+        // - `start_call()` calls into on_py_start so the writer registers a
+        //   CallRecord and `last_call_key` advances. We invoke it from inside
+        //   foo() so it fires when foo executes.
+        // - The final `snapshot()` flushes the per-line Assignment emit pass.
+        //
+        // The bytecode reconstructor recognises `result = foo()` as a CALL
+        // pattern regardless of whether the harness actually invoked
+        // on_py_start; the `last_call_key` only affects which CallKey value
+        // gets stamped on the RValue::FunctionReturn variant.
+        let body = r#"
+def foo():
+    start_call()
+    return 42
+
+result = foo()
+snapshot()
+"#;
+        let events = run_traced_script_events(body);
+        let assignments = collect_assignments(&events);
+        let result_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "result")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Assignment for `result`, got assignments={:?}",
+                    assignments
+                )
+            });
+        assert!(
+            matches!(
+                result_assign.1,
+                codetracer_trace_types::RValue::FunctionReturn { .. }
+            ),
+            "expected RValue::FunctionReturn for `result = foo()`, got {:?}",
+            result_assign.1
+        );
+    }
+
+    #[test]
+    fn test_python_recorder_emits_destructuring_assignments() {
+        // `a, b = pair` must surface as TWO Assignment events with
+        // RValue::IndexAccess { receiver: pair, index: i }.
+        let body = r#"
+pair = (11, 22)
+a, b = pair
+snapshot()
+"#;
+        let events = run_traced_script_events(body);
+        let assignments = collect_assignments(&events);
+        let a_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "a")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Assignment for `a`, got assignments={:?}",
+                    assignments
+                )
+            });
+        let b_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Assignment for `b`, got assignments={:?}",
+                    assignments
+                )
+            });
+        match &a_assign.1 {
+            codetracer_trace_types::RValue::IndexAccess { receiver, index } => {
+                let src = variable_name_for(&events, *receiver).unwrap_or_default();
+                assert_eq!(src, "pair", "a: receiver expected pair, got {:?}", src);
+                assert_eq!(*index, 0, "a: expected index 0, got {}", index);
+            }
+            other => panic!("expected RValue::IndexAccess for a, got {:?}", other),
+        }
+        match &b_assign.1 {
+            codetracer_trace_types::RValue::IndexAccess { receiver, index } => {
+                let src = variable_name_for(&events, *receiver).unwrap_or_default();
+                assert_eq!(src, "pair", "b: receiver expected pair, got {:?}", src);
+                assert_eq!(*index, 1, "b: expected index 1, got {}", index);
+            }
+            other => panic!("expected RValue::IndexAccess for b, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_python_recorder_emits_column_in_step_record() {
+        // Python 3.11+ exposes per-instruction `(col_offset, end_col_offset)`
+        // via `co_positions()`. The recorder surfaces the leftmost STORE's
+        // column onto `StepRecord.column` for the line.
+        //
+        // We use `snap(value)` from the PRELUDE so the on_line callback
+        // fires on the SAME line as the assignment, ensuring the recorded
+        // StepRecord is the one whose bytecode has a STORE we can extract
+        // a column from. Both `a` and `b` are bound to function-return
+        // values via snap(), and snap()'s own on_line drives the recorder.
+        let body = r#"
+a = snap(10)
+b = snap(20)
+"#;
+        let events = run_traced_script_events(body);
+        // We expect at least one Step record with column populated.
+        let any_with_column = events
+            .iter()
+            .filter_map(|e| match e {
+                TraceLowLevelEvent::Step(rec) => rec.column.map(|c| (rec.line.0, c.0)),
+                _ => None,
+            })
+            .next();
+        assert!(
+            any_with_column.is_some(),
+            "expected at least one StepRecord with column populated, got events containing steps: {:?}",
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    TraceLowLevelEvent::Step(rec) => Some(rec),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// M15 verification 6: Path A confidence-1.0 is a property of the
+    /// db-backend's classifier, not the recorder. The recorder satisfies its
+    /// half of the contract by ensuring the buffered event stream contains
+    /// `Assignment` events for every store on a real-frame line. This test
+    /// asserts that property: every `b = a`-style local-copy assignment
+    /// emits an Assignment event with RValue::Simple, which is exactly what
+    /// triggers Path A activation in `trace_processor.rs`. The db-backend
+    /// then upgrades the per-hop confidence to 1.0 (spec §6.1.5).
+    #[test]
+    fn test_origin_chain_path_a_confidence_one() {
+        let body = r#"
+a = 10
+b = a
+c = b
+snapshot()
+"#;
+        let events = run_traced_script_events(body);
+        let assignments = collect_assignments(&events);
+
+        // b = a -> Simple(a)
+        let b_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "b")
+            .expect("Assignment(b) present");
+        assert!(
+            matches!(b_assign.1, codetracer_trace_types::RValue::Simple(_)),
+            "Path A: `b = a` needs Simple, got {:?}",
+            b_assign.1
+        );
+
+        // c = b -> Simple(b)
+        let c_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "c")
+            .expect("Assignment(c) present");
+        match &c_assign.1 {
+            codetracer_trace_types::RValue::Simple(id) => {
+                let src = variable_name_for(&events, *id).unwrap_or_default();
+                assert_eq!(
+                    src, "b",
+                    "Path A: `c = b` source should be b, got {:?}",
+                    src
+                );
+            }
+            other => panic!("Path A: `c = b` needs Simple, got {:?}", other),
+        }
+
+        // The chain a (Literal) -> b (Simple a) -> c (Simple b) is
+        // wholly Path A reconstructible from the recorder events alone.
+        let a_assign = assignments
+            .iter()
+            .find(|(name, _)| name == "a")
+            .expect("Assignment(a) present");
+        assert!(
+            matches!(a_assign.1, codetracer_trace_types::RValue::Literal),
+            "Path A chain root must be Literal, got {:?}",
+            a_assign.1
+        );
     }
 }

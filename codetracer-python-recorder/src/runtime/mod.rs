@@ -4,6 +4,7 @@
 //! [`RuntimeTracer`] so callers can keep importing it from `crate::runtime`.
 
 mod activation;
+pub mod assignment_reconstructor;
 mod frame_inspector;
 pub mod io_capture;
 mod line_snapshots;

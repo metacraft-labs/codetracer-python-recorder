@@ -9,20 +9,26 @@ use crate::monitoring::{
 };
 use crate::policy::policy_snapshot;
 use crate::runtime::activation::ActivationExitKind;
+use crate::runtime::assignment_reconstructor::{LineAssignment, RValueShape};
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
 use crate::runtime::logging::log_event;
 use crate::runtime::value_capture::{
-    capture_call_arguments, encode_named_argument,
-    record_return_value_streaming, record_visible_scope_streaming,
+    capture_call_arguments, encode_named_argument, record_return_value_streaming,
+    record_visible_scope_streaming,
 };
+use crate::trace_filter::config::ValueAction;
+use crate::trace_filter::engine::{ValueKind, ValuePolicy};
+use codetracer_trace_types::{
+    AssignmentRecord, BindVariableRecord, CallKey, FullValueRecord, Line, PassBy, PathId, Place,
+    RValue, StepRecord, TraceLowLevelEvent, VariableId,
+};
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use recorder_errors::{bug, enverr, target, ErrorCode};
-use codetracer_trace_types::{FullValueRecord, Line, PathId};
-use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use std::collections::HashSet;
 use std::path::Path;
 use std::thread;
@@ -287,21 +293,90 @@ impl Tracer for RuntimeTracer {
         let line_value = Line(lineno as i64);
         let mut recorded_path: Option<(PathId, Line)> = None;
 
+        // M15: derive the column for the upcoming Step from the bytecode
+        // line-table. The table is cached per code object so this is O(1)
+        // on the steady-state hot path.
+        let column_for_step: Option<Line> = self
+            .assignment_reconstructor
+            .table_for(py, code)
+            .ok()
+            .and_then(|t| t.first_column_for_line(lineno))
+            .map(|c| Line(c as i64));
+
+        let snapshot = capture_frame(py, code)?;
+        let frame_raw = snapshot.frame_ptr() as usize as u64;
+
+        // M15: emit Assignment / BindVariable events for every line that
+        // has executed since the previous on_line callback in this frame.
+        //
+        // Rationale: Python's sys.monitoring LINE event fires before the
+        // line executes, so at on_line(N) the frame's locals reflect the
+        // post-state of line N-1 (the previous on_line callback's line N-1
+        // has now completed). For real sys.monitoring this collapses to
+        // emitting Assignment events for the single line `prev_line` ==
+        // `N-1`. The test harness / pure-Python recorder shim drives
+        // on_line less frequently (sometimes only once per script via the
+        // `snapshot()` helper), in which case the range of "lines that
+        // have executed since the last callback" can span the whole body.
+        //
+        // The cached `LineAssignmentTable` keys by line number, so we walk
+        // the executed range and emit one batch per line that has STOREs
+        // in the bytecode. Calls invoked during those lines have already
+        // incremented `last_call_key` by this point, so `FunctionReturn
+        // { call_key }` references the right CallRecord.
+        let previous_line = self.last_line_per_frame.get(&frame_raw).copied();
+        let first_to_emit = previous_line.map(|p| p + 1).unwrap_or(0);
+        let last_to_emit = lineno.saturating_sub(1);
+        if first_to_emit <= last_to_emit {
+            if let Ok(table) = self.assignment_reconstructor.table_for(py, code) {
+                for line in first_to_emit..=last_to_emit {
+                    let assignments = table.for_line(line);
+                    if !assignments.is_empty() {
+                        emit_assignment_events(
+                            &mut *self.writer,
+                            &mut self.frame_bound_names,
+                            frame_raw,
+                            assignments,
+                            self.last_call_key,
+                            value_policy,
+                        );
+                    }
+                }
+            }
+        }
+
         if let Ok(filename) = code.filename(py) {
             let path = Path::new(filename);
             let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-            TraceWriter::register_step(&mut *self.writer, path, line_value);
+            // M15: emit the column-bearing Step variant directly via
+            // `add_event` so the NonStreamingTraceWriter / CTFS reader sees
+            // the column. `register_step_with_column` falls back to a
+            // column-less Step on legacy single-stream Nim writers.
+            if column_for_step.is_some() {
+                TraceWriter::add_event(
+                    &mut *self.writer,
+                    TraceLowLevelEvent::Step(StepRecord {
+                        path_id,
+                        line: line_value,
+                        column: column_for_step,
+                    }),
+                );
+            } else {
+                TraceWriter::register_step(&mut *self.writer, path, line_value);
+            }
             self.mark_event();
             recorded_path = Some((path_id, line_value));
         }
-
-        let snapshot = capture_frame(py, code)?;
 
         if let Some((path_id, line)) = recorded_path {
             let frame_id = FrameId::from_raw(snapshot.frame_ptr() as usize as u64);
             self.io
                 .record_snapshot(thread::current().id(), path_id, line, frame_id);
         }
+
+        // Remember this line so the next on_line in the same frame can
+        // emit Assignment events for it.
+        self.last_line_per_frame.insert(frame_raw, lineno);
 
         let mut recorded: HashSet<String> = HashSet::new();
         let mut telemetry_holder = if wants_telemetry {
@@ -435,8 +510,7 @@ impl Tracer for RuntimeTracer {
         self.flush_pending_io();
         // For non-streaming formats we can update the events file.
         match self.format {
-            TraceEventsFileFormat::Json
-            | TraceEventsFileFormat::BinaryV0 => {
+            TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
                 TraceWriter::finish_writing_trace_events(&mut *self.writer).map_err(|err| {
                     ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
@@ -519,6 +593,122 @@ impl Tracer for RuntimeTracer {
     }
 }
 
+/// Encode the M15 Assignment / BindVariable event pair for each store
+/// classified by the bytecode reconstructor.
+///
+/// `frame_bound_names[frame_id]` records the set of names already bound in
+/// this frame so we emit `BindVariable` exactly once per name (matching the
+/// abstract trace-writer's `bind_variable` semantics in
+/// `codetracer_trace_writer::AbstractTraceWriter`).
+///
+/// `latest_call_key` is the writer-side index of the most recently registered
+/// `CallRecord`. When the bytecode classifier returned `FunctionReturn`, we
+/// stamp this onto the `RValue::FunctionReturn { call_key }`. If no call has
+/// been recorded yet (call key < 0), we degrade to `RValue::Compound(vec![])`
+/// rather than emit a dangling reference.
+///
+/// `policy` (when set) gates emission per target name so the trace filter's
+/// value-drop directive also suppresses the corresponding Assignment /
+/// BindVariable events — otherwise the reconstructor would leak variable
+/// identities for names whose values the filter explicitly drops.
+fn emit_assignment_events(
+    writer: &mut dyn TraceWriter,
+    frame_bound_names: &mut std::collections::HashMap<u64, HashSet<String>>,
+    frame_id: u64,
+    assignments: &[LineAssignment],
+    latest_call_key: i64,
+    policy: Option<&ValuePolicy>,
+) {
+    if assignments.is_empty() {
+        return;
+    }
+    let bound = frame_bound_names.entry(frame_id).or_default();
+    for assignment in assignments {
+        // Trace-filter integration: if the per-target value policy says
+        // "drop", we skip both BindVariable and Assignment for this name
+        // so the reconstructor cannot inadvertently leak identifier
+        // metadata for filtered values.
+        if let Some(p) = policy {
+            if matches!(
+                p.decide(ValueKind::Local, &assignment.target),
+                ValueAction::Drop
+            ) {
+                continue;
+            }
+        }
+        // Resolve / allocate variable ids by emitting the necessary
+        // VariableName events first (the NonStreamingTraceWriter mints ids
+        // lazily; `ensure_variable_id` is the canonical entry point).
+        let target_id = TraceWriter::ensure_variable_id(writer, &assignment.target);
+        let rvalue = build_rvalue(writer, &assignment.rvalue, latest_call_key);
+
+        // BindVariable on first observation of the name in this frame.
+        if bound.insert(assignment.target.clone()) {
+            TraceWriter::add_event(
+                writer,
+                TraceLowLevelEvent::BindVariable(BindVariableRecord {
+                    variable_id: target_id,
+                    place: Place(0),
+                }),
+            );
+        }
+        TraceWriter::add_event(
+            writer,
+            TraceLowLevelEvent::Assignment(AssignmentRecord {
+                to: target_id,
+                pass_by: PassBy::Value,
+                from: rvalue,
+            }),
+        );
+    }
+}
+
+fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_key: i64) -> RValue {
+    match shape {
+        RValueShape::Literal => RValue::Literal,
+        RValueShape::Simple { source } => {
+            let id = TraceWriter::ensure_variable_id(writer, source);
+            RValue::Simple(id)
+        }
+        RValueShape::FieldAccess { receiver, field } => {
+            let id = TraceWriter::ensure_variable_id(writer, receiver);
+            RValue::FieldAccess {
+                receiver: id,
+                field: field.clone(),
+            }
+        }
+        RValueShape::IndexAccess { receiver, index } => {
+            let id = TraceWriter::ensure_variable_id(writer, receiver);
+            RValue::IndexAccess {
+                receiver: id,
+                index: *index,
+            }
+        }
+        RValueShape::FunctionReturn => {
+            // The call key must reference a previously recorded
+            // CallRecord. If we have not seen one yet (e.g. the call landed
+            // before the recorder activated) we fall back to a Compound
+            // marker so the decoder is never asked to dereference an
+            // invalid CallKey.
+            if latest_call_key >= 0 {
+                RValue::FunctionReturn {
+                    call_key: CallKey(latest_call_key),
+                }
+            } else {
+                RValue::Compound(vec![])
+            }
+        }
+        RValueShape::Compound { sources } => {
+            let ids: Vec<VariableId> = sources
+                .iter()
+                .map(|s| TraceWriter::ensure_variable_id(writer, s))
+                .collect();
+            RValue::Compound(ids)
+        }
+        RValueShape::Unknown => RValue::Compound(vec![]),
+    }
+}
+
 impl RuntimeTracer {
     fn register_call_record(
         &mut self,
@@ -528,6 +718,10 @@ impl RuntimeTracer {
     ) {
         if let Ok(fid) = self.ensure_function_id(py, code) {
             TraceWriter::register_call(&mut *self.writer, fid, args);
+            // M15: the writer's CallRecord index advances by exactly one per
+            // register_call call. Track that so we can stamp the next
+            // observed `result = foo()` assignment with the matching CallKey.
+            self.last_call_key += 1;
             self.mark_event();
         }
     }

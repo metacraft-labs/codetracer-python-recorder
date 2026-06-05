@@ -247,7 +247,7 @@ dependencies = [
 
 [[package]]
 name = "codetracer_trace_format_capnp"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "capnp",
  "capnpc",
@@ -256,11 +256,11 @@ dependencies = [
 
 [[package]]
 name = "codetracer_trace_format_cbor_zstd"
-version = "0.16.0"
+version = "0.17.0"
 
 [[package]]
 name = "codetracer_trace_types"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "base64",
  "num-derive",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "codetracer_trace_writer"
-version = "0.17.3"
+version = "0.18.0"
 dependencies = [
  "cbor4ii",
  "codetracer_ctfs",
