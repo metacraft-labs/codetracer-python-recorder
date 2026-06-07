@@ -223,6 +223,29 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
             "Use '--no-propagate-script-exit' to force a zero exit status."
         ),
     )
+    # P0.2 (Performance + E2E Coverage): client-controlled omniscient-DB
+    # upload mode. The flag is forwarded to the Monolith's finalize body
+    # as the camelCase ``omniscientDbMode`` field per CS-M7. The Python
+    # recorder doesn't drive the finalize HTTP itself (the managed-upload
+    # path delegates to the Rust ``codetracer_ctfs`` crate); the flag is
+    # surfaced here so the CLI accepts the spec-conformant argument and
+    # ``codetracer_python_recorder`` can forward it to the upload layer
+    # via the ``CODETRACER_OMNISCIENT_DB_MODE`` environment variable. The
+    # actual HTTP wire-up lands at the upload site once the
+    # ``managed_upload_materialized_trace`` PyO3 binding accepts a mode
+    # parameter (deferred; the env-var path keeps the CLI honest today).
+    parser.add_argument(
+        "--omniscient-db",
+        choices=["off", "on", "lazy", "pre-prepared"],
+        default=None,
+        help=(
+            "Omniscient-DB upload mode forwarded to the Monolith as the camelCase "
+            "'omniscientDbMode' finalize-body field (CS-M7). 'off' is the default; "
+            "'on' eagerly builds the omniscient namespaces server-side; 'lazy' "
+            "defers the build until the first omniscient query; 'pre-prepared' "
+            "uploads the namespaces inline."
+        ),
+    )
 
     # Test framework support - mutually exclusive with script mode
     framework_group = parser.add_mutually_exclusive_group()
@@ -350,6 +373,15 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         policy["module_name_from_globals"] = known.module_name_from_globals
     if known.propagate_script_exit is not None:
         policy["propagate_script_exit"] = known.propagate_script_exit
+
+    # P0.2 (Performance + E2E Coverage): set the env-var bridge so the
+    # managed-upload session (codetracer_python_recorder.session) and
+    # downstream Rust upload layer can forward the omniscient-DB mode
+    # to the Monolith's CS-M7 finalize body. Doing this here keeps the
+    # CLI spec-conformant ahead of the PyO3 binding accepting a mode
+    # parameter directly.
+    if known.omniscient_db is not None:
+        os.environ["CODETRACER_OMNISCIENT_DB_MODE"] = known.omniscient_db
 
     return RecorderCLIConfig(
         out_dir=trace_dir,
