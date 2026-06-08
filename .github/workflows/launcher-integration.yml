@@ -13,7 +13,7 @@ name: launcher-integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev, stable]
   pull_request:
 
 jobs:
