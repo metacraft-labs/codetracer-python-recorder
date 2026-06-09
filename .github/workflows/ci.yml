@@ -62,6 +62,18 @@ jobs:
       - name: Prepare dev environment
         run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
 
+      - name: Build ct-print binary
+        # tests/python/test_cli_integration.py shells out to
+        # ../codetracer-trace-format-nim/ct-print to decode CTFS
+        # trace bundles back into the legacy JSON shape used by the
+        # pure-python recorder reference oracle.  Compile it from
+        # codetracer_ct_print.nim into the expected path.
+        run: |
+          nix develop --command bash -lc '
+            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+            nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
+          '
+
       - name: Verify recorder version metadata
         run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
 
