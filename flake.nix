@@ -171,6 +171,13 @@
               uv
               pkg-config
 
+              # Nim toolchain for the codetracer_trace_writer_nim
+              # build.rs (compiles the Nim FFI sources from the
+              # codetracer-trace-format-nim sibling repo to a static
+              # library that the Rust crate links).
+              nim
+              nimble
+
               # CapNProto
               capnproto
 
