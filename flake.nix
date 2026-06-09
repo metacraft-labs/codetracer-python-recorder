@@ -181,6 +181,14 @@
               # CapNProto
               capnproto
 
+              # zstd headers + libs -- nim's codetracer_trace_writer
+              # imports zstd_seekable_bindings.nim which #include
+              # <zstd.h> via nim's C backend; without zstd.dev on the
+              # PATH the `nim c` of ct-print fails with 'zstd.h: No
+              # such file or directory'.
+              zstd
+              zstd.dev
+
               # Benchmark visualisation
               gnuplot
 
