@@ -227,7 +227,21 @@ class ParsedCtfsTrace:
 
 
 def parse_ctfs_trace(ct_path: Path) -> ParsedCtfsTrace:
-    """Decode *ct_path* and adapt it to :class:`ParsedCtfsTrace`."""
+    """Decode *ct_path* and adapt it to :class:`ParsedCtfsTrace`.
+
+    P1.5 (Column-Aware-Tracing-And-Deminification milestone): step
+    events emitted by the column-aware native recorder carry an
+    additional ``column`` field that the legacy
+    ``codetracer-pure-python-recorder`` JSON oracle does NOT emit.
+    The ``steps`` list deliberately projects each event to
+    ``(path_id, line)`` only — dropping ``column`` — so any cross-
+    validation that compares native vs pure-python step streams stays
+    on a level playing field.  Tests that want to assert on the
+    column itself should walk ``events`` directly (they keep the
+    ``column`` key) — see
+    ``tests/python/test_column_aware_steps.py`` for the canonical
+    column-aware acceptance pattern.
+    """
     bundle = ct_print_full(ct_path)
 
     paths: List[str] = list(bundle["paths"])
@@ -265,6 +279,10 @@ def parse_ctfs_trace(ct_path: Path) -> ParsedCtfsTrace:
             returns.append({"return_value": event.get("return_value")})
         elif kind == "step":
             if "path_id" in event and "line" in event:
+                # P1.5: deliberately drop the per-step ``column`` field
+                # so the projected ``steps`` list stays oracle-compatible
+                # with the column-blind pure-python recorder.  Tests
+                # that need column data walk ``events`` directly.
                 steps.append((int(event["path_id"]), int(event["line"])))
 
     return ParsedCtfsTrace(

@@ -149,6 +149,31 @@ pub struct RuntimeTracer {
     /// event fires before the line executes — so when on_line(N) fires,
     /// locals reflect the post-state of line N-1.
     pub(super) last_line_per_frame: HashMap<u64, u32>,
+    /// P1.2: per-frame "last column we surfaced via `register_step` /
+    /// `write_delta_column`".  Mirrors `last_line_per_frame` so the
+    /// `on_line` event handler can decide between emitting a column-only
+    /// `DeltaColumn` event (same line, different column — the hot path on
+    /// minified one-liner sources) and a `register_step` (line move,
+    /// which resets the writer's column cursor to 1 per the canonical
+    /// CTFS spec).  Reset to `None` for any frame whose cursor isn't
+    /// known yet — the next `on_line` will land an absolute step.
+    pub(super) last_column_per_frame: HashMap<u64, i64>,
+    /// P1.1 / P1.2: whether this tracer is allowed to emit column-only
+    /// `DeltaColumn` events.  Mirrors the writer's column-aware-mode
+    /// flag — only the canonical CTFS multi-stream backend supports
+    /// it; on legacy formats (`Json`, `BinaryV0`) this stays `false`
+    /// and the recorder falls back to `register_step`-only.
+    pub(super) column_aware: bool,
+    /// P1.3: set of source paths already registered with their per-line
+    /// column counts (paths.dat Layout A) so we don't re-read the file
+    /// or re-emit the line-length record for every `on_line` callback.
+    /// Membership in this set means "the writer has been told about
+    /// this path's `line_lengths` table"; absence triggers the first
+    /// `register_path_with_line_lengths` call on the next step into
+    /// that file.  Only populated when `column_aware` is on; on legacy
+    /// formats this stays empty and the recorder takes the legacy
+    /// `ensure_path_id` → `register_step` path.
+    pub(super) paths_with_line_lengths: std::collections::HashSet<std::path::PathBuf>,
     /// M15: monotonic counter mirroring the writer's call-record index so we
     /// can stamp `RValue::FunctionReturn { call_key }` with the
     /// most-recently-popped call.
@@ -167,6 +192,13 @@ impl RuntimeTracer {
     ) -> Self {
         let writer = create_trace_writer(program, args, format);
         let lifecycle = LifecycleController::new(program, activation_path);
+        // P1.1: column-aware mode is gated on the canonical CTFS
+        // multi-stream backend.  On legacy formats the trait-default
+        // `enable_column_aware_steps` is a no-op and `write_delta_column`
+        // would set the writer's error string without affecting the
+        // trace, so we keep the recorder's `column_aware` flag in lock-
+        // step with the writer's capability.
+        let column_aware = matches!(format, TraceEventsFileFormat::Ctfs);
         Self {
             writer,
             format,
@@ -179,6 +211,9 @@ impl RuntimeTracer {
             assignment_reconstructor: AssignmentReconstructor::new(),
             frame_bound_names: HashMap::new(),
             last_line_per_frame: HashMap::new(),
+            last_column_per_frame: HashMap::new(),
+            column_aware,
+            paths_with_line_lengths: std::collections::HashSet::new(),
             last_call_key: -1,
             session_exit: SessionExitState::default(),
         }
@@ -2539,32 +2574,34 @@ snapshot()
     }
 
     #[test]
-    fn test_python_recorder_emits_column_in_step_record() {
-        // Python 3.11+ exposes per-instruction `(col_offset, end_col_offset)`
-        // via `co_positions()`. The recorder surfaces the leftmost STORE's
-        // column onto `StepRecord.column` for the line.
+    fn test_python_recorder_emits_step_records_for_column_carrying_lines() {
+        // P1.1/P1.2 (was: M14/M15 `StepRecord.column` test).  The
+        // canonical CTFS column-encoding path emits column-only
+        // `DeltaColumn` (tag 0x07) events on the multi-stream backend,
+        // not a column field on `StepRecord`.  Column-aware acceptance
+        // lives in `tests/python/test_column_aware_steps.py`, which
+        // drives a full CTFS round-trip via the recorder CLI.
         //
-        // We use `snap(value)` from the PRELUDE so the on_line callback
-        // fires on the SAME line as the assignment, ensuring the recorded
-        // StepRecord is the one whose bytecode has a STORE we can extract
-        // a column from. Both `a` and `b` are bound to function-return
-        // values via snap(), and snap()'s own on_line drives the recorder.
+        // This unit test now keeps a weaker but still useful smoke
+        // assertion against the JSON test-double backend: a script with
+        // a STORE on every body line produces at least one `Step`
+        // event per line, proving the extraction-and-emission glue is
+        // intact for the non-column-aware path.  The JSON test double
+        // (`NonStreamingTraceWriter`) drops column data by design — see
+        // its `register_step_with_column` impl.
         let body = r#"
 a = snap(10)
 b = snap(20)
 "#;
         let events = run_traced_script_events(body);
-        // We expect at least one Step record with column populated.
-        let any_with_column = events
+        let step_count = events
             .iter()
-            .filter_map(|e| match e {
-                TraceLowLevelEvent::Step(rec) => rec.column.map(|c| (rec.line.0, c.0)),
-                _ => None,
-            })
-            .next();
+            .filter(|e| matches!(e, TraceLowLevelEvent::Step(_)))
+            .count();
         assert!(
-            any_with_column.is_some(),
-            "expected at least one StepRecord with column populated, got events containing steps: {:?}",
+            step_count >= 2,
+            "expected >=2 Step events (one per body line), got {} in {:?}",
+            step_count,
             events
                 .iter()
                 .filter_map(|e| match e {
