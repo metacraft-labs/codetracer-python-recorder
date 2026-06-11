@@ -3,11 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use recorder_errors::{enverr, ErrorCode};
-use codetracer_trace_types::Line;
+use codetracer_trace_types::{Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 use crate::errors::Result;
+use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 
 /// File layout for a trace session. Encapsulates the events file
 /// (canonical `.ct` CTFS container in CTFS mode) that needs to be
@@ -92,21 +93,118 @@ impl TraceOutputPaths {
             // activation path) we fall back to an empty slice and the
             // reader surfaces column = 1 for steps on this file.
             let line_lengths = read_line_lengths_for_path(start_path);
-            if let Err(err) = TraceWriter::register_path_with_line_lengths(
+            match TraceWriter::register_path_with_line_lengths(
                 writer,
                 start_path,
                 &line_lengths,
             ) {
-                log::debug!(
-                    "[TraceOutputPaths] register_path_with_line_lengths failed for {}: {} \
-                     (column resolution will fall back to None for this file)",
-                    start_path.display(),
-                    err,
-                );
+                Ok(start_path_id) => {
+                    // P6.2: the activation path's first registration is
+                    // also the canonical hook point for the recorder-
+                    // side autoformat pass.  This catches minified
+                    // *entrypoints* — programs whose top-level file is
+                    // itself a packed bundle.  Steady-state hand-written
+                    // entrypoints land on
+                    // [`SkipReason::NotMinified`] inside the helper and
+                    // the call is essentially free.  See
+                    // [`maybe_register_autoformat_view_for_path`] for
+                    // the full decision tree.
+                    maybe_register_autoformat_view_for_path(
+                        writer,
+                        start_path_id,
+                        start_path,
+                    );
+                }
+                Err(err) => {
+                    log::debug!(
+                        "[TraceOutputPaths] register_path_with_line_lengths failed for {}: {} \
+                         (column resolution will fall back to None for this file)",
+                        start_path.display(),
+                        err,
+                    );
+                }
             }
         }
         TraceWriter::start(writer, start_path, Line(start_line as i64));
         Ok(())
+    }
+}
+
+/// P6.2: run the recorder-side autoformat pass on `source_path` and,
+/// on a successful outcome, buffer a ``black``-formatted view of the
+/// source into the CTFS writer's ``source_views.dat`` stream via
+/// [`TraceWriter::register_source_view`].
+///
+/// This is the activation-path counterpart of
+/// ``events.rs::maybe_register_autoformat_view`` — see that function's
+/// docstring for the full decision tree and naming conventions.  The
+/// only structural difference: this helper is called from
+/// `configure_writer` *before* any step events are emitted, so it
+/// covers the entrypoint script itself (a minified `bundle.py` invoked
+/// directly).  Steady-state hand-written entrypoints land on
+/// [`SkipReason::NotMinified`] inside `try_autoformat` and never make
+/// it past the heuristic.
+fn maybe_register_autoformat_view_for_path(
+    writer: &mut dyn TraceWriter,
+    path_id: PathId,
+    source_path: &Path,
+) {
+    let lossy = source_path.to_string_lossy();
+    if lossy.starts_with('<') && lossy.ends_with('>') {
+        return;
+    }
+    let content = match std::fs::read_to_string(source_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    match autoformat::try_autoformat(&content, source_path) {
+        AutoformatOutcome::Ok(result) => {
+            let stem = source_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("source");
+            let view_name = format!("{stem}.fmt.py");
+            // Spec ``view_kind = 2`` = ``black_format``.
+            const VIEW_KIND_BLACK_FORMAT: u8 = 2;
+            if let Err(err) = TraceWriter::register_source_view(
+                writer,
+                path_id,
+                VIEW_KIND_BLACK_FORMAT,
+                &view_name,
+                result.formatted_content.as_bytes(),
+                result.sourcemap_v3_json.as_bytes(),
+            ) {
+                log::error!(
+                    "[TraceOutputPaths] register_source_view failed for {}: {} \
+                     (formatted view will not appear in the trace)",
+                    source_path.display(),
+                    err,
+                );
+            }
+        }
+        AutoformatOutcome::Skipped(reason) => match reason {
+            SkipReason::ToolMissing => {
+                log::debug!(
+                    "[TraceOutputPaths] autoformat skipped for {}: black not on PATH \
+                     (formatted view will not appear in the trace)",
+                    source_path.display(),
+                );
+            }
+            SkipReason::ToolError(msg) => {
+                log::debug!(
+                    "[TraceOutputPaths] autoformat skipped for {}: black error: {} \
+                     (formatted view will not appear in the trace)",
+                    source_path.display(),
+                    msg,
+                );
+            }
+            SkipReason::NotMinified
+            | SkipReason::EnvDisabled
+            | SkipReason::SiblingMapExists
+            | SkipReason::NoChange => {
+                // Steady-state: don't log.
+            }
+        },
     }
 }
 

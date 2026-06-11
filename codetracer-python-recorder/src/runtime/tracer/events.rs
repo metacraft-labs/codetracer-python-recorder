@@ -20,6 +20,7 @@ use crate::runtime::value_capture::{
 };
 use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
+use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 use codetracer_trace_types::{
     AssignmentRecord, BindVariableRecord, CallKey, FullValueRecord, Line, PassBy, PathId, Place,
     RValue, TraceLowLevelEvent, VariableId,
@@ -219,6 +220,145 @@ fn read_line_lengths(path: &Path) -> Option<Vec<u32>> {
     Some(lines)
 }
 
+/// P6.2: run the recorder-side autoformat pass on `source_path` and, on
+/// a successful outcome, buffer a ``black``-formatted view of the source
+/// into the CTFS writer's ``source_views.dat`` stream via
+/// [`TraceWriter::register_source_view`].
+///
+/// This is the recorder-side integration hook for the autoformat
+/// pre-format pass implemented in
+/// [`crate::runtime::autoformat`] — mirroring the JS recorder's
+/// ``packages/instrumenter/src/autoformat.ts`` integration into the
+/// trace-emit pipeline.  Fires *once* per source path, immediately
+/// after the path has been registered with the writer (the only point
+/// the path-id contract guarantees `register_source_view` will accept
+/// the path).  The pass is best-effort:
+///
+///  * If [`autoformat::try_autoformat`] returns
+///    [`AutoformatOutcome::Skipped`], we surface the reason at `debug!`
+///    when actionable (tool missing, tool error) and silently drop the
+///    pass otherwise (env disabled, not minified, sibling map exists,
+///    no change).  Steady-state hand-written code lands on
+///    [`SkipReason::NotMinified`] and never makes it past the heuristic,
+///    so this is essentially free on the hot path.
+///  * If the outcome is [`AutoformatOutcome::Ok`], we forward the
+///    formatted bytes + V3 sourcemap JSON to the writer.  Errors from
+///    the writer (e.g. CTFS backend rejected the view because the path
+///    id is out of range, which would indicate a recorder bug) are
+///    logged at `error!` but never propagated — the trace is still
+///    usable without the formatted sibling.
+///
+/// Synthetic Python paths (`<string>`, `<frozen importlib>`,
+/// `<unknown>`, etc.) are skipped — they aren't real files on disk and
+/// would either fail the disk read or trip the autoformat heuristic on
+/// empty content.  Source paths the recorder can't read (subprocess
+/// source, deleted file, permission denied) are also silently dropped.
+///
+/// Naming convention for `view_name` mirrors the JS recorder's
+/// ``<basename>.fmt.py`` sibling: callers of the replay-server's lazy
+/// P4 autoformat fallback already look for ``<source>.fmt.py`` /
+/// ``<source>.fmt.py.map`` siblings; using the same suffix on the
+/// CTFS-embedded view keeps the discovery path symmetric.  See
+/// the spec at
+/// ``codetracer-trace-format-spec/internal-files.md`` §
+/// "Alternate Source Views (Deminification Support)" for the
+/// canonical ``view_kind`` enum.
+fn maybe_register_autoformat_view(
+    writer: &mut (dyn TraceWriter + Send),
+    path_id: PathId,
+    source_path: &Path,
+) {
+    // Skip synthetic / in-memory paths early — same gate
+    // ``read_line_lengths`` uses, mirroring Python's ``<string>``,
+    // ``<frozen ...>``, etc. naming convention.
+    let lossy = source_path.to_string_lossy();
+    if lossy.starts_with('<') && lossy.ends_with('>') {
+        return;
+    }
+    // Read the source content from disk.  ``try_autoformat`` operates on
+    // an in-memory ``&str`` so we have to materialise the bytes here.
+    // Skip silently on read failure — autoformat is best-effort and the
+    // trace remains valid without the formatted view.
+    let content = match std::fs::read_to_string(source_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    match autoformat::try_autoformat(&content, source_path) {
+        AutoformatOutcome::Ok(result) => {
+            // The basename of the source file — used as the view name's
+            // prefix.  We deliberately keep the *file stem* (drops the
+            // ``.py`` extension) so the rendered view name reads as
+            // ``<stem>.fmt.py``.  Fall back to ``"source"`` if the path
+            // has no extractable stem (unlikely for any path the
+            // recorder actually sees, but defensive against ``.``
+            // / ``..`` cases).
+            let stem = source_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("source");
+            let view_name = format!("{stem}.fmt.py");
+            // ``view_kind = 2`` is the spec's ``black_format`` constant
+            // (see ``codetracer-trace-format-spec/internal-files.md`` §
+            // "Alternate Source Views").  ``0`` is ``raw``,
+            // ``1`` is ``prettier_format``.
+            const VIEW_KIND_BLACK_FORMAT: u8 = 2;
+            if let Err(err) = TraceWriter::register_source_view(
+                writer,
+                path_id,
+                VIEW_KIND_BLACK_FORMAT,
+                &view_name,
+                result.formatted_content.as_bytes(),
+                result.sourcemap_v3_json.as_bytes(),
+            ) {
+                // Writer-side error (e.g. unknown path_id) is a recorder
+                // bug — log loudly but don't abort the recording session.
+                let _mute = ScopedMuteIoCapture::new();
+                log::error!(
+                    "[RuntimeTracer] register_source_view failed for {}: {} \
+                     (formatted view will not appear in the trace; \
+                     replay-server lazy autoformat will fall back at view time)",
+                    source_path.display(),
+                    err,
+                );
+            }
+        }
+        AutoformatOutcome::Skipped(reason) => {
+            // Surface only the *actionable* skip reasons at debug! —
+            // ``NotMinified`` / ``EnvDisabled`` / ``SiblingMapExists`` /
+            // ``NoChange`` are steady-state outcomes for the bulk of
+            // recorded sources and would spam the log.
+            // ``ToolMissing`` / ``ToolError`` indicate something the
+            // user might want to investigate (install ``black``, fix a
+            // broken install) so they earn a debug! line.
+            let _mute = ScopedMuteIoCapture::new();
+            match reason {
+                SkipReason::ToolMissing => {
+                    log::debug!(
+                        "[RuntimeTracer] autoformat skipped for {}: black not on PATH \
+                         (formatted view will not appear in the trace; \
+                         replay-server lazy autoformat will fall back at view time)",
+                        source_path.display(),
+                    );
+                }
+                SkipReason::ToolError(msg) => {
+                    log::debug!(
+                        "[RuntimeTracer] autoformat skipped for {}: black error: {} \
+                         (formatted view will not appear in the trace)",
+                        source_path.display(),
+                        msg,
+                    );
+                }
+                SkipReason::NotMinified
+                | SkipReason::EnvDisabled
+                | SkipReason::SiblingMapExists
+                | SkipReason::NoChange => {
+                    // Steady-state: don't log.
+                }
+            }
+        }
+    }
+}
+
 impl Tracer for RuntimeTracer {
     fn interest(&self, events: &MonitoringEvents) -> EventSet {
         // Balanced call stack requires tracking yields, resumes, throws, and unwinds
@@ -414,20 +554,45 @@ impl Tracer for RuntimeTracer {
             // re-reading the file on every step.
             if self.column_aware && !self.paths_with_line_lengths.contains(path) {
                 let line_lengths = read_line_lengths(path).unwrap_or_default();
-                if let Err(err) = TraceWriter::register_path_with_line_lengths(
+                let registration = TraceWriter::register_path_with_line_lengths(
                     &mut *self.writer,
                     path,
                     &line_lengths,
-                ) {
-                    // Soft failure: the trace is still usable without
-                    // per-line column counts (resolution falls back to
-                    // None).  Log once and move on.
-                    log::debug!(
-                        "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
-                         (column resolution will fall back to None for this file)",
-                        path.display(),
-                        err,
-                    );
+                );
+                match registration {
+                    Ok(registered_path_id) => {
+                        // P6.2: this is the canonical "first sighting" of
+                        // this source path on the writer — fire the
+                        // recorder-side autoformat pass once and, on a
+                        // successful outcome, buffer the formatted view
+                        // into ``source_views.dat`` via the writer's
+                        // ``register_source_view`` entry point.  The
+                        // helper is best-effort: any error path
+                        // (autoformat skip, tool missing, writer reject)
+                        // is absorbed inside the helper and the recorder
+                        // keeps going.  See
+                        // [`maybe_register_autoformat_view`] for the
+                        // full decision tree.
+                        maybe_register_autoformat_view(
+                            &mut *self.writer,
+                            registered_path_id,
+                            path,
+                        );
+                    }
+                    Err(err) => {
+                        // Soft failure: the trace is still usable
+                        // without per-line column counts (resolution
+                        // falls back to None).  Log once and move on.
+                        // Skip the autoformat pass too — without a
+                        // registered path id the source-view emit would
+                        // fail with "unknown path".
+                        log::debug!(
+                            "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
+                             (column resolution will fall back to None for this file)",
+                            path.display(),
+                            err,
+                        );
+                    }
                 }
                 self.paths_with_line_lengths.insert(path.to_path_buf());
             }
