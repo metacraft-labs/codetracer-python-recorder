@@ -231,6 +231,66 @@ fn is_on_path(binary: &str) -> Option<PathBuf> {
     None
 }
 
+/// Resolve a Python interpreter that has the bundled ``black`` module
+/// importable from its site-packages.
+///
+/// The Python recorder declares ``black`` as a runtime dependency in
+/// ``pyproject.toml`` so any environment that pip-installed
+/// ``codetracer-python-recorder`` already has ``black`` available
+/// importable through the same interpreter.  Returns the interpreter
+/// path when ``import black`` succeeds with a zero exit, ``None``
+/// otherwise.
+///
+/// Probe order:
+///   1. ``CT_BUNDLED_PYTHON`` env var — explicit override used by
+///      test harnesses + nix builds where the recorder might be
+///      embedded in a non-default interpreter.
+///   2. The interpreter pointed to by ``PYO3_PYTHON`` (the build-time
+///      pinned interpreter).
+///   3. The interpreter on PATH as ``python3`` then ``python``.
+fn resolve_bundled_python_with_black() -> Option<String> {
+    fn probe(candidate: &str) -> Option<String> {
+        let out = Command::new(candidate)
+            .args(["-c", "import black; import sys; sys.exit(0)"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()?;
+        if out.success() {
+            Some(candidate.to_string())
+        } else {
+            None
+        }
+    }
+    if let Ok(p) = std::env::var("CT_BUNDLED_PYTHON") {
+        if !p.is_empty() {
+            if let Some(found) = probe(&p) {
+                return Some(found);
+            }
+        }
+    }
+    if let Ok(p) = std::env::var("PYO3_PYTHON") {
+        if !p.is_empty() {
+            if let Some(found) = probe(&p) {
+                return Some(found);
+            }
+        }
+    }
+    for candidate in ["python3", "python"] {
+        if let Some(found) = probe(candidate) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Backward-compat shim — older code paths may want only the bundled
+/// interpreter path.  Returns the interpreter capable of
+/// ``import black``.
+fn resolve_bundled_black() -> Option<String> {
+    resolve_bundled_python_with_black()
+}
+
 /// Outcome of a [`run_black`] invocation — matches the variant
 /// layout of the JS recorder's ``PrettierOutcome`` so call-site
 /// translation to [`AutoformatOutcome`] follows the same dispatch.
@@ -261,19 +321,33 @@ enum BlackOutcome {
 /// the ``wait_timeout`` crate to keep the dependency surface flat —
 /// the watcher pattern is well-trodden in Rust's stdlib examples.
 fn run_black(content: &str) -> BlackOutcome {
-    let black_path = match is_on_path("black") {
-        Some(p) => p,
-        None => return BlackOutcome::Missing,
+    // Two-tier resolution per the user directive 2026-06-11
+    // ("language-specific formatting tools that CodeTracer uses should
+    // be provisioned by the recorder package"):
+    //
+    //   1. The bundled `black` Python module reachable through the
+    //      same interpreter that imported codetracer_python_recorder.
+    //      Invoked as ``python -m black -``.  This tier ALWAYS works
+    //      when `black` is declared in pyproject.toml's `dependencies`
+    //      and the user installed via pip / uv / nix / poetry.
+    //   2. A standalone `black` binary on PATH (fallback for unusual
+    //      installs or environments where the interpreter doesn't have
+    //      a usable site-packages).
+    //
+    // Both tiers share the same stdin/stdout/stderr pipe contract.
+    let (program, base_args): (String, Vec<&str>) = match resolve_bundled_black() {
+        Some(p) => (p, vec!["-m", "black", "-", "--quiet", "--fast"]),
+        None => match is_on_path("black") {
+            Some(p) => (
+                p.to_string_lossy().into_owned(),
+                vec!["-", "--quiet", "--fast"],
+            ),
+            None => return BlackOutcome::Missing,
+        },
     };
 
-    // Spawn black with stdin / stdout / stderr piped so we can feed
-    // the source bytes in and capture the result without going via
-    // disk.  ``--quiet`` silences the per-file progress chatter that
-    // would otherwise mix into our stderr capture.
-    let mut child = match Command::new(&black_path)
-        .arg("-")
-        .arg("--quiet")
-        .arg("--fast")
+    let mut child = match Command::new(&program)
+        .args(&base_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

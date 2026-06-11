@@ -22,6 +22,17 @@ classifiers = [
     "Topic :: Software Development :: Debuggers",
 ]
 
+# Runtime dependencies.  `black` is bundled so the recorder's
+# autoformat pass (P6.2-Python — pre-format minified sources at
+# record time and bake the formatted view + V3 sourcemap into
+# srcviews.dat) is always available without relying on system PATH.
+# Per the user directive 2026-06-11: "language-specific formatting
+# tools that CodeTracer uses should be provisioned by the recorder
+# package for the particular language."
+dependencies = [
+    "black>=25.0,<26.0",
+]
+
 [project.scripts]
 codetracer-python-recorder = "codetracer_python_recorder.cli:main"
 
