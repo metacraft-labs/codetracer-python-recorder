@@ -163,17 +163,16 @@ fn build_table(py: Python<'_>, code: &CodeObjectWrapper) -> PyResult<LineAssignm
     for instr in instr_list.iter() {
         let opname: String = instr.getattr("opname")?.extract()?;
         let argval = instr.getattr("argval")?;
-        // `line_number` is the source line associated with this instruction,
-        // populated for every instruction in 3.11+. `starts_line` was a
-        // line-number-or-None in older Pythons but became a bool in 3.13,
-        // so we read `line_number` directly to stay version-agnostic.
-        let current_line: Option<u32> = instr
-            .getattr("line_number")
-            .ok()
-            .and_then(|v| v.extract::<Option<u32>>().ok())
-            .flatten();
+        // `Instruction.positions` is a `Positions(lineno, end_lineno,
+        // col_offset, end_col_offset)` namedtuple, stable since Python 3.11
+        // and populated for every instruction (not just line starts). We
+        // intentionally do NOT use `Instruction.line_number` — that property
+        // was added in Python 3.13 and is missing on 3.12, where it would
+        // resolve to None for every instruction and collapse the per-line
+        // grouping the classifier relies on.
         let positions = instr.getattr("positions").ok();
-        let (col_offset, end_col_offset) = if let Some(pos) = positions {
+        let (current_line, col_offset, end_col_offset) = if let Some(pos) = positions {
+            let l: Option<u32> = pos.getattr("lineno").ok().and_then(|v| v.extract().ok());
             let c: Option<u32> = pos
                 .getattr("col_offset")
                 .ok()
@@ -182,9 +181,9 @@ fn build_table(py: Python<'_>, code: &CodeObjectWrapper) -> PyResult<LineAssignm
                 .getattr("end_col_offset")
                 .ok()
                 .and_then(|v| v.extract().ok());
-            (c, e)
+            (l, c, e)
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         let argval_kind = classify_argval(py, &argval);

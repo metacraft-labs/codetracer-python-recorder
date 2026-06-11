@@ -155,7 +155,7 @@ mod tests {
     fn remains_inactive_until_activation_code_runs() {
         Python::with_gil(|py| {
             let target = abs_path("target.py");
-            let code = build_code(py, "target", target.to_str().unwrap());
+            let code = build_code(py, "target", target.to_str().expect("path is utf-8"));
             let mut controller = ActivationController::new(Some(&target));
             assert!(!controller.is_active());
             assert!(controller.should_process_event(py, &code));
@@ -166,7 +166,11 @@ mod tests {
     #[test]
     fn ignores_non_matching_code_objects() {
         Python::with_gil(|py| {
-            let code = build_code(py, "other", abs_path("other.py").to_str().unwrap());
+            let code = build_code(
+                py,
+                "other",
+                abs_path("other.py").to_str().expect("path is utf-8"),
+            );
             let mut controller = ActivationController::new(Some(&abs_path("target.py")));
             assert!(!controller.should_process_event(py, &code));
             assert!(!controller.is_active());
@@ -177,7 +181,7 @@ mod tests {
     fn deactivates_after_activation_return() {
         Python::with_gil(|py| {
             let target = abs_path("target.py");
-            let code = build_code(py, "target", target.to_str().unwrap());
+            let code = build_code(py, "target", target.to_str().expect("path is utf-8"));
             let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
@@ -191,7 +195,7 @@ mod tests {
     fn suspension_keeps_tracing_active() {
         Python::with_gil(|py| {
             let target = abs_path("target.py");
-            let code = build_code(py, "target", target.to_str().unwrap());
+            let code = build_code(py, "target", target.to_str().expect("path is utf-8"));
             let mut controller = ActivationController::new(Some(&target));
             assert!(controller.should_process_event(py, &code));
             assert!(controller.is_active());
@@ -211,7 +215,9 @@ mod tests {
         let fallback = abs_path("fallback.py");
         assert_eq!(
             controller.start_path(&fallback),
-            std::path::absolute(&target).unwrap().as_path()
+            std::path::absolute(&target)
+                .expect("absolute path resolves")
+                .as_path()
         );
     }
 }
