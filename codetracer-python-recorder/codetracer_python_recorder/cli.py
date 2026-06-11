@@ -45,6 +45,10 @@ class RecorderCLIConfig:
     pytest_args: list[str] | None
     unittest_args: list[str] | None
     no_framework_filters: bool
+    # P6.2: recorder-side autoformat of minified sources (default on;
+    # ``--no-autoformat`` opts out).  Threaded into the session config
+    # once the record-cmd hook lands in the runtime tracer.
+    autoformat: bool = True
 
     @property
     def format(self) -> str:
@@ -223,6 +227,28 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
             "Use '--no-propagate-script-exit' to force a zero exit status."
         ),
     )
+    # P6.2 (Column-Aware-Tracing-And-Deminification milestone):
+    # recorder-side autoformat of minified Python sources via ``black``.
+    # Defaults to ``True`` so the recorder matches the JS recorder's
+    # default-on behaviour for minified-bundle pre-formatting; users
+    # who don't want the formatted sibling materialised can disable
+    # via ``--no-autoformat`` or by setting ``CT_AUTOFORMAT=0`` (the
+    # env var the replay-server's lazy P4 fallback also reads).
+    # See ``src/runtime/autoformat.rs`` for the heuristic + ``black``
+    # invocation details; flag is surfaced here so it threads through
+    # the recorder session config once the record-cmd hook lands.
+    parser.add_argument(
+        "--autoformat",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Pre-format minified Python sources at record time via 'black' "
+            "(default: on). Use '--no-autoformat' to record minified sources "
+            "unformatted; the replay-server's P4 fallback can still format at "
+            "view time on machines that have 'black'. Also disabled when "
+            "CT_AUTOFORMAT is set to 0/off/false/no."
+        ),
+    )
     # P0.2 (Performance + E2E Coverage): client-controlled omniscient-DB
     # upload mode. The flag is forwarded to the Monolith's finalize body
     # as the camelCase ``omniscientDbMode`` field per CS-M7. The Python
@@ -383,6 +409,13 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
     if known.omniscient_db is not None:
         os.environ["CODETRACER_OMNISCIENT_DB_MODE"] = known.omniscient_db
 
+    # P6.2: ``--no-autoformat`` overrides the default-on behaviour at
+    # the CLI level.  Even when the flag says "on", the recorder still
+    # respects ``CT_AUTOFORMAT=0/off/false/no`` at the runtime level
+    # via ``autoformat_enabled_by_env`` so deployment environments can
+    # disable globally without touching every recorder invocation.
+    autoformat_flag = bool(known.autoformat) if known.autoformat is not None else True
+
     return RecorderCLIConfig(
         out_dir=trace_dir,
         activation_path=activation_path,
@@ -393,6 +426,7 @@ def _parse_args(argv: Sequence[str]) -> RecorderCLIConfig:
         pytest_args=pytest_args,
         unittest_args=unittest_args,
         no_framework_filters=known.no_framework_filters,
+        autoformat=autoformat_flag,
     )
 
 
@@ -521,6 +555,26 @@ def main(argv: Iterable[str] | None = None) -> int:
     except Exception as exc:  # pragma: no cover - defensive guardrail
         sys.stderr.write(f"Failed to parse arguments: {exc}\n")
         return 2
+
+    # P6.2: when ``--no-autoformat`` is on, surface the disable to the
+    # runtime via the shared ``CT_AUTOFORMAT`` env var the autoformat
+    # module reads.  We set the env var rather than threading a new
+    # session option because:
+    #   1. The Rust runtime's ``autoformat_enabled_by_env`` already
+    #      respects this var (the JS recorder follows the same pattern).
+    #   2. ``CT_AUTOFORMAT`` is the cross-recorder kill switch — a
+    #      deployment can disable autoformat for Python, JS, and the
+    #      replay-server's lazy fallback with one knob.
+    # The flag's default is True so the env var stays untouched in the
+    # common case — a deployment that sets ``CT_AUTOFORMAT=0`` globally
+    # keeps working when users invoke the CLI without flags.  Only
+    # explicit ``--no-autoformat`` actively flips the env var.
+    # Setting this BEFORE the recording-disabled short-circuit is
+    # deliberate so the user-facing kill switch composes correctly
+    # with the env-var disable (the flag wins because it's more
+    # specific to this invocation).
+    if not config.autoformat:
+        os.environ["CT_AUTOFORMAT"] = "0"
 
     # Per convention §5, CODETRACER_PYTHON_RECORDER_DISABLED short-
     # circuits to the un-instrumented target run.  This is the

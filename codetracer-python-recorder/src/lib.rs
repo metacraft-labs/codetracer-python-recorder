@@ -17,6 +17,12 @@ pub mod trace_filter;
 
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 pub use crate::monitoring as tracer;
+// P6.2: re-export the recorder-side autoformat surface so external
+// integrators (and the CLI follow-up that wires the record-cmd hook)
+// can call `try_autoformat` / `looks_minified` / etc. directly without
+// reaching into the runtime submodule.  See
+// `src/runtime/autoformat.rs` for the full API.
+pub use crate::runtime::autoformat;
 pub use crate::monitoring::{
     flush_installed_tracer, install_tracer, uninstall_tracer, CallbackOutcome, CallbackResult,
     EventSet, Tracer,

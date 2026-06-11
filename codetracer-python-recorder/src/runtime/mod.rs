@@ -5,6 +5,7 @@
 
 mod activation;
 pub mod assignment_reconstructor;
+pub mod autoformat;
 mod frame_inspector;
 pub mod io_capture;
 mod line_snapshots;
