@@ -1,0 +1,96 @@
+name: CI (reprobuild)
+
+# Additive side-by-side CI run that re-plays the project's
+# deterministic dev env through reprobuild instead of `nix develop` or
+# `env.ps1`. Runs alongside the existing `ci.yml` (`nix`) and any
+# `windows-build.yml` (`windows-diy`) entries so regressions in either
+# of the older paths still gate merges — see
+# `codetracer-specs/Repo-Requirements.md` §2.9 and
+# `metacraft-dev-guidelines/policies/ci-shared-dev-env.md` §4 for the
+# rollout shape.
+#
+# The `setup-dev-env` composite action accepts `env-flavor: reprobuild`
+# (target state per the policy). When the action's reprobuild branch
+# lands, this workflow exercises it end-to-end on every supported
+# host without any other repo-side change.
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+    branches: [main, dev, stable]
+
+jobs:
+  reprobuild:
+    name: ${{ matrix.os }} — repro build/test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone codetracer-trace-format sibling
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if ! git clone --depth 1 --branch "${TF_REF}" --single-branch \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format" 2>/dev/null; then
+            rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+            git clone --no-checkout "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+              "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
+          fi
+
+      - name: Clone codetracer-trace-format-nim sibling
+        shell: bash
+        run: |
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+
+      - name: Setup dev env (reprobuild flavor)
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        with:
+          env-flavor: reprobuild
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: repro build
+        # Builds the conventional `build` collection declared in
+        # `repro.nim`. Verifies the primary shipping artefact (the
+        # recorder binary or extension) materialises through the
+        # reprobuild engine identically to `just build`.
+        run: dev-exec repro build
+
+      - name: repro test
+        # Materialises the `test` collection.
+        run: dev-exec repro test
+
+      - name: just build (cross-check)
+        # Re-runs the legacy `just build` path inside the same env so
+        # we catch silent divergences between `repro build` outputs
+        # and what the dev shell + Justfile produce today.
+        run: dev-exec just build
+
+      - name: just test (cross-check)
+        run: dev-exec just test
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reprobuild-logs-${{ matrix.os }}
+          path: |
+            target/
+            .repro/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,268 @@
+## Reprobuild dev env + build recipe for codetracer-python-recorder.
+##
+## Ships a Python package whose native extension is implemented in
+## Rust + PyO3 and built through ``maturin``. The recipe expresses
+## the cargo build + pytest run edges natively per
+## ``codetracer-specs/Repo-Requirements.md`` §2.8 — no
+## ``shell(command = "bash scripts/...")`` delegations for the cargo
+## build itself; ``sh`` is only used as a thin wrapper that injects
+## ``PYO3_PYTHON`` into the cargo invocation (the PyO3 build script
+## reads this env var to pick the interpreter to link against).
+##
+## ## M7 (Windows reprobuild migration) provisioning posture
+##
+## The recipe now uses reprobuild's stdlib tarball provisioning for
+## the Python toolchain — replacing the env.ps1 ensure-script set:
+##
+##   - ``python-dev``  → astral-sh/python-build-standalone tarball
+##                       (carries ``libs/python312.lib`` + ``include/``;
+##                       see ``libs/repro_dsl_stdlib/.../python_dev.nim``)
+##   - ``uv``          → astral-sh/uv standalone zip
+##                       (carries ``uv.exe`` + ``uvx.exe``)
+##   - ``maturin``     → bootstrapped via ``uv tool install``
+##   - ``pytest``      → bootstrapped via ``uv tool install``
+##
+## maturin + pytest are Python packages; they have no standalone
+## binary distribution. Rather than adding fragile per-tool tarball
+## pins (see the M7 header notes in ``packages/maturin.nim`` +
+## ``packages/pytest.nim``), the recipe materialises them via a
+## ``uv tool install`` bootstrap edge against a workspace-local
+## ``.repro/uv-tools/bin/`` directory and exposes that on PATH for
+## downstream edges (cargo build script + pytest harness).
+##
+## TODO(MR10/MR11 follow-up): reprobuild MR10 added per-edge env-var
+## injection to the typed-tool DSL (``cargo.build(..., extraEnv =
+## @[("PYO3_PYTHON", ...), ("PATH", ...)])``). The cargo build +
+## test edges below currently wrap cargo invocations in
+## ``bash -c '...'`` to set ``PYO3_PYTHON`` and to prepend the
+## uv-tools bin dir on PATH. ``PYO3_PYTHON`` migrates cleanly to
+## ``extraEnv`` (a bare ``python.exe`` resolves against the engine's
+## tool-store PATH that python-dev contributes). The ``PATH``
+## prepend does NOT: the ``.repro/uv-tools/bin`` directory is a
+## workspace-local bootstrap output, not a provisioned tool profile,
+## so it is not in ``toolPathPrefix(profiles)``; expressing it via
+## ``extraEnv`` requires either (a) a build-time
+## ``absolutePath(uvToolBinDir) & PathSep & getEnv("PATH")``
+## expansion that captures the daemon's PATH at recipe-eval time
+## (which loses the action-launch PATH prefix the engine adds on
+## top of getEnv("PATH") — see ``actionPathPrefix`` in
+## repro_cli_support), or (b) engine support for "append workspace
+## bin dirs to action PATH", which does not exist today. The
+## cwd-relative bash ``$(pwd)`` form gets the right semantics for
+## free, so the bash wrappers remain until reprobuild lands one
+## of those mechanisms. MR11 PART A (the
+## ``CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`` pin added to the
+## VsDevCmd activation diff in repro_platform.nim) closes the
+## clean-shell ``/usr/bin/link`` regression for the bash-wrapped
+## cargo edges below without requiring this migration, because the
+## engine's MSVC env merge runs on every action spawn (bash-wrapped
+## or typed-tool) and the env passes transparently through
+## bash -> cargo -> rustc -> link.exe.
+##
+## On Linux/macOS the nix flake supplies all of them; the recipe stays
+## platform-uniform under the engine's default provisioning (Nix on
+## Nix-capable hosts, tarball on Windows / non-Nix Linux). MR2 dropped
+## the legacy ``defaultToolProvisioning "path"`` declaration now that
+## every tool the recipe consumes has a stdlib tarball entry.
+
+import repro_project_dsl
+import repro_dsl_stdlib/packages/sh
+
+package codetracer_python_recorder:
+  uses:
+    "rustc >=1.85"
+    "cargo >=1.85"
+    "python-dev >=3.10"
+    "nim >=2.2 <3.0"
+    "nimble"
+    "capnp"
+    "zstd"
+    "uv"
+    "sh"
+    when not defined(windows):
+      # pkg-config + OpenSSL — only the unix build path consumes
+      # openssl-sys; the Windows build uses rustls instead. maturin /
+      # pytest stay on the Nix path here (the flake provides them as
+      # nixpkgs#maturin / nixpkgs#python3Packages.pytest); Windows
+      # bootstraps them through the uv-tool-install edge below.
+      "pkg-config"
+      "openssl"
+      "maturin"
+      "pytest"
+
+  library codetracerPythonRecorder
+
+  devEnv:
+    activity "default"
+
+  build:
+    # ---- Bootstrap maturin + pytest via uv tool install --------------
+    #
+    # Workspace-local tool dir lives at
+    # ``.repro/uv-tools/{bin,tools}/``. ``uv tool install`` drops
+    # console-script shims under ``bin/`` (``maturin.exe`` +
+    # ``pytest.exe`` on Windows; bare names on Linux/macOS) and the
+    # tool environments themselves under ``tools/``. The two env vars
+    # ``UV_TOOL_BIN_DIR`` / ``UV_TOOL_DIR`` redirect ``uv`` away from
+    # its default ``%LOCALAPPDATA%\uv\tools`` (which would leak the
+    # install outside the workspace and break action-cache
+    # reproducibility).
+    #
+    # The ``--python <name>`` argument pins the interpreter to the
+    # python-dev install the engine put on PATH. ``uv`` and PyO3 both
+    # accept a bare interpreter name (``python`` / ``python3`` /
+    # ``python.exe``) and resolve it against PATH themselves — so we
+    # spell the bare name here rather than substituting via
+    # ``$(command -v ...)``. The substitution form was incompatible
+    # with the Windows action-runner: on Windows the shell action's
+    # outer process is cmd.exe (sh.exe is invoked per-line through the
+    # ``shell()`` wrapper but the surrounding ``$(...)`` evaluation
+    # never reaches sh.exe — cmd.exe sees a literal ``command`` token
+    # and bails with ``'command' is not recognized``). Bare names
+    # avoid the issue and work uniformly across Nix-shell bash (PATH
+    # holds the flake-provided interpreter), Windows cmd.exe (PATH
+    # holds the python-build-standalone interpreter the engine
+    # materialised), and the wrapped ``bash -c`` script body below.
+    # The action body itself is bash-only (``set -euo pipefail``,
+    # ``mkdir -p``, ``&&`` chaining, ``$(pwd)``), so we wrap the whole
+    # body in ``bash -c '...'``: even when the outer dispatcher is
+    # cmd.exe (Windows), ``bash -c`` invokes ``bash.exe`` directly
+    # from the ``sh`` / ``bash`` tool prefix already on PATH via
+    # ``uses: "sh"`` (PortableGit ships both ``sh.exe`` and
+    # ``bash.exe`` in the same prefix). On Linux/macOS the outer
+    # ``sh -c`` is already bash-compatible so the nested ``bash -c``
+    # is a no-op overhead.
+    const uvToolBinDir = ".repro/uv-tools/bin"
+    const uvToolDir = ".repro/uv-tools/tools"
+    const uvToolBootstrapMarker = ".repro/uv-tools/.bootstrap-ok"
+    const pythonInterpreter =
+      when defined(windows): "python.exe" else: "python3"
+
+    let uvToolBootstrapBody = (
+      "set -euo pipefail && " &
+      "mkdir -p " & uvToolBinDir & " " & uvToolDir & " && " &
+      "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
+      "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
+      "uv tool install --python " & pythonInterpreter & " maturin && " &
+      "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
+      "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
+      "uv tool install --python " & pythonInterpreter & " pytest && " &
+      "date -u +%FT%TZ > " & uvToolBootstrapMarker)
+
+    let uvToolBootstrap = shell(
+      command = "bash -c '" & uvToolBootstrapBody & "'",
+      actionId = "codetracer-python-recorder.uv-tool-bootstrap",
+      extraOutputs = @[uvToolBootstrapMarker])
+
+    # ---- Native cargo build of the PyO3 extension --------------------
+    #
+    # The cargo crate ``codetracer-python-recorder`` produces a cdylib
+    # (.pyd on Windows, .so on Linux, .dylib on macOS) which the
+    # Python package imports as ``codetracer_python_recorder``.
+    #
+    # PyO3 links against ``python<ver>.lib`` from the Python install's
+    # ``libs/`` directory. The shell wrapper below derives
+    # ``PYO3_PYTHON`` from the python interpreter the engine put on
+    # PATH (the ``python-dev`` tarball realization). cargo + the
+    # ``maturin``/``pytest`` console-script shims are also on PATH via
+    # ``PATH`` prefixing of ``.repro/uv-tools/bin``.
+    # cargo emits a cdylib under cargo's native naming: ``.dll`` on
+    # Windows (PyO3+maturin only renames it to ``.pyd`` at wheel-build
+    # time), ``.dylib`` on macOS, ``.so`` on Linux. The recipe's
+    # ``extraOutputs`` marker MUST match the bytes cargo actually
+    # writes so the engine's freshness check observes the artifact.
+    const dylibExt =
+      when defined(windows): "dll"
+      elif defined(macosx): "dylib"
+      else: "so"
+    const extensionBinary =
+      "codetracer-python-recorder/target/release/codetracer_python_recorder." &
+      dylibExt
+
+    let extensionBuildBody = (
+      "set -euo pipefail && " &
+      "PYO3_PYTHON=" & pythonInterpreter & " " &
+      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
+      "cargo build --release --locked " &
+      "--manifest-path codetracer-python-recorder/Cargo.toml")
+
+    let extensionBuild = shell(
+      command = "bash -c '" & extensionBuildBody & "'",
+      actionId = "codetracer-python-recorder.cargo-build",
+      after = @[uvToolBootstrap],
+      extraInputs = @[
+        "codetracer-python-recorder/Cargo.toml",
+        "codetracer-python-recorder/Cargo.lock",
+        "codetracer-python-recorder/src",
+        "codetracer-python-recorder/crates",
+        uvToolBootstrapMarker
+      ],
+      extraOutputs = @[extensionBinary],
+      # MR12: opt out of the automatic-monitor IAT-patching shim for
+      # this bash-wrapped cargo invocation. The default shell() policy
+      # injects the engine's monitor shim into every spawned child
+      # (rustc, build scripts, link.exe). On Windows the inline hook
+      # interacts badly with rustc's proc-macro / codegen paths and
+      # crashes with STATUS_ACCESS_VIOLATION (0xc0000005). Cargo
+      # manages its own fingerprint DB under target/ — the monitor
+      # adds no precision a typed cargo edge wouldn't have, and the
+      # typed cargo block already declares ``dependencyPolicy
+      # declaredOnly`` for the same reason (see cargo.nim).
+      dependencyPolicy = declaredOnlyDependencyPolicy())
+    discard collect("default", @[extensionBuild])
+
+    # ---- Rust-side cargo tests ---------------------------------------
+    let cargoTestsBuildBody = (
+      "set -euo pipefail && " &
+      "PYO3_PYTHON=" & pythonInterpreter & " " &
+      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
+      "cargo test --no-run --locked " &
+      "--manifest-path codetracer-python-recorder/Cargo.toml")
+
+    let cargoTestsBuild = shell(
+      command = "bash -c '" & cargoTestsBuildBody & "'",
+      actionId = "codetracer-python-recorder.cargo-test-build",
+      after = @[uvToolBootstrap],
+      extraInputs = @[
+        "codetracer-python-recorder/Cargo.toml",
+        "codetracer-python-recorder/Cargo.lock",
+        "codetracer-python-recorder/src",
+        "codetracer-python-recorder/tests",
+        uvToolBootstrapMarker
+      ],
+      extraOutputs = @["codetracer-python-recorder/target/debug/deps"],
+      # MR12: opt out of the monitor shim — see extensionBuild above.
+      dependencyPolicy = declaredOnlyDependencyPolicy())
+
+    let cargoTestsRunBody = (
+      "set -euo pipefail && " &
+      "PYO3_PYTHON=" & pythonInterpreter & " " &
+      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
+      "cargo test --locked " &
+      "--manifest-path codetracer-python-recorder/Cargo.toml")
+
+    let cargoTestsRun = shell(
+      command = "bash -c '" & cargoTestsRunBody & "'",
+      actionId = "codetracer-python-recorder.cargo-test-run",
+      after = @[cargoTestsBuild],
+      extraInputs = @[
+        "codetracer-python-recorder/Cargo.toml",
+        "codetracer-python-recorder/Cargo.lock",
+        "codetracer-python-recorder/src",
+        "codetracer-python-recorder/tests",
+        "codetracer-python-recorder/target/debug/deps",
+        uvToolBootstrapMarker
+      ],
+      # MR12: opt out of the monitor shim — see extensionBuild above.
+      dependencyPolicy = declaredOnlyDependencyPolicy())
+
+    # Python-side pytest is driven through the Justfile + uv
+    # workflow for now; wiring it as a reprobuild edge requires a
+    # typed-tool subcmd on pytest.nim (the stdlib package only
+    # declares provisioning today). Until that lands the cargo
+    # test edge covers the rust-side test set; ``just test``
+    # continues to drive the pytest suite via ``uv run --group
+    # dev --group test pytest …`` per Justfile. The uv-tool-install
+    # bootstrap above produces a ``pytest.exe`` shim under
+    # ``.repro/uv-tools/bin`` that downstream wrappers can consume.
+    discard collect("test", @[cargoTestsRun])
