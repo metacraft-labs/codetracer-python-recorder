@@ -2,17 +2,20 @@
 ##
 ## Ships a Python package whose native extension is implemented in
 ## Rust + PyO3 and built through ``maturin``. The recipe expresses
-## the cargo build + pytest run edges natively per
-## ``codetracer-specs/Repo-Requirements.md`` §2.8 — no
-## ``shell(command = "bash scripts/...")`` delegations for the cargo
-## build itself; ``sh`` is only used as a thin wrapper that injects
-## ``PYO3_PYTHON`` into the cargo invocation (the PyO3 build script
-## reads this env var to pick the interpreter to link against).
+## the cargo build + cargo test edges natively per
+## ``codetracer-specs/Repo-Requirements.md`` §2.8 via the reprobuild
+## stdlib's typed ``cargo.build`` / ``cargo.test`` wrappers — no
+## ``shell(command = "bash ...")`` indirections around cargo itself.
+## The PyO3 build script's ``PYO3_PYTHON`` env var is injected via
+## the typed wrappers' ``extraEnv`` parameter (MR10) so the recipe
+## stays free of shell-quoting concerns and the engine sees a clean
+## ``cargo build``/``cargo test`` argv it can deduplicate and
+## fingerprint directly.
 ##
 ## ## M7 (Windows reprobuild migration) provisioning posture
 ##
-## The recipe now uses reprobuild's stdlib tarball provisioning for
-## the Python toolchain — replacing the env.ps1 ensure-script set:
+## The recipe uses reprobuild's stdlib tarball provisioning for the
+## Python toolchain — replacing the env.ps1 ensure-script set:
 ##
 ##   - ``python-dev``  → astral-sh/python-build-standalone tarball
 ##                       (carries ``libs/python312.lib`` + ``include/``;
@@ -27,43 +30,39 @@
 ## pins (see the M7 header notes in ``packages/maturin.nim`` +
 ## ``packages/pytest.nim``), the recipe materialises them via a
 ## ``uv tool install`` bootstrap edge against a workspace-local
-## ``.repro/uv-tools/bin/`` directory and exposes that on PATH for
-## downstream edges (cargo build script + pytest harness).
+## ``.repro/uv-tools/bin/`` directory. That bootstrap edge is the
+## sole remaining ``shell()`` invocation in this recipe; the
+## downstream cargo edges do NOT need ``.repro/uv-tools/bin`` on
+## PATH because cargo never invokes maturin or pytest during
+## ``cargo build`` / ``cargo test`` (those tools only run during
+## wheel packaging + Python-side pytest, which the Justfile drives
+## outside this recipe).
 ##
-## TODO(MR10/MR11 follow-up): reprobuild MR10 added per-edge env-var
-## injection to the typed-tool DSL (``cargo.build(..., extraEnv =
-## @[("PYO3_PYTHON", ...), ("PATH", ...)])``). The cargo build +
-## test edges below currently wrap cargo invocations in
-## ``bash -c '...'`` to set ``PYO3_PYTHON`` and to prepend the
-## uv-tools bin dir on PATH. ``PYO3_PYTHON`` migrates cleanly to
-## ``extraEnv`` (a bare ``python.exe`` resolves against the engine's
-## tool-store PATH that python-dev contributes). The ``PATH``
-## prepend does NOT: the ``.repro/uv-tools/bin`` directory is a
-## workspace-local bootstrap output, not a provisioned tool profile,
-## so it is not in ``toolPathPrefix(profiles)``; expressing it via
-## ``extraEnv`` requires either (a) a build-time
-## ``absolutePath(uvToolBinDir) & PathSep & getEnv("PATH")``
-## expansion that captures the daemon's PATH at recipe-eval time
-## (which loses the action-launch PATH prefix the engine adds on
-## top of getEnv("PATH") — see ``actionPathPrefix`` in
-## repro_cli_support), or (b) engine support for "append workspace
-## bin dirs to action PATH", which does not exist today. The
-## cwd-relative bash ``$(pwd)`` form gets the right semantics for
-## free, so the bash wrappers remain until reprobuild lands one
-## of those mechanisms. MR11 PART A (the
-## ``CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`` pin added to the
-## VsDevCmd activation diff in repro_platform.nim) closes the
-## clean-shell ``/usr/bin/link`` regression for the bash-wrapped
-## cargo edges below without requiring this migration, because the
-## engine's MSVC env merge runs on every action spawn (bash-wrapped
-## or typed-tool) and the env passes transparently through
-## bash -> cargo -> rustc -> link.exe.
+## ## Phase 3 migration off declaredOnly / bash wrappers
 ##
-## On Linux/macOS the nix flake supplies all of them; the recipe stays
-## platform-uniform under the engine's default provisioning (Nix on
-## Nix-capable hosts, tarball on Windows / non-Nix Linux). MR2 dropped
-## the legacy ``defaultToolProvisioning "path"`` declaration now that
-## every tool the recipe consumes has a stdlib tarball entry.
+## Earlier revisions (MR7/MR12) wrapped the three cargo invocations
+## below in ``bash -c '...'`` to inject ``PYO3_PYTHON`` + a
+## ``.repro/uv-tools/bin`` PATH prefix, and opted those bash edges
+## out of the automatic-monitor IAT-patching shim via
+## ``dependencyPolicy = declaredOnlyDependencyPolicy()`` to avoid
+## the rustc-on-Windows STATUS_ACCESS_VIOLATION crash class that
+## monitor-shim hooks induced. Reprobuild MR16 removed
+## ``declaredOnlyDependencyPolicy`` entirely — the typed
+## ``cargo.build`` / ``cargo.test`` wrappers now collect dependency
+## evidence from cargo's own ``target/<profile>/deps/*.d`` make-format
+## depfiles (``dependencyPolicy makeDepfile`` in
+## ``packages/cargo.nim``). That gathering kind does NOT inject the
+## monitor shim into rustc / link.exe, so the original crash class is
+## still avoided while the engine gets first-class dependency tracking.
+## This recipe accordingly switches all three cargo edges to typed
+## wrappers and passes ``PYO3_PYTHON`` via ``extraEnv``.
+##
+## On Linux/macOS the nix flake supplies all required tools; the
+## recipe stays platform-uniform under the engine's default
+## provisioning (Nix on Nix-capable hosts, tarball on Windows /
+## non-Nix Linux). MR2 dropped the legacy
+## ``defaultToolProvisioning "path"`` declaration now that every tool
+## the recipe consumes has a stdlib tarball entry.
 
 import repro_project_dsl
 import repro_dsl_stdlib/packages/sh
@@ -161,11 +160,23 @@ package codetracer_python_recorder:
     # Python package imports as ``codetracer_python_recorder``.
     #
     # PyO3 links against ``python<ver>.lib`` from the Python install's
-    # ``libs/`` directory. The shell wrapper below derives
-    # ``PYO3_PYTHON`` from the python interpreter the engine put on
-    # PATH (the ``python-dev`` tarball realization). cargo + the
-    # ``maturin``/``pytest`` console-script shims are also on PATH via
-    # ``PATH`` prefixing of ``.repro/uv-tools/bin``.
+    # ``libs/`` directory. ``PYO3_PYTHON`` tells the PyO3 build script
+    # which interpreter to inspect for the link target; we pass the
+    # bare interpreter name (``python.exe`` on Windows, ``python3``
+    # on Linux/macOS) via ``extraEnv`` and the engine's
+    # ``actionPathPrefix`` (see ``toolPathPrefix`` in
+    # ``repro_cli_support``) makes the python-dev install's
+    # ``python.exe`` first-on-PATH for the cargo action, so PyO3's
+    # ``PATH``-lookup resolves to the tarball-realized interpreter.
+    #
+    # ``.repro/uv-tools/bin`` is NOT prepended to PATH for the cargo
+    # edges: cargo build / cargo test never invoke maturin or pytest
+    # (those tools only run during wheel packaging + Python-side
+    # pytest, which the Justfile drives outside this recipe). The
+    # ``uv-tool-bootstrap`` edge above remains a hard dependency only
+    # because downstream ``just test`` invocations need
+    # ``maturin.exe`` + ``pytest.exe`` on PATH at runtime.
+    #
     # cargo emits a cdylib under cargo's native naming: ``.dll`` on
     # Windows (PyO3+maturin only renames it to ``.pyd`` at wheel-build
     # time), ``.dylib`` on macOS, ``.so`` on Linux. The recipe's
@@ -179,15 +190,12 @@ package codetracer_python_recorder:
       "codetracer-python-recorder/target/release/codetracer_python_recorder." &
       dylibExt
 
-    let extensionBuildBody = (
-      "set -euo pipefail && " &
-      "PYO3_PYTHON=" & pythonInterpreter & " " &
-      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
-      "cargo build --release --locked " &
-      "--manifest-path codetracer-python-recorder/Cargo.toml")
+    let pyo3Env = @[("PYO3_PYTHON", pythonInterpreter)]
 
-    let extensionBuild = shell(
-      command = "bash -c '" & extensionBuildBody & "'",
+    let extensionBuild = cargo.build(
+      release = true,
+      locked = true,
+      manifestPath = "codetracer-python-recorder/Cargo.toml",
       actionId = "codetracer-python-recorder.cargo-build",
       after = @[uvToolBootstrap],
       extraInputs = @[
@@ -198,29 +206,20 @@ package codetracer_python_recorder:
         uvToolBootstrapMarker
       ],
       extraOutputs = @[extensionBinary],
-      # MR12: opt out of the automatic-monitor IAT-patching shim for
-      # this bash-wrapped cargo invocation. The default shell() policy
-      # injects the engine's monitor shim into every spawned child
-      # (rustc, build scripts, link.exe). On Windows the inline hook
-      # interacts badly with rustc's proc-macro / codegen paths and
-      # crashes with STATUS_ACCESS_VIOLATION (0xc0000005). Cargo
-      # manages its own fingerprint DB under target/ — the monitor
-      # adds no precision a typed cargo edge wouldn't have, and the
-      # typed cargo block already declares ``dependencyPolicy
-      # declaredOnly`` for the same reason (see cargo.nim).
-      dependencyPolicy = declaredOnlyDependencyPolicy())
+      extraEnv = pyo3Env)
     discard collect("default", @[extensionBuild])
 
     # ---- Rust-side cargo tests ---------------------------------------
-    let cargoTestsBuildBody = (
-      "set -euo pipefail && " &
-      "PYO3_PYTHON=" & pythonInterpreter & " " &
-      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
-      "cargo test --no-run --locked " &
-      "--manifest-path codetracer-python-recorder/Cargo.toml")
-
-    let cargoTestsBuild = shell(
-      command = "bash -c '" & cargoTestsBuildBody & "'",
+    #
+    # Two edges: ``cargo test --no-run`` builds every test binary
+    # under ``target/debug/deps/<crate>-<hash>``; the second
+    # ``cargo test`` (without ``--no-run``) re-uses those binaries and
+    # actually runs them. The dependency from run -> build runs through
+    # ``after`` plus the deps-dir entry in ``extraInputs``.
+    let cargoTestsBuild = cargo.test(
+      noRun = true,
+      locked = true,
+      manifestPath = "codetracer-python-recorder/Cargo.toml",
       actionId = "codetracer-python-recorder.cargo-test-build",
       after = @[uvToolBootstrap],
       extraInputs = @[
@@ -231,20 +230,13 @@ package codetracer_python_recorder:
         uvToolBootstrapMarker
       ],
       extraOutputs = @["codetracer-python-recorder/target/debug/deps"],
-      # MR12: opt out of the monitor shim — see extensionBuild above.
-      dependencyPolicy = declaredOnlyDependencyPolicy())
+      extraEnv = pyo3Env)
 
-    let cargoTestsRunBody = (
-      "set -euo pipefail && " &
-      "PYO3_PYTHON=" & pythonInterpreter & " " &
-      "PATH=\"$(pwd)/" & uvToolBinDir & ":$PATH\" " &
-      "cargo test --locked " &
-      "--manifest-path codetracer-python-recorder/Cargo.toml")
-
-    let cargoTestsRun = shell(
-      command = "bash -c '" & cargoTestsRunBody & "'",
+    let cargoTestsRun = cargo.test(
+      locked = true,
+      manifestPath = "codetracer-python-recorder/Cargo.toml",
       actionId = "codetracer-python-recorder.cargo-test-run",
-      after = @[cargoTestsBuild],
+      after = @[cargoTestsBuild.action],
       extraInputs = @[
         "codetracer-python-recorder/Cargo.toml",
         "codetracer-python-recorder/Cargo.lock",
@@ -253,8 +245,7 @@ package codetracer_python_recorder:
         "codetracer-python-recorder/target/debug/deps",
         uvToolBootstrapMarker
       ],
-      # MR12: opt out of the monitor shim — see extensionBuild above.
-      dependencyPolicy = declaredOnlyDependencyPolicy())
+      extraEnv = pyo3Env)
 
     # Python-side pytest is driven through the Justfile + uv
     # workflow for now; wiring it as a reprobuild edge requires a
@@ -265,4 +256,4 @@ package codetracer_python_recorder:
     # dev --group test pytest …`` per Justfile. The uv-tool-install
     # bootstrap above produces a ``pytest.exe`` shim under
     # ``.repro/uv-tools/bin`` that downstream wrappers can consume.
-    discard collect("test", @[cargoTestsRun])
+    discard collect("test", @[cargoTestsRun.action])
