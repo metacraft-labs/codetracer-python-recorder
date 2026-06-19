@@ -62,7 +62,7 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
           env-flavor: reprobuild
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-token: ${{ secrets.METACRAFT_CI_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: repro build
         # Builds the conventional `build` collection declared in
