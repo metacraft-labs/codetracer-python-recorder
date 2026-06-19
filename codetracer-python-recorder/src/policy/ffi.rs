@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn py_configure_policy_from_env_propagates_error() {
         reset_policy_for_tests();
-        let _guard = EnvGuard;
+        let _guard = EnvGuard::new();
         std::env::set_var(super::super::env::ENV_REQUIRE_TRACE, "maybe");
         Python::with_gil(|py| {
             let err = py_configure_policy_from_env().expect_err("invalid env should error");
@@ -243,7 +243,26 @@ mod tests {
         reset_policy_for_tests();
     }
 
-    struct EnvGuard;
+    // Process-wide mutex serialising env-var-mutating tests in this
+    // submodule.  See `super::tests::ENV_MUTEX` for the same
+    // pattern + rationale.  Without this lock, cargo test's default
+    // parallel execution lets two tests race on the global env
+    // block — especially loud on Windows where env-var visibility
+    // flips per-thread without warning.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        _guard: Option<std::sync::MutexGuard<'static, ()>>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+            EnvGuard {
+                _guard: Some(guard),
+            }
+        }
+    }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
