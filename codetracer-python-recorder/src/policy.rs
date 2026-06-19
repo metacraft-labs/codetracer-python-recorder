@@ -151,11 +151,28 @@ mod tests {
         reset_policy();
     }
 
+    // Process-wide mutex serialising env-var-mutating tests.  Without
+    // it, cargo test's default parallel execution lets two tests race
+    // on the global env block (e.g. test A sets `CAPTURE_IO=proxies,fd`
+    // while test B sets `CAPTURE_IO=invalid-token`), so test A's
+    // `configure_policy_from_env` reads test B's value and asserts
+    // fail with `Some(0)` shapes that don't match the test's literal
+    // pin.  On Windows the symptom is especially loud because env
+    // var visibility flips per-thread without warning.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn env_lock() -> EnvGuard {
-        EnvGuard
+        // Hold the mutex for the duration of the test (released in
+        // Drop AFTER the per-test env-var cleanup).
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        EnvGuard {
+            _guard: Some(guard),
+        }
     }
 
-    struct EnvGuard;
+    struct EnvGuard {
+        _guard: Option<std::sync::MutexGuard<'static, ()>>,
+    }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
@@ -172,6 +189,7 @@ mod tests {
             ] {
                 std::env::remove_var(key);
             }
+            // _guard drops automatically, releasing the mutex.
         }
     }
 }
