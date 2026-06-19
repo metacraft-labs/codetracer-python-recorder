@@ -10,6 +10,7 @@ use crate::monitoring::{
 use crate::policy::policy_snapshot;
 use crate::runtime::activation::ActivationExitKind;
 use crate::runtime::assignment_reconstructor::{LineAssignment, RValueShape};
+use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
@@ -20,7 +21,6 @@ use crate::runtime::value_capture::{
 };
 use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
-use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 use codetracer_trace_types::{
     AssignmentRecord, BindVariableRecord, CallKey, FullValueRecord, Line, PassBy, PathId, Place,
     RValue, TraceLowLevelEvent, VariableId,
@@ -573,11 +573,7 @@ impl Tracer for RuntimeTracer {
                         // keeps going.  See
                         // [`maybe_register_autoformat_view`] for the
                         // full decision tree.
-                        maybe_register_autoformat_view(
-                            &mut *self.writer,
-                            registered_path_id,
-                            path,
-                        );
+                        maybe_register_autoformat_view(&mut *self.writer, registered_path_id, path);
                     }
                     Err(err) => {
                         // Soft failure: the trace is still usable
@@ -625,10 +621,7 @@ impl Tracer for RuntimeTracer {
                         // fresh absolute step to re-anchor.
                         TraceWriter::register_step(&mut *self.writer, path, line_value);
                         if new_column > 1 {
-                            TraceWriter::write_delta_column(
-                                &mut *self.writer,
-                                new_column - 1,
-                            );
+                            TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
                         }
                     }
                 } else {
@@ -638,10 +631,7 @@ impl Tracer for RuntimeTracer {
                     // DeltaColumn(N-1) follows.
                     TraceWriter::register_step(&mut *self.writer, path, line_value);
                     if new_column > 1 {
-                        TraceWriter::write_delta_column(
-                            &mut *self.writer,
-                            new_column - 1,
-                        );
+                        TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
                     }
                 }
                 self.last_column_per_frame.insert(frame_raw, new_column);

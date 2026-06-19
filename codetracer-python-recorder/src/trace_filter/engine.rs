@@ -82,8 +82,8 @@ extern "C" {
 use recorder_errors::{target, ErrorCode, RecorderResult};
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Arc;
 
 /// Global `co_extra` slot index, lazily acquired the first time a
 /// `TraceFilterEngine` is constructed.

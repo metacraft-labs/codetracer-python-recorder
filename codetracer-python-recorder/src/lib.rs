@@ -22,11 +22,11 @@ pub use crate::monitoring as tracer;
 // can call `try_autoformat` / `looks_minified` / etc. directly without
 // reaching into the runtime submodule.  See
 // `src/runtime/autoformat.rs` for the full API.
-pub use crate::runtime::autoformat;
 pub use crate::monitoring::{
     flush_installed_tracer, install_tracer, uninstall_tracer, CallbackOutcome, CallbackResult,
     EventSet, Tracer,
 };
+pub use crate::runtime::autoformat;
 pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing};
 
 use pyo3::prelude::*;

@@ -5,18 +5,18 @@ use std::collections::HashSet;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
-use recorder_errors::{usage, ErrorCode};
 use codetracer_trace_types::{FullValueRecord, TypeKind, ValueRecord};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use recorder_errors::{usage, ErrorCode};
 
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::logging::record_dropped_event;
 use crate::runtime::frame_inspector::{capture_frame, FrameSnapshot};
 use crate::runtime::value_encoder::{encode_value, encode_value_streaming};
-use codetracer_trace_writer_nim::StreamingValueEncoder;
 use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
+use codetracer_trace_writer_nim::StreamingValueEncoder;
 
 const REDACTED_SENTINEL: &str = "<redacted>";
 const DROPPED_SENTINEL: &str = "<dropped>";

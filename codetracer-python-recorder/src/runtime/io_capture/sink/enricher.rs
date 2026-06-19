@@ -1,9 +1,9 @@
 use crate::runtime::io_capture::events::ProxyEvent;
 use crate::runtime::io_capture::mute::is_io_capture_muted;
 use crate::runtime::line_snapshots::LineSnapshotStore;
+use codetracer_trace_types::Line;
 use pyo3::types::PyAnyMethods;
 use pyo3::Python;
-use codetracer_trace_types::Line;
 use std::sync::Arc;
 
 pub struct EventEnricher {

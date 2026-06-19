@@ -7,9 +7,9 @@ use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::tracer::filtering::FilterCoordinator;
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
+use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use log::debug;
 use recorder_errors::{enverr, usage, ErrorCode, RecorderResult};
-use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -290,9 +290,9 @@ mod tests {
     use crate::logging::{init_rust_logging_with_default, snapshot_run_and_trace};
     use crate::policy::RecorderPolicy;
     use crate::runtime::output_paths::TraceOutputPaths;
-    use recorder_errors::ErrorCode;
     use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
     use codetracer_trace_writer_nim::TraceEventsFileFormat;
+    use recorder_errors::ErrorCode;
 
     fn writer() -> NonStreamingTraceWriter {
         NonStreamingTraceWriter::new("program.py", &[])
