@@ -3,6 +3,8 @@
 mod env;
 mod ffi;
 mod model;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[allow(unused_imports)]
 pub use env::{
