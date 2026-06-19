@@ -57,6 +57,19 @@ jobs:
             "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
 
+      - name: Clone codetracer sibling (env.ps1 dependency)
+        # Cairo's env.ps1 dot-sources `../codetracer/env.ps1` for the
+        # shared CodeTracer toolchain (Rust + Nim + MSVC bootstrap).
+        # Skip the heavy FPC/LLVM/nargo/dotnet steps the recorder
+        # doesn't need — env.ps1 already sets those WINDOWS_DIY_SKIP_*
+        # flags before sourcing.
+        shell: bash
+        run: |
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer.git" \
+            "${GITHUB_WORKSPACE}/../codetracer"
+
       - name: Setup dev env (windows-diy flavor)
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
