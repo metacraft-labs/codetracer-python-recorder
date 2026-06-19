@@ -243,30 +243,10 @@ mod tests {
         reset_policy_for_tests();
     }
 
-    // Process-wide mutex serialising env-var-mutating tests in this
-    // submodule.  See `super::tests::ENV_MUTEX` for the same
-    // pattern + rationale.  Without this lock, cargo test's default
-    // parallel execution lets two tests race on the global env
-    // block — especially loud on Windows where env-var visibility
-    // flips per-thread without warning.
-    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct EnvGuard {
-        _guard: Option<std::sync::MutexGuard<'static, ()>>,
-    }
-
+    struct EnvGuard;
     impl EnvGuard {
-        fn new() -> Self {
-            let guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
-            EnvGuard {
-                _guard: Some(guard),
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for key in [
+        fn new() -> crate::policy::test_support::EnvGuard {
+            crate::policy::test_support::EnvGuard::new(&[
                 super::super::env::ENV_ON_RECORDER_ERROR,
                 super::super::env::ENV_REQUIRE_TRACE,
                 super::super::env::ENV_KEEP_PARTIAL_TRACE,
@@ -276,9 +256,7 @@ mod tests {
                 super::super::env::ENV_CAPTURE_IO,
                 super::super::env::ENV_MODULE_NAME_FROM_GLOBALS,
                 super::super::env::ENV_PROPAGATE_SCRIPT_EXIT,
-            ] {
-                std::env::remove_var(key);
-            }
+            ])
         }
     }
 }
