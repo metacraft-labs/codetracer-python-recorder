@@ -58,11 +58,26 @@ jobs:
             "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
 
+      # Mint a GitHub App installation token via the CI Token Provider
+      # app so the reprobuild flake/sibling steps can clone private
+      # metacraft-labs repos (codetracer-native-recorder, runquota,
+      # repo-workspaces, etc.).  GitHub free plan restricts org-level
+      # secrets with visibility ALL from being readable in private repos,
+      # so we mint per-run tokens from the app secrets stored at repo
+      # level (CI_TOKEN_PROVIDER_APP_ID + CI_TOKEN_PROVIDER_PRIVATE_KEY).
+      - name: Mint installation token for cross-repo sibling clones
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       - name: Setup dev env (reprobuild flavor)
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
           env-flavor: reprobuild
-          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS || secrets.GITHUB_TOKEN }}
+          gh-token: ${{ steps.ci_token.outputs.token }}
 
       - name: repro build
         # Builds the conventional `build` collection declared in
