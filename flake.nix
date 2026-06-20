@@ -163,7 +163,6 @@
               clippy
               rust-analyzer
               cargo-nextest
-              cargo-llvm-cov
               llvmPackages_latest.llvm
 
               # Build tooling for Python extensions
@@ -198,6 +197,14 @@
             # `prek` replaces the legacy `pre-commit` workflow (workspace
             # prek-migration directive 2026-05).
             ++ [ pkgs.prek ]
+            # cargo-llvm-cov is a coverage-only tool that is marked broken on
+            # aarch64-darwin in the pinned nixpkgs. Including it unconditionally
+            # made the whole devShell fail to evaluate under `direnv`/`nix
+            # develop` on macOS (the shell silently fell back to the host
+            # environment — no uv/maturin/python3.13). Gate it to non-darwin so a
+            # plain `direnv exec` yields a working build/record/test shell on
+            # macOS; Linux CI keeps coverage.
+            ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [ pkgs.cargo-llvm-cov ]
             ++ preCommit.enabledPackages;
 
             shellHook = ''

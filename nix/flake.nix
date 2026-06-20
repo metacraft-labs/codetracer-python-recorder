@@ -127,7 +127,6 @@
               clippy
               rust-analyzer
               cargo-nextest
-              cargo-llvm-cov
               llvmPackages_latest.llvm
 
               # Build tooling for Python extensions
@@ -140,7 +139,12 @@
 
               # Benchmark visualisation
               gnuplot
-            ];
+            ]
+            # cargo-llvm-cov (coverage-only) is marked broken on aarch64-darwin
+            # in the pinned nixpkgs; including it unconditionally makes this
+            # devShell fail to evaluate on macOS. Gate to non-darwin so `nix
+            # develop ./nix` works on macOS too (Linux CI keeps coverage).
+            ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [ pkgs.cargo-llvm-cov ];
 
             shellHook = ''
               # When having more than one python version in the shell this variable breaks `maturin build`
