@@ -16,6 +16,8 @@ jobs:
         #python-version: ["3.10","3.11","3.12","3.13"]
         python-version: ["3.12","3.13"]
     steps:
+      - uses: actions/checkout@v4
+
       - name: Generate CI token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -24,79 +26,17 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      - uses: actions/checkout@v4
-
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
+      - name: Setup dev env
+        # setup-dev-env clones the siblings listed in .github/sibling-repos
+        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # workspace-lock-pinned revisions before materialising the nix env.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
 
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
-        run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-python-recorder --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-python-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-python-recorder: $LOCK_SHA"
-
-      - name: Clone codetracer-trace-format (Cargo path dependency)
-        run: |
-          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-python-recorder --sibling codetracer-trace-format \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          # TF_REF is a commit SHA resolved from the workspace lock; the
-          # default-branch shallow clone + ``fetch origin <sha>`` + checkout
-          # is SHA-safe.
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
-
-      - name: Clone codetracer-trace-format-nim (Nim FFI source)
-        # codetracer_trace_writer_nim/build.rs reads the FFI entry
-        # point at ../codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim.
-        run: |
-          TFN_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-python-recorder --sibling codetracer-trace-format-nim \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}"
-
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.05
-          extra_nix_config: |
-            experimental-features = nix-command flakes
       - name: Prepare dev environment
-        run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
+        run: dev-exec just venv ${{matrix.python-version}} dev
 
       - name: Build ct-print binary
         # tests/python/test_cli_integration.py shells out to
@@ -105,19 +45,19 @@ jobs:
         # pure-python recorder reference oracle.  Compile it from
         # codetracer_ct_print.nim into the expected path.
         run: |
-          nix develop --command bash -lc '
+          dev-exec bash -c '
             cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
             nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
           '
 
       - name: Verify recorder version metadata
-        run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
+        run: dev-exec python3 scripts/check_recorder_version.py
 
       - name: Rust tests
-        run: nix develop --command bash -lc 'just cargo-test'
+        run: dev-exec just cargo-test
 
       - name: Python tests
-        run: nix develop --command bash -lc 'just py-test'
+        run: dev-exec just py-test
 
   coverage:
     name: Coverage (Python 3.12)
@@ -129,6 +69,8 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Generate CI token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -137,90 +79,27 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      - uses: actions/checkout@v4
-
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
+      - name: Setup dev env
+        # setup-dev-env clones the siblings listed in .github/sibling-repos
+        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # workspace-lock-pinned revisions before materialising the nix env.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
-        run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-python-recorder --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-python-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-python-recorder: $LOCK_SHA"
-
-      - name: Clone codetracer-trace-format (Cargo path dependency)
-        run: |
-          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-python-recorder --sibling codetracer-trace-format \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          # TF_REF is a commit SHA resolved from the workspace lock; the
-          # default-branch shallow clone + ``fetch origin <sha>`` + checkout
-          # is SHA-safe.
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
-
-      - name: Clone codetracer-trace-format-nim (Nim FFI source)
-        # codetracer_trace_writer_nim/build.rs reads the FFI entry
-        # point at ../codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim.
-        run: |
-          TFN_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-python-recorder --sibling codetracer-trace-format-nim \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}"
-          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}"
-
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-25.05
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
 
       - name: Prepare dev environment (Python 3.12)
-        run: nix develop --command bash -lc 'just venv 3.12 dev'
+        run: dev-exec just venv 3.12 dev
 
       - name: Collect coverage
         id: coverage-run
-        run: nix develop --command bash -lc 'just coverage'
+        run: dev-exec just coverage
 
       - name: Generate coverage comment
         if: steps.coverage-run.outcome == 'success'
         run: |
           ROOT="$(pwd)"
-          nix develop --command bash -lc "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
+          dev-exec bash -c "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
             --rust-summary codetracer-python-recorder/target/coverage/rust/summary.json \
             --python-json codetracer-python-recorder/target/coverage/python/coverage.json \
             --output codetracer-python-recorder/target/coverage/coverage-comment.md \
@@ -267,11 +146,20 @@ jobs:
     runs-on: [self-hosted, nixos]
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
+
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
         with:
-          nix_path: nixpkgs=channel:nixos-25.05
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Setup dev env
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        with:
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
 
       # NOTE: .#default (rust-backed recorder) is skipped because
       # importCargoLock cannot resolve Cargo path dependencies that
