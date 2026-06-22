@@ -34,6 +34,8 @@ jobs:
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
       - name: Prepare dev environment
         run: dev-exec just venv ${{matrix.python-version}} dev
@@ -87,6 +89,8 @@ jobs:
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
       - name: Prepare dev environment (Python 3.12)
         run: dev-exec just venv 3.12 dev
@@ -160,6 +164,8 @@ jobs:
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
       # NOTE: .#default (rust-backed recorder) is skipped because
       # importCargoLock cannot resolve Cargo path dependencies that
