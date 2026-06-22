@@ -478,16 +478,32 @@ class TestHCRTraceContent:
             )
 
     def test_values_for_n_in_compute(self, hcr_trace_json: dict) -> None:
-        """The parameter 'n' should appear in value events at compute call steps."""
+        """The parameter 'n' should appear in value events at compute entry.
+
+        A call record's ``entry_step`` anchors at the function's DEFINITION
+        line (``def compute(n):``), per the trace-format contract and the
+        reference Ruby recorder — see codetracer-specs
+        ``Trace-Files/Trace-Event-Types.md``. Parameter values become
+        observable once the interpreter steps into the body, i.e. on the
+        first body step, which immediately follows the entry step. We
+        therefore accept ``n`` captured AT the entry step or on the step
+        right after it (the def line itself binds no locals yet under
+        sys.monitoring). The previous revision asserted ``n`` strictly at
+        the entry step, which only held while the recorder incorrectly
+        anchored the entry step at the caller's call site (where the bound
+        argument happened to be co-located).
+        """
         calls = hcr_trace_json["calls"]
         values = hcr_trace_json["values"]
 
         compute_entry_steps = {
             c["entry_step"] for c in calls if c["function"] == "compute"
         }
+        # Entry step OR the first body step (entry_step + 1).
+        accepted_steps = compute_entry_steps | {s + 1 for s in compute_entry_steps}
         n_values_at_compute = [
             v for v in values
-            if v["varname"] == "n" and v["step"] in compute_entry_steps
+            if v["varname"] == "n" and v["step"] in accepted_steps
         ]
         # Each compute call should capture n; allow some flexibility
         assert len(n_values_at_compute) >= 6, (

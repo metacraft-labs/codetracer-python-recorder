@@ -494,6 +494,100 @@ def test_coroutine_send_and_throw_events_capture_resume_and_exception(tmp_path: 
     assert "err:boom" in strings, f"Expected exception handling result, saw {strings}"
 
 
+def test_call_entry_step_resolves_to_function_definition_line(
+    tmp_path: Path,
+) -> None:
+    """A call record's ``entry_step`` must resolve to the function's
+    DEFINITION line, not the caller's call site.
+
+    Per the trace-format contract (``codetracer-specs``
+    ``Trace-Files/Trace-Event-Types.md`` — the canonical trace sequence
+    shows a ``Step`` at the function's ``def`` line immediately preceding
+    the ``Call``), and matching the reference Ruby recorder which emits
+    ``register_step(path, def_line)`` before ``register_call`` in its
+    ``:call`` TracePoint handler, every consumer maps a call to the line
+    where the function is defined.  Python's ``sys.monitoring`` PY_START
+    fires at function entry while the most recent Step is still the
+    caller's call site, so the recorder must explicitly anchor the entry
+    step at ``co_firstlineno``.  This regression test pins that behaviour:
+    a CodeTracer GUI jump-to-definition and Reprobuild's function-level
+    incremental engine both rely on it.
+    """
+    # Three functions at known definition lines.  ``inner`` is called from
+    # ``outer`` (a different line) so a call site vs definition line
+    # confusion is observable.
+    code = (
+        "def inner(x):\n"        # line 1  (def inner)
+        "    return x + 1\n"     # line 2
+        "\n"                      # line 3
+        "def outer():\n"         # line 4  (def outer)
+        "    return inner(41)\n" # line 5  (call site of inner)
+        "\n"                      # line 6
+        "if __name__ == '__main__':\n"  # line 7
+        "    print(outer())\n"   # line 8  (call site of outer)
+    )
+    script = tmp_path / "script_defline.py"
+    script.write_text(code)
+
+    out_dir = ensure_trace_dir(tmp_path)
+    trace_ct = record_script(out_dir, script)
+
+    parsed = parse_ctfs_trace(trace_ct)
+    assert str(script) in parsed.paths
+    script_path_id = parsed.paths.index(str(script))
+
+    # Map each step_index to its (path_id, line) so we can resolve the
+    # line that a call record's entry_step points at.
+    step_line_by_index: Dict[int, tuple] = {}
+    for event in parsed.events:
+        if event.get("kind") == "step" and "step_index" in event:
+            step_line_by_index[int(event["step_index"])] = (
+                int(event["path_id"]),
+                int(event["line"]),
+            )
+
+    # Known definition lines from the source above (the ``def`` keyword
+    # line for each user function).  ``ct-print --full`` does not surface
+    # the FunctionRecord line in the events stream, so we anchor on the
+    # literal ``def`` lines the test itself wrote — the whole point is that
+    # the entry_step must point at THESE lines, not the call sites
+    # (``inner`` is called from line 5, ``outer`` from line 8).
+    inner_fids = _function_ids(parsed, "inner", script_path_id)
+    outer_fids = _function_ids(parsed, "outer", script_path_id)
+    assert inner_fids and outer_fids
+    def_line_by_fid: Dict[int, int] = {
+        inner_fids[0]: 1,
+        outer_fids[0]: 4,
+    }
+
+    # Every call record into a function defined in this script must have an
+    # entry_step landing on that function's definition line.
+    checked = 0
+    for call in parsed.call_records:
+        fid = int(call["function_id"])
+        if def_line_by_fid.get(fid) is None:
+            continue
+        entry_step = call.get("entry_step")
+        assert entry_step is not None, f"call into fid {fid} missing entry_step"
+        resolved = step_line_by_index.get(int(entry_step))
+        assert resolved is not None, (
+            f"entry_step {entry_step} for fid {fid} has no matching step"
+        )
+        resolved_path_id, resolved_line = resolved
+        if resolved_path_id != script_path_id:
+            continue
+        assert resolved_line == def_line_by_fid[fid], (
+            f"call into '{parsed.functions[fid]['name']}' resolved entry_step "
+            f"to line {resolved_line}, expected definition line "
+            f"{def_line_by_fid[fid]} (call-site/def-line confusion)"
+        )
+        checked += 1
+
+    # We must have actually validated the executed user functions
+    # (inner + outer), otherwise the test would pass vacuously.
+    assert checked >= 2, f"expected to validate >=2 calls, validated {checked}"
+
+
 def test_py_unwind_records_exception_return(tmp_path: Path) -> None:
     code = (
         "def explode():\n"

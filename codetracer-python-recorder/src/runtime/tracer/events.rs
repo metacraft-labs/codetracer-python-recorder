@@ -543,59 +543,13 @@ impl Tracer for RuntimeTracer {
             let path = Path::new(filename);
             let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
 
-            // P1.3: the first time we see a path in column-aware mode,
-            // populate the writer's paths.dat per-line offset table from
-            // the source file on disk.  If the file isn't readable
-            // (subprocess source the recorder lost access to, in-memory
-            // module, etc.) we fall back to registering with an empty
-            // `line_lengths` slice — column resolution at read time
-            // falls back to surfacing `None`, the spec-sanctioned
-            // back-compat default.  Recorded once per path to avoid
-            // re-reading the file on every step.
-            if self.column_aware && !self.paths_with_line_lengths.contains(path) {
-                let line_lengths = read_line_lengths(path).unwrap_or_default();
-                let registration = TraceWriter::register_path_with_line_lengths(
-                    &mut *self.writer,
-                    path,
-                    &line_lengths,
-                );
-                match registration {
-                    Ok(registered_path_id) => {
-                        // P6.2: this is the canonical "first sighting" of
-                        // this source path on the writer — fire the
-                        // recorder-side autoformat pass once and, on a
-                        // successful outcome, buffer the formatted view
-                        // into ``source_views.dat`` via the writer's
-                        // ``register_source_view`` entry point.  The
-                        // helper is best-effort: any error path
-                        // (autoformat skip, tool missing, writer reject)
-                        // is absorbed inside the helper and the recorder
-                        // keeps going.  See
-                        // [`maybe_register_autoformat_view`] for the
-                        // full decision tree.
-                        maybe_register_autoformat_view(
-                            &mut *self.writer,
-                            registered_path_id,
-                            path,
-                        );
-                    }
-                    Err(err) => {
-                        // Soft failure: the trace is still usable
-                        // without per-line column counts (resolution
-                        // falls back to None).  Log once and move on.
-                        // Skip the autoformat pass too — without a
-                        // registered path id the source-view emit would
-                        // fail with "unknown path".
-                        log::debug!(
-                            "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
-                             (column resolution will fall back to None for this file)",
-                            path.display(),
-                            err,
-                        );
-                    }
-                }
-                self.paths_with_line_lengths.insert(path.to_path_buf());
-            }
+            // P1.3: ensure the writer's paths.dat per-line offset table is
+            // populated for this path before any step references it (the
+            // first sighting also fires the autoformat pass). Shared with
+            // `register_entry_step` so a call's definition-line entry step
+            // can't register the path *without* its line-lengths and
+            // corrupt later column/GLI resolution for that file.
+            self.ensure_path_line_lengths(path);
 
             // P1.2: emit either a column-only DeltaColumn (tag 0x07)
             // event — when this step lands on the *same* line as the
@@ -997,6 +951,139 @@ fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_k
 }
 
 impl RuntimeTracer {
+    /// P1.3: ensure the writer's `paths.dat` per-line offset table is
+    /// populated for `path` the first time it is seen in column-aware mode,
+    /// and fire the one-shot autoformat source-view pass on first sighting.
+    ///
+    /// Shared by `on_line` and `register_entry_step` so that *every* path
+    /// gets its line-lengths registered before the first Step that
+    /// references it. If a Step were emitted for a path that had only been
+    /// interned via `ensure_path_id` (no line-lengths), the reader's
+    /// `decodeGlobalPositionIndex` round-trip would mis-resolve that file's
+    /// `(line, column)` pairs for the rest of the trace.
+    ///
+    /// If the source file isn't readable (subprocess source the recorder
+    /// lost access to, in-memory module, etc.) the path is registered with
+    /// an empty `line_lengths` slice — column resolution at read time then
+    /// falls back to surfacing `None`, the spec-sanctioned back-compat
+    /// default. Idempotent: recorded once per path.
+    fn ensure_path_line_lengths(&mut self, path: &Path) {
+        if !self.column_aware || self.paths_with_line_lengths.contains(path) {
+            return;
+        }
+        let line_lengths = read_line_lengths(path).unwrap_or_default();
+        let registration =
+            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
+        match registration {
+            Ok(registered_path_id) => {
+                // P6.2: first sighting of this source path on the writer —
+                // fire the recorder-side autoformat pass once and, on a
+                // successful outcome, buffer the formatted view into
+                // ``source_views.dat``. Best-effort: any error path is
+                // absorbed inside the helper and the recorder keeps going.
+                maybe_register_autoformat_view(&mut *self.writer, registered_path_id, path);
+            }
+            Err(err) => {
+                // Soft failure: the trace is still usable without per-line
+                // column counts (resolution falls back to None). Log once
+                // and move on; skip the autoformat pass too (without a
+                // registered path id the source-view emit would fail with
+                // "unknown path").
+                log::debug!(
+                    "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
+                     (column resolution will fall back to None for this file)",
+                    path.display(),
+                    err,
+                );
+            }
+        }
+        self.paths_with_line_lengths.insert(path.to_path_buf());
+    }
+
+    /// Emit the Step that anchors a call record's `entry_step` at the
+    /// function's DEFINITION line (`co_firstlineno`).
+    ///
+    /// CTFS readers resolve a CallRecord's `entry_step` to the line of the
+    /// most recent Step preceding the Call in the stream. Consumers
+    /// (CodeTracer's GUI jump-to-definition, Reprobuild's function-level
+    /// incremental engine, …) treat that line as the function's definition
+    /// line. The canonical trace sequence in codetracer-specs
+    /// `Trace-Files/Trace-Event-Types.md` shows a Step at the function's
+    /// def line immediately preceding the Call, and the reference Ruby
+    /// recorder enforces this (MRI fires `:call` at the `def` line, and the
+    /// recorder emits `register_step(path, def_line)` before
+    /// `register_call`). Python's `sys.monitoring` PY_START fires at
+    /// function entry while the most recent Step is still the CALL SITE in
+    /// the caller's frame, so this method emits the missing def-line anchor.
+    ///
+    /// The emission funnels through the same path-registration and
+    /// column-aware machinery as `on_line` (via `ensure_path_line_lengths`
+    /// and the leftmost-STORE column from the bytecode line table) so the
+    /// def-line step is byte-compatible with the body steps that follow.
+    /// It updates the per-frame line/column cursors so the first body LINE
+    /// event computes its delta against this step.
+    fn register_entry_step(&mut self, py: Python<'_>, code: &CodeObjectWrapper) {
+        let filename = match code.filename(py) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let def_line = match code.first_line(py) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let path = Path::new(filename);
+        let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
+
+        // P1.3: register line-lengths before the first Step references the
+        // path (same invariant on_line relies on).
+        self.ensure_path_line_lengths(path);
+
+        let line_value = Line(def_line as i64);
+
+        // Column for the def line: the leftmost STORE column from the
+        // bytecode line table, mirroring on_line. `def`/`class` headers
+        // typically have no STORE on their first line, so this is usually
+        // None → column 1, which is correct for a definition line.
+        let column_for_step: Option<Line> = self
+            .assignment_reconstructor
+            .table_for(py, code)
+            .ok()
+            .and_then(|t| t.first_column_for_line(def_line))
+            .map(|c| Line(c as i64));
+
+        // The entry step is the first step of the *callee's* frame. Resolve
+        // the frame pointer so we seed the per-frame line/column cursors the
+        // body LINE events read; if we can't capture the frame we still emit
+        // the step (an unseeded cursor just means the first body step
+        // re-anchors absolutely, which is safe).
+        let frame_raw = capture_frame(py, code)
+            .ok()
+            .map(|snapshot| snapshot.frame_ptr() as usize as u64);
+
+        // Emit an absolute Step at the def line. This is a fresh frame, so
+        // we always take the "line moved" path: register_step resets the
+        // writer's column cursor to 1; a DeltaColumn(N-1) follows when the
+        // resolved column is N>1.
+        if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
+            let new_column = column_line.0;
+            TraceWriter::register_step(&mut *self.writer, path, line_value);
+            if new_column > 1 {
+                TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
+            }
+            if let Some(frame_raw) = frame_raw {
+                self.last_column_per_frame.insert(frame_raw, new_column);
+            }
+        } else {
+            TraceWriter::register_step(&mut *self.writer, path, line_value);
+        }
+        self.mark_event();
+
+        let _ = path_id;
+        if let Some(frame_raw) = frame_raw {
+            self.last_line_per_frame.insert(frame_raw, def_line);
+        }
+    }
+
     fn register_call_record(
         &mut self,
         py: Python<'_>,
@@ -1004,6 +1091,27 @@ impl RuntimeTracer {
         args: Vec<FullValueRecord>,
     ) {
         if let Ok(fid) = self.ensure_function_id(py, code) {
+            // Anchor the call's entry step at the function's DEFINITION line.
+            //
+            // The CTFS call record carries an `entry_step` that readers resolve
+            // back to the line of the most recent Step event preceding the
+            // Call in the stream (see the canonical trace sequence in
+            // codetracer-specs `Trace-Files/Trace-Event-Types.md`, where a
+            // `Step` at the function's `def` line immediately precedes the
+            // `Call`). Consumers — including CodeTracer's GUI and Reprobuild's
+            // function-level incremental engine — treat that resolved line as
+            // the function's definition line ("defLine"). The reference Ruby
+            // recorder enforces this by emitting `register_step(path, def_line)`
+            // immediately before `register_call` in its `:call` TracePoint
+            // handler (MRI fires `:call` at the `def` line).
+            //
+            // Python's `sys.monitoring` PY_START fires at function entry, but
+            // the most recent Step at that moment is the CALL SITE in the
+            // caller's frame (the caller's last LINE event), not this
+            // function's `def`. Without an explicit Step here the call record
+            // would resolve to the call-site line, breaking every consumer
+            // that maps calls to definition lines.
+            self.register_entry_step(py, code);
             TraceWriter::register_call(&mut *self.writer, fid, args);
             // M15: the writer's CallRecord index advances by exactly one per
             // register_call call. Track that so we can stamp the next

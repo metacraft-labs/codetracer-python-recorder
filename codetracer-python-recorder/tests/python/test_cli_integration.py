@@ -682,14 +682,27 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     # ------------------------------------------------------------------
     # The Python recorder produces a deterministic event count for
     # this fixture under sys.monitoring instrumentation:
-    #   - 10 step events (module prologue + line-by-line execution
-    #     across <__main__>, main, make_greeting)
+    #   - 12 steps: the line-by-line execution across <__main__>, main
+    #     and make_greeting PLUS one definition-line entry step per call
+    #     (3 calls). Each call's entry step anchors the CallRecord's
+    #     ``entry_step`` at the function's ``def`` line — see
+    #     codetracer-specs ``Trace-Files/Trace-Event-Types.md`` (the
+    #     canonical sequence shows a Step at the function's def line
+    #     immediately preceding the Call) and the reference Ruby recorder,
+    #     which likewise emits ``register_step(path, def_line)`` before
+    #     ``register_call``. Without these entry steps consumers would
+    #     resolve a call to the caller's call site instead of the callee's
+    #     definition line. (This count rose from 10 to 12 when the
+    #     definition-line entry steps were added: the <__main__> entry step
+    #     coincides with the module's first line so only the main and
+    #     make_greeting entry steps are net-new under ct-print's logical
+    #     step count.)
     #   - 3 call entries (<__main__> wrapper, main, make_greeting)
     #   - 1 io event (the ``print(result_text)`` write to stdout)
     # If these change, that's a real regression to investigate, not a
     # flake — pin the values strictly.
-    assert bundle["counts"]["steps"] == 10, (
-        f"expected 10 steps, got {bundle['counts']['steps']}; full counts: {bundle['counts']!r}"
+    assert bundle["counts"]["steps"] == 12, (
+        f"expected 12 steps, got {bundle['counts']['steps']}; full counts: {bundle['counts']!r}"
     )
     assert bundle["counts"]["calls"] == 3, (
         f"expected 3 calls, got {bundle['counts']['calls']}; full counts: {bundle['counts']!r}"
