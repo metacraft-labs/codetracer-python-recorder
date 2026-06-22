@@ -23,11 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
+      - name: Setup Nix
+        uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
-          nix_path: nixpkgs=channel:nixos-25.05
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.13)
         run: nix develop ./nix --command bash -lc 'just venv 3.13 dev'
       - name: Run test suite
