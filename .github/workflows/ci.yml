@@ -16,43 +16,79 @@ jobs:
         #python-version: ["3.10","3.11","3.12","3.13"]
         python-version: ["3.12","3.13"]
     steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       - uses: actions/checkout@v4
+
+      - name: Checkout metacraft-manifests (workspace locks)
+        uses: actions/checkout@v5
+        with:
+          repository: metacraft-labs/metacraft-manifests
+          ref: latest
+          path: _manifests
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve cross-repo workspace-lock SHA
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
+            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
+            *) CANDS="${{ github.sha }}" ;;
+          esac
+          LOCK_SHA=""
+          for c in $CANDS; do
+            [ -z "$c" ] && continue
+            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
+            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+                 --repo codetracer-python-recorder --sibling codetracer \
+                 --manifest-dir "${{ github.workspace }}/_manifests" \
+                 --sha "$c" --no-walk >/dev/null 2>&1; then
+              LOCK_SHA="$c"; break
+            fi
+          done
+          if [ -z "$LOCK_SHA" ]; then
+            echo "::error::No repo-workspaces workspace lock for codetracer-python-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
+            exit 1
+          fi
+          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
+          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
+          echo "Resolved cross-repo lock SHA for codetracer-python-recorder: $LOCK_SHA"
 
       - name: Clone codetracer-trace-format (Cargo path dependency)
         run: |
-          PINS=".github/sibling-pins"
-          TF_REF="main"
-          if [ -f "${PINS}" ]; then
-            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
-            [ -n "${PIN}" ] && TF_REF="${PIN}"
-          fi
+          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+            --repo codetracer-python-recorder --sibling codetracer-trace-format \
+            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
           rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          # TF_REF is a commit SHA resolved from the workspace lock; the
+          # default-branch shallow clone + ``fetch origin <sha>`` + checkout
+          # is SHA-safe.
           git clone --depth 1 \
             "https://github.com/metacraft-labs/codetracer-trace-format.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          if [ "${TF_REF}" != "main" ]; then
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
-          fi
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}"
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
 
       - name: Clone codetracer-trace-format-nim (Nim FFI source)
         # codetracer_trace_writer_nim/build.rs reads the FFI entry
         # point at ../codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim.
         run: |
-          PINS=".github/sibling-pins"
-          TFN_REF="main"
-          if [ -f "${PINS}" ]; then
-            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
-            [ -n "${PIN}" ] && TFN_REF="${PIN}"
-          fi
+          TFN_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+            --repo codetracer-python-recorder --sibling codetracer-trace-format-nim \
+            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
           rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
           git clone --depth 1 \
             "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          if [ "${TFN_REF}" != "main" ]; then
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
-          fi
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}"
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}"
 
       - uses: cachix/install-nix-action@v27
         with:
@@ -93,43 +129,79 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       - uses: actions/checkout@v4
+
+      - name: Checkout metacraft-manifests (workspace locks)
+        uses: actions/checkout@v5
+        with:
+          repository: metacraft-labs/metacraft-manifests
+          ref: latest
+          path: _manifests
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve cross-repo workspace-lock SHA
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
+            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
+            *) CANDS="${{ github.sha }}" ;;
+          esac
+          LOCK_SHA=""
+          for c in $CANDS; do
+            [ -z "$c" ] && continue
+            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
+            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+                 --repo codetracer-python-recorder --sibling codetracer \
+                 --manifest-dir "${{ github.workspace }}/_manifests" \
+                 --sha "$c" --no-walk >/dev/null 2>&1; then
+              LOCK_SHA="$c"; break
+            fi
+          done
+          if [ -z "$LOCK_SHA" ]; then
+            echo "::error::No repo-workspaces workspace lock for codetracer-python-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
+            exit 1
+          fi
+          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
+          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
+          echo "Resolved cross-repo lock SHA for codetracer-python-recorder: $LOCK_SHA"
 
       - name: Clone codetracer-trace-format (Cargo path dependency)
         run: |
-          PINS=".github/sibling-pins"
-          TF_REF="main"
-          if [ -f "${PINS}" ]; then
-            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
-            [ -n "${PIN}" ] && TF_REF="${PIN}"
-          fi
+          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+            --repo codetracer-python-recorder --sibling codetracer-trace-format \
+            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
           rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          # TF_REF is a commit SHA resolved from the workspace lock; the
+          # default-branch shallow clone + ``fetch origin <sha>`` + checkout
+          # is SHA-safe.
           git clone --depth 1 \
             "https://github.com/metacraft-labs/codetracer-trace-format.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          if [ "${TF_REF}" != "main" ]; then
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
-          fi
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}"
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
 
       - name: Clone codetracer-trace-format-nim (Nim FFI source)
         # codetracer_trace_writer_nim/build.rs reads the FFI entry
         # point at ../codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim.
         run: |
-          PINS=".github/sibling-pins"
-          TFN_REF="main"
-          if [ -f "${PINS}" ]; then
-            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
-            [ -n "${PIN}" ] && TFN_REF="${PIN}"
-          fi
+          TFN_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+            --repo codetracer-python-recorder --sibling codetracer-trace-format-nim \
+            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
           rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
           git clone --depth 1 \
             "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
             "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          if [ "${TFN_REF}" != "main" ]; then
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
-          fi
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}"
+          git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}"
 
       - uses: cachix/install-nix-action@v27
         with:
