@@ -78,6 +78,11 @@ jobs:
         with:
           env-flavor: reprobuild
           gh-token: ${{ steps.ci_token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
       - name: repro build
         # Builds the conventional `build` collection declared in

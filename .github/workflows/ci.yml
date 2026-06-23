@@ -36,6 +36,9 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           substituters: ${{ vars.SUBSTITUTERS }}
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
       - name: Prepare dev environment
         run: dev-exec just venv ${{matrix.python-version}} dev
@@ -91,6 +94,9 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           substituters: ${{ vars.SUBSTITUTERS }}
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
       - name: Prepare dev environment (Python 3.12)
         run: dev-exec just venv 3.12 dev
@@ -166,6 +172,9 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           substituters: ${{ vars.SUBSTITUTERS }}
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
       # NOTE: .#default (rust-backed recorder) is skipped because
       # importCargoLock cannot resolve Cargo path dependencies that
