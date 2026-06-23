@@ -58,6 +58,9 @@ jobs:
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment
@@ -136,6 +139,9 @@ jobs:
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.12)
@@ -154,6 +160,12 @@ jobs:
             --python-json codetracer-python-recorder/target/coverage/python/coverage.json \
             --output codetracer-python-recorder/target/coverage/coverage-comment.md \
             --repo-root \"${ROOT}\""
+          {
+            echo '<!-- coverage-summary -->'
+            cat codetracer-python-recorder/target/coverage/coverage-comment.md
+          } > codetracer-python-recorder/target/coverage/coverage-comment-with-marker.md
+          mv codetracer-python-recorder/target/coverage/coverage-comment-with-marker.md \
+            codetracer-python-recorder/target/coverage/coverage-comment.md
 
       - name: Upload Rust coverage artefacts
         if: steps.coverage-run.outcome == 'success'
@@ -185,11 +197,21 @@ jobs:
 
       - name: Comment coverage summary
         if: github.event_name == 'pull_request' && steps.coverage-run.outcome == 'success'
-        uses: peter-evans/create-or-update-comment@v4
+        id: find-coverage-comment
+        uses: peter-evans/find-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
-          identifier: coverage-summary
+          comment-author: github-actions[bot]
+          body-includes: '<!-- coverage-summary -->'
+
+      - name: Create or update coverage summary
+        if: github.event_name == 'pull_request' && steps.coverage-run.outcome == 'success'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find-coverage-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
           body-path: codetracer-python-recorder/target/coverage/coverage-comment.md
+          edit-mode: replace
 
   nix-build:
     name: Verify nix flake packages build
@@ -200,6 +222,9 @@ jobs:
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build pure-python recorder

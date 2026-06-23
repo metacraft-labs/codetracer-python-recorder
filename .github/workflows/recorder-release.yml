@@ -27,6 +27,9 @@ jobs:
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.13)
