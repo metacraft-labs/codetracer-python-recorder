@@ -26,8 +26,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: linux
+            runner: [self-hosted, nixos]
+          - os: macos
+            runner: [self-hosted, aarch64-darwin]
+          - os: windows
+            runner: [self-hosted, Windows, X64, nixos-equivalent]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 

@@ -23,7 +23,7 @@ on:
 jobs:
   windows-diy:
     name: Windows DIY — just build/test
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, nixos-equivalent]
     steps:
       - uses: actions/checkout@v4
 
