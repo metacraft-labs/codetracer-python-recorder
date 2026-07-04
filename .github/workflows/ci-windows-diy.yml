@@ -70,10 +70,19 @@ jobs:
             "https://github.com/metacraft-labs/codetracer.git" \
             "${GITHUB_WORKSPACE}/../codetracer"
 
+      - name: Mint installation token for workspace manifests
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       - name: Setup dev env (windows-diy flavor)
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
           env-flavor: windows-diy
+          gh-token: ${{ steps.ci_token.outputs.token }}
 
       - name: just build
         run: dev-exec just build
