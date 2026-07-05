@@ -137,16 +137,26 @@ package codetracer_python_recorder:
     const pythonInterpreter =
       when defined(windows): "python.exe" else: "python3"
 
-    let uvToolBootstrapBody = (
-      "set -euo pipefail && " &
-      "mkdir -p " & uvToolBinDir & " " & uvToolDir & " && " &
-      "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
-      "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
-      "uv tool install --python " & pythonInterpreter & " maturin && " &
-      "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
-      "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
-      "uv tool install --python " & pythonInterpreter & " pytest && " &
-      "date -u +%FT%TZ > " & uvToolBootstrapMarker)
+    # Unix dev envs already provide maturin/pytest through the reprobuild
+    # environment. Keep the marker action for graph shape, but reserve
+    # workspace-local uv tool installs for Windows where those tools are not
+    # declared in `uses`.
+    when defined(windows):
+      let uvToolBootstrapBody = (
+        "set -euo pipefail && " &
+        "mkdir -p " & uvToolBinDir & " " & uvToolDir & " && " &
+        "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
+        "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
+        "uv tool install --python " & pythonInterpreter & " maturin && " &
+        "UV_TOOL_BIN_DIR=\"$(pwd)/" & uvToolBinDir & "\" " &
+        "UV_TOOL_DIR=\"$(pwd)/" & uvToolDir & "\" " &
+        "uv tool install --python " & pythonInterpreter & " pytest && " &
+        "printf ok > " & uvToolBootstrapMarker)
+    else:
+      let uvToolBootstrapBody = (
+        "set -euo pipefail && " &
+        "mkdir -p " & uvToolBinDir & " " & uvToolDir & " && " &
+        "printf ok > " & uvToolBootstrapMarker)
 
     let uvToolBootstrap = shell(
       command = "bash -c '" & uvToolBootstrapBody & "'",
