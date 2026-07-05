@@ -500,18 +500,14 @@ def test_call_entry_step_resolves_to_function_definition_line(
     """A call record's ``entry_step`` must resolve to the function's
     DEFINITION line, not the caller's call site.
 
-    Per the trace-format contract (``codetracer-specs``
-    ``Trace-Files/Trace-Event-Types.md`` — the canonical trace sequence
-    shows a ``Step`` at the function's ``def`` line immediately preceding
-    the ``Call``), and matching the reference Ruby recorder which emits
-    ``register_step(path, def_line)`` before ``register_call`` in its
-    ``:call`` TracePoint handler, every consumer maps a call to the line
-    where the function is defined.  Python's ``sys.monitoring`` PY_START
-    fires at function entry while the most recent Step is still the
-    caller's call site, so the recorder must explicitly anchor the entry
-    step at ``co_firstlineno``.  This regression test pins that behaviour:
-    a CodeTracer GUI jump-to-definition and Reprobuild's function-level
-    incremental engine both rely on it.
+    Python's ``sys.monitoring`` PY_START fires at function entry while the
+    most recent natural Step is still the caller's call site, so the
+    recorder must explicitly anchor the call entry step at
+    ``co_firstlineno``.  The CTFS writer records ``entry_step`` as the
+    first Step emitted after ``register_call``; for Python that first
+    callee step is the synthetic definition-line Step.  This regression
+    test pins that behaviour: a CodeTracer GUI jump-to-definition and
+    Reprobuild's function-level incremental engine both rely on it.
     """
     # Three functions at known definition lines.  ``inner`` is called from
     # ``outer`` (a different line) so a call site vs definition line

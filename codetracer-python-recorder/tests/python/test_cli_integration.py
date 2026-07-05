@@ -685,14 +685,13 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     #   - 12 steps: the line-by-line execution across <__main__>, main
     #     and make_greeting PLUS one definition-line entry step per call
     #     (3 calls). Each call's entry step anchors the CallRecord's
-    #     ``entry_step`` at the function's ``def`` line — see
-    #     codetracer-specs ``Trace-Files/Trace-Event-Types.md`` (the
-    #     canonical sequence shows a Step at the function's def line
-    #     immediately preceding the Call) and the reference Ruby recorder,
-    #     which likewise emits ``register_step(path, def_line)`` before
-    #     ``register_call``. Without these entry steps consumers would
-    #     resolve a call to the caller's call site instead of the callee's
-    #     definition line. (This count rose from 10 to 12 when the
+    #     ``entry_step`` at the function's ``def`` line. The CTFS writer
+    #     records ``entry_step`` as the first Step emitted after
+    #     ``register_call``, so Python emits a synthetic definition-line
+    #     Step as the callee's first step. Without these entry steps
+    #     consumers would resolve a call to the caller's call site instead
+    #     of the callee's definition line. (This count rose from 10 to 12
+    #     when the
     #     definition-line entry steps were added: the <__main__> entry step
     #     coincides with the module's first line so only the main and
     #     make_greeting entry steps are net-new under ct-print's logical
