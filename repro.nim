@@ -189,15 +189,18 @@ package codetracer_python_recorder:
     #
     # cargo emits a cdylib under cargo's native naming: ``.dll`` on
     # Windows (PyO3+maturin only renames it to ``.pyd`` at wheel-build
-    # time), ``.dylib`` on macOS, ``.so`` on Linux. The recipe's
+    # time), ``lib*.dylib`` on macOS, ``lib*.so`` on Linux. The recipe's
     # ``extraOutputs`` marker MUST match the bytes cargo actually
     # writes so the engine's freshness check observes the artifact.
     const dylibExt =
       when defined(windows): "dll"
       elif defined(macosx): "dylib"
       else: "so"
+    const dylibName =
+      when defined(windows): "codetracer_python_recorder"
+      else: "libcodetracer_python_recorder"
     const extensionBinary =
-      "codetracer-python-recorder/target/release/codetracer_python_recorder." &
+      "codetracer-python-recorder/target/release/" & dylibName & "." &
       dylibExt
 
     let pyo3Env = @[("PYO3_PYTHON", pythonInterpreter)]
