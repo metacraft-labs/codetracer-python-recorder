@@ -224,6 +224,10 @@ package codetracer_python_recorder:
 
     # ---- Rust-side cargo tests ---------------------------------------
     #
+    # Match the Justfile's Rust test contract: tests run with default
+    # features disabled so PyO3 does not enable ``extension-module``
+    # while linking libtest binaries against the embedded interpreter.
+    #
     # Two edges: ``cargo test --no-run`` builds every test binary
     # under ``target/debug/deps/<crate>-<hash>``; the second
     # ``cargo test`` (without ``--no-run``) re-uses those binaries and
@@ -232,6 +236,7 @@ package codetracer_python_recorder:
     let cargoTestsBuild = cargo.test(
       noRun = true,
       locked = true,
+      noDefaultFeatures = true,
       manifestPath = "codetracer-python-recorder/Cargo.toml",
       actionId = "codetracer-python-recorder.cargo-test-build",
       after = @[uvToolBootstrap],
@@ -247,6 +252,7 @@ package codetracer_python_recorder:
 
     let cargoTestsRun = cargo.test(
       locked = true,
+      noDefaultFeatures = true,
       manifestPath = "codetracer-python-recorder/Cargo.toml",
       actionId = "codetracer-python-recorder.cargo-test-run",
       after = @[cargoTestsBuild.action],
