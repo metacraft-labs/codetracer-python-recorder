@@ -1,4 +1,5 @@
 use once_cell::sync::OnceCell;
+use std::sync::RwLock;
 
 /// Metrics interface allowing pluggable sinks (default: no-op).
 pub trait RecorderMetrics: Send + Sync {
@@ -14,33 +15,41 @@ struct NoopMetrics;
 
 impl RecorderMetrics for NoopMetrics {}
 
-static METRICS_SINK: OnceCell<Box<dyn RecorderMetrics>> = OnceCell::new();
+static METRICS_SINK: OnceCell<RwLock<Box<dyn RecorderMetrics>>> = OnceCell::new();
 
-fn metrics_sink() -> &'static dyn RecorderMetrics {
-    METRICS_SINK
-        .get_or_init(|| Box::new(NoopMetrics) as Box<dyn RecorderMetrics>)
-        .as_ref()
+fn metrics_sink() -> &'static RwLock<Box<dyn RecorderMetrics>> {
+    METRICS_SINK.get_or_init(|| RwLock::new(Box::new(NoopMetrics) as Box<dyn RecorderMetrics>))
 }
 
 /// Install a custom metrics sink. Intended for embedding or tests.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn install_metrics(metrics: Box<dyn RecorderMetrics>) -> Result<(), Box<dyn RecorderMetrics>> {
-    METRICS_SINK.set(metrics)
+    *metrics_sink().write().expect("metrics sink lock") = metrics;
+    Ok(())
 }
 
 /// Record that we abandoned a monitoring location (e.g., synthetic filename).
 pub fn record_dropped_event(reason: &'static str) {
-    metrics_sink().record_dropped_event(reason);
+    metrics_sink()
+        .read()
+        .expect("metrics sink lock")
+        .record_dropped_event(reason);
 }
 
 /// Record that we detached per-policy or due to unrecoverable failure.
 pub fn record_detach(reason: &'static str, error_code: Option<&str>) {
-    metrics_sink().record_detach(reason, error_code);
+    metrics_sink()
+        .read()
+        .expect("metrics sink lock")
+        .record_detach(reason, error_code);
 }
 
 /// Record that we caught a panic at the FFI boundary.
 pub fn record_panic(label: &'static str) {
-    metrics_sink().record_panic(label);
+    metrics_sink()
+        .read()
+        .expect("metrics sink lock")
+        .record_panic(label);
 }
 
 #[cfg(test)]
