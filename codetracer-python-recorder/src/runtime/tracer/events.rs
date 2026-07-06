@@ -10,6 +10,7 @@ use crate::monitoring::{
 use crate::policy::policy_snapshot;
 use crate::runtime::activation::ActivationExitKind;
 use crate::runtime::assignment_reconstructor::{LineAssignment, RValueShape};
+use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
@@ -20,7 +21,6 @@ use crate::runtime::value_capture::{
 };
 use crate::trace_filter::config::ValueAction;
 use crate::trace_filter::engine::{ValueKind, ValuePolicy};
-use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
 use codetracer_trace_types::{
     AssignmentRecord, BindVariableRecord, CallKey, FullValueRecord, Line, PassBy, PathId, Place,
     RValue, TraceLowLevelEvent, VariableId,
@@ -579,10 +579,7 @@ impl Tracer for RuntimeTracer {
                         // fresh absolute step to re-anchor.
                         TraceWriter::register_step(&mut *self.writer, path, line_value);
                         if new_column > 1 {
-                            TraceWriter::write_delta_column(
-                                &mut *self.writer,
-                                new_column - 1,
-                            );
+                            TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
                         }
                     }
                 } else {
@@ -592,10 +589,7 @@ impl Tracer for RuntimeTracer {
                     // DeltaColumn(N-1) follows.
                     TraceWriter::register_step(&mut *self.writer, path, line_value);
                     if new_column > 1 {
-                        TraceWriter::write_delta_column(
-                            &mut *self.writer,
-                            new_column - 1,
-                        );
+                        TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
                     }
                 }
                 self.last_column_per_frame.insert(frame_raw, new_column);
@@ -1003,18 +997,16 @@ impl RuntimeTracer {
     /// Emit the Step that anchors a call record's `entry_step` at the
     /// function's DEFINITION line (`co_firstlineno`).
     ///
-    /// CTFS readers resolve a CallRecord's `entry_step` to the line of the
-    /// most recent Step preceding the Call in the stream. Consumers
-    /// (CodeTracer's GUI jump-to-definition, Reprobuild's function-level
-    /// incremental engine, …) treat that line as the function's definition
-    /// line. The canonical trace sequence in codetracer-specs
-    /// `Trace-Files/Trace-Event-Types.md` shows a Step at the function's
-    /// def line immediately preceding the Call, and the reference Ruby
-    /// recorder enforces this (MRI fires `:call` at the `def` line, and the
-    /// recorder emits `register_step(path, def_line)` before
-    /// `register_call`). Python's `sys.monitoring` PY_START fires at
-    /// function entry while the most recent Step is still the CALL SITE in
-    /// the caller's frame, so this method emits the missing def-line anchor.
+    /// The streaming CTFS/Binary writer records `entry_step` as the first
+    /// Step emitted after `register_call`, so `register_call_record` calls
+    /// the writer first for those formats and then emits this synthetic
+    /// callee step. Consumers (CodeTracer's GUI jump-to-definition,
+    /// Reprobuild's function-level incremental engine, and ct-print) resolve
+    /// that step back to the function definition line.
+    ///
+    /// Python's `sys.monitoring` PY_START fires at function entry while the
+    /// most recent natural Step is still the CALL SITE in the caller's frame,
+    /// so this method emits the missing def-line anchor.
     ///
     /// The emission funnels through the same path-registration and
     /// column-aware machinery as `on_line` (via `ensure_path_line_lengths`
@@ -1091,33 +1083,31 @@ impl RuntimeTracer {
         args: Vec<FullValueRecord>,
     ) {
         if let Ok(fid) = self.ensure_function_id(py, code) {
+            let streaming_entry_step = matches!(
+                self.format,
+                TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs
+            );
+
             // Anchor the call's entry step at the function's DEFINITION line.
-            //
-            // The CTFS call record carries an `entry_step` that readers resolve
-            // back to the line of the most recent Step event preceding the
-            // Call in the stream (see the canonical trace sequence in
-            // codetracer-specs `Trace-Files/Trace-Event-Types.md`, where a
-            // `Step` at the function's `def` line immediately precedes the
-            // `Call`). Consumers — including CodeTracer's GUI and Reprobuild's
-            // function-level incremental engine — treat that resolved line as
-            // the function's definition line ("defLine"). The reference Ruby
-            // recorder enforces this by emitting `register_step(path, def_line)`
-            // immediately before `register_call` in its `:call` TracePoint
-            // handler (MRI fires `:call` at the `def` line).
-            //
-            // Python's `sys.monitoring` PY_START fires at function entry, but
-            // the most recent Step at that moment is the CALL SITE in the
-            // caller's frame (the caller's last LINE event), not this
-            // function's `def`. Without an explicit Step here the call record
-            // would resolve to the call-site line, breaking every consumer
-            // that maps calls to definition lines.
-            self.register_entry_step(py, code);
-            TraceWriter::register_call(&mut *self.writer, fid, args);
+            // Streaming writers assign `entry_step` to the first step emitted
+            // after `register_call`, so their synthetic definition-line step
+            // must follow the call registration. Non-streaming test/legacy
+            // writers do not derive entry_step this way, so keep their old
+            // step-before-call event order.
+            if streaming_entry_step {
+                TraceWriter::register_call(&mut *self.writer, fid, args);
+            } else {
+                self.register_entry_step(py, code);
+                TraceWriter::register_call(&mut *self.writer, fid, args);
+            }
             // M15: the writer's CallRecord index advances by exactly one per
             // register_call call. Track that so we can stamp the next
             // observed `result = foo()` assignment with the matching CallKey.
             self.last_call_key += 1;
             self.mark_event();
+            if streaming_entry_step {
+                self.register_entry_step(py, code);
+            }
         }
     }
 

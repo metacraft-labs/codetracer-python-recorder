@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn py_configure_policy_from_env_propagates_error() {
         reset_policy_for_tests();
-        let _guard = EnvGuard;
+        let _guard = EnvGuard::new();
         std::env::set_var(super::super::env::ENV_REQUIRE_TRACE, "maybe");
         Python::with_gil(|py| {
             let err = py_configure_policy_from_env().expect_err("invalid env should error");
@@ -244,10 +244,9 @@ mod tests {
     }
 
     struct EnvGuard;
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for key in [
+    impl EnvGuard {
+        fn new() -> crate::policy::test_support::EnvGuard {
+            crate::policy::test_support::EnvGuard::new(&[
                 super::super::env::ENV_ON_RECORDER_ERROR,
                 super::super::env::ENV_REQUIRE_TRACE,
                 super::super::env::ENV_KEEP_PARTIAL_TRACE,
@@ -257,9 +256,7 @@ mod tests {
                 super::super::env::ENV_CAPTURE_IO,
                 super::super::env::ENV_MODULE_NAME_FROM_GLOBALS,
                 super::super::env::ENV_PROPAGATE_SCRIPT_EXIT,
-            ] {
-                std::env::remove_var(key);
-            }
+            ])
         }
     }
 }

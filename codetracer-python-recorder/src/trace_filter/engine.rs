@@ -82,8 +82,8 @@ extern "C" {
 use recorder_errors::{target, ErrorCode, RecorderResult};
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicIsize, Ordering};
 
 /// Global `co_extra` slot index, lazily acquired the first time a
 /// `TraceFilterEngine` is constructed.
@@ -94,6 +94,12 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 /// would leak indices that CPython never releases). The atomic uses `-1`
 /// as the unset sentinel.
 static CODE_EXTRA_INDEX: AtomicIsize = AtomicIsize::new(-1);
+static NEXT_ENGINE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+struct CachedScopeResolution {
+    generation: u64,
+    resolution: Arc<ScopeResolution>,
+}
 
 /// Initialise the `co_extra` index on first call. Subsequent calls return
 /// the cached index value.
@@ -143,7 +149,7 @@ fn ensure_code_extra_index(_py: Python<'_>) -> isize {
 }
 
 /// `freefunc` invoked by CPython when a code object holding our slot is
-/// destroyed. Drops the `Arc<ScopeResolution>` the slot was pointing at.
+/// destroyed. Drops the cached scope resolution the slot was pointing at.
 ///
 /// # Safety
 ///
@@ -154,9 +160,8 @@ unsafe extern "C" fn scope_resolution_freefunc(payload: *mut c_void) {
     if payload.is_null() {
         return;
     }
-    // Recover the Arc that was leaked when we stored it in the slot, then
-    // drop it. This balances the refcount taken at insertion time.
-    drop(Arc::from_raw(payload as *const ScopeResolution));
+    // Recover the box that was leaked when we stored it in the slot.
+    drop(Box::from_raw(payload as *mut CachedScopeResolution));
 }
 
 /// Python-aware filter engine wrapping the shared crate's [`Classifier`].
@@ -166,6 +171,7 @@ unsafe extern "C" fn scope_resolution_freefunc(payload: *mut c_void) {
 /// hitting a hash map on the trace-emission hot path.
 pub struct TraceFilterEngine {
     classifier: Arc<Classifier>,
+    cache_generation: u64,
     /// Slot index returned by `_PyEval_RequestCodeExtraIndex`. A negative
     /// value disables caching (logged as a warning at construction time).
     code_extra_index: isize,
@@ -177,6 +183,7 @@ impl TraceFilterEngine {
         let classifier = Classifier::new(config);
         Python::with_gil(|py| Self {
             classifier: Arc::new(classifier),
+            cache_generation: NEXT_ENGINE_GENERATION.fetch_add(1, Ordering::Relaxed),
             code_extra_index: ensure_code_extra_index(py),
         })
     }
@@ -202,11 +209,10 @@ impl TraceFilterEngine {
                 let code_ptr = code.as_bound(py).as_ptr();
                 let rc = PyUnstable_Code_GetExtra(code_ptr, self.code_extra_index, &mut slot);
                 if rc == 0 && !slot.is_null() {
-                    // Slot occupied: bump the refcount on the cached Arc
-                    // without taking ownership of the leaked pointer.
-                    let raw = slot as *const ScopeResolution;
-                    Arc::increment_strong_count(raw);
-                    return Ok(Arc::from_raw(raw));
+                    let cached = &*(slot as *const CachedScopeResolution);
+                    if cached.generation == self.cache_generation {
+                        return Ok(Arc::clone(&cached.resolution));
+                    }
                 }
                 // If rc != 0 CPython has already cleared the error
                 // indicator; treat it like an empty slot.
@@ -217,21 +223,23 @@ impl TraceFilterEngine {
         let resolution = Arc::new(self.classify(py, code, module_hint)?);
 
         if self.code_extra_index >= 0 {
-            // SAFETY: leak one strong refcount on the Arc by converting
-            // it to a raw pointer; the matching `Arc::from_raw` happens in
-            // `scope_resolution_freefunc` when CPython destroys the code
-            // object.  This is how `_PyCode_SetExtra` slots work in
-            // practice.
+            // SAFETY: leak one box into the CPython slot; the matching
+            // `Box::from_raw` happens in `scope_resolution_freefunc` when
+            // CPython destroys or replaces the code object's slot.
             unsafe {
-                let raw = Arc::into_raw(Arc::clone(&resolution)) as *mut c_void;
+                let cached = Box::new(CachedScopeResolution {
+                    generation: self.cache_generation,
+                    resolution: Arc::clone(&resolution),
+                });
+                let raw = Box::into_raw(cached) as *mut c_void;
                 let code_ptr = code.as_bound(py).as_ptr();
                 let rc = PyUnstable_Code_SetExtra(code_ptr, self.code_extra_index, raw);
                 if rc != 0 {
                     // CPython refused our slot write (rare — typically OOM
-                    // or a permission issue).  Reclaim the leaked refcount
+                    // or a permission issue). Reclaim the leaked box
                     // and fall through; the per-event cost regresses to a
                     // miss-every-call rather than leaking memory.
-                    let _ = Arc::from_raw(raw as *const ScopeResolution);
+                    let _ = Box::from_raw(raw as *mut CachedScopeResolution);
                     log::warn!(
                         target: "codetracer_python_recorder::trace_filter",
                         "_PyCode_SetExtra returned {} — trace-filter cache write failed",
@@ -340,7 +348,7 @@ static _DO_NOT_USE_HASH_CACHE: Lazy<()> = Lazy::new(|| ());
 mod tests {
     use super::*;
     use crate::trace_filter::config::TraceFilterConfig;
-    use pyo3::types::{PyAny, PyCode, PyList, PyModule};
+    use pyo3::types::{PyAny, PyCode, PyDict, PyList, PyModule};
     use recorder_errors::ErrorCode;
     use std::ffi::CString;
     use std::fs;
@@ -563,6 +571,12 @@ mod tests {
             let sys_path_any = sys.getattr("path").expect("sys.path");
             let sys_path: Bound<'_, PyList> =
                 sys_path_any.downcast_into::<PyList>().expect("path list");
+            let sys_modules_any = sys.getattr("modules").expect("sys.modules");
+            let sys_modules: Bound<'_, PyDict> = sys_modules_any
+                .downcast_into::<PyDict>()
+                .expect("modules dict");
+            let _ = sys_modules.del_item("app.foo");
+            let _ = sys_modules.del_item("app");
             sys_path
                 .insert(0, project_root.to_string_lossy().to_string())
                 .expect("insert project root");
@@ -582,6 +596,8 @@ mod tests {
             assert_eq!(resolution.exec(), ExecDecision::Skip);
 
             sys_path.del_item(0).expect("restore sys.path");
+            let _ = sys_modules.del_item("app.foo");
+            let _ = sys_modules.del_item("app");
             // Keep the temp dir alive across the rest of the test.
             std::mem::forget(project);
             // Silence the "imported PyList unused" warning by referencing

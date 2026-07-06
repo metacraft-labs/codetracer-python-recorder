@@ -1,0 +1,194 @@
+name: CI (reprobuild)
+
+# Additive side-by-side CI run that re-plays the project's
+# deterministic dev env through reprobuild instead of `nix develop` or
+# `env.ps1`. Runs alongside the existing `ci.yml` (`nix`) and any
+# `windows-build.yml` (`windows-diy`) entries so regressions in either
+# of the older paths still gate merges — see
+# `codetracer-specs/Repo-Requirements.md` §2.9 and
+# `metacraft-dev-guidelines/policies/ci-shared-dev-env.md` §4 for the
+# rollout shape.
+#
+# The `setup-dev-env` composite action accepts `env-flavor: reprobuild`
+# (target state per the policy). When the action's reprobuild branch
+# lands, this workflow exercises it end-to-end on every supported
+# host without any other repo-side change.
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+    branches: [main, dev, stable]
+
+jobs:
+  reprobuild:
+    name: ${{ matrix.os }} — repro build/test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone codetracer-trace-format sibling
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if ! git clone --depth 1 --branch "${TF_REF}" --single-branch \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format" 2>/dev/null; then
+            rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+            git clone --no-checkout "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+              "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
+          fi
+
+      - name: Clone codetracer-trace-format-nim sibling
+        shell: bash
+        run: |
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+
+      # Mint a GitHub App installation token via the CI Token Provider
+      # app so the reprobuild flake/sibling steps can clone private
+      # metacraft-labs repos (codetracer-native-recorder, runquota,
+      # repo-workspaces, etc.).  GitHub free plan restricts org-level
+      # secrets with visibility ALL from being readable in private repos,
+      # so we mint per-run tokens from the app secrets stored at repo
+      # level (CI_TOKEN_PROVIDER_APP_ID + CI_TOKEN_PROVIDER_PRIVATE_KEY).
+      - name: Mint installation token for cross-repo sibling clones
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Setup dev env (reprobuild flavor)
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        with:
+          env-flavor: reprobuild
+          repro-build-pin: codex/attic-ci-cache-vars
+          gh-token: ${{ steps.ci_token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
+
+      - name: Prepare Windows reprobuild runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $clingoRoot = Join-Path $env:RUNNER_TEMP "reprobuild-clingo-5.8.0"
+          $clingoDll = Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Filter clingo.dll -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $clingoDll) {
+            Remove-Item -LiteralPath $clingoRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path $clingoRoot | Out-Null
+            $env:REPROBUILD_CLINGO_ROOT = $clingoRoot
+            python -m pip install --disable-pip-version-check --quiet zstandard==0.23.0
+            @'
+import hashlib
+import io
+import os
+import pathlib
+import tarfile
+import urllib.request
+import zipfile
+
+import zstandard
+
+URL = "https://conda.anaconda.org/conda-forge/win-64/clingo-5.8.0-py312h4128c23_0.conda"
+SHA256 = "9ffe4802f8d39991bef75a1548f10147a59e5549eca65fef5119eb281e4f343a"
+ROOT = pathlib.Path(os.environ["REPROBUILD_CLINGO_ROOT"])
+PKG = ROOT / "clingo.conda"
+
+urllib.request.urlretrieve(URL, PKG)
+actual = hashlib.sha256(PKG.read_bytes()).hexdigest()
+if actual != SHA256:
+    raise SystemExit(f"clingo package sha256 mismatch: {actual} != {SHA256}")
+
+with zipfile.ZipFile(PKG) as archive:
+    pkg_member = next(
+        name for name in archive.namelist()
+        if name.startswith("pkg-") and name.endswith(".tar.zst")
+    )
+    payload = zstandard.ZstdDecompressor().decompress(archive.read(pkg_member))
+
+with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tar:
+    for member in tar.getmembers():
+        name = member.name.replace("\\", "/")
+        if not name.startswith("Library/bin/") or member.isdir():
+            continue
+        rel = pathlib.PurePosixPath(name).relative_to("Library")
+        dest = ROOT / pathlib.Path(*rel.parts)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tar.extractfile(member) as src, dest.open("wb") as out:
+            out.write(src.read())
+
+PKG.unlink(missing_ok=True)
+print(f"clingo runtime staged at {ROOT / 'bin'}")
+'@ | python -
+            $clingoDll = Get-ChildItem -LiteralPath $clingoRoot -Filter clingo.dll -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          }
+          if ($null -eq $clingoDll) {
+            throw "clingo.dll not found under $env:RUNNER_TEMP"
+          }
+
+          Add-Content -Path $env:GITHUB_PATH -Value $clingoDll.DirectoryName
+
+          $reproBin = Join-Path $env:GITHUB_WORKSPACE "reprobuild\build\bin"
+          if (Test-Path -LiteralPath $reproBin -PathType Container) {
+            Copy-Item -LiteralPath $clingoDll.FullName -Destination (Join-Path $reproBin "clingo.dll") -Force
+          }
+
+      - name: Prepare macOS reprobuild sandbox tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox="${GITHUB_WORKSPACE}/.reprobuild-sandbox-tools"
+          mkdir -p "${sandbox}/bin"
+          if [ -x /opt/homebrew/bin/bash ]; then
+            ln -sf /opt/homebrew/bin/bash "${sandbox}/bin/sh"
+          elif command -v nix >/dev/null 2>&1; then
+            nix_bash="$(nix shell --accept-flake-config nixpkgs#bashInteractive --command bash -lc 'command -v bash')"
+            ln -sf "${nix_bash}" "${sandbox}/bin/sh"
+          else
+            echo "No non-SIP bash available for CT_SANDBOX_TOOLS_DIR" >&2
+            exit 1
+          fi
+          echo "CT_SANDBOX_TOOLS_DIR=${sandbox}" >> "${GITHUB_ENV}"
+
+      - name: repro build
+        # Builds the conventional `build` collection declared in
+        # `repro.nim`. Verifies the primary shipping artefact (the
+        # recorder binary or extension) materialises through the
+        # reprobuild engine identically to `just build`.
+        run: dev-exec repro build
+
+      - name: repro test
+        # Materialises the `test` collection.
+        run: dev-exec repro test
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reprobuild-logs-${{ matrix.os }}
+          path: |
+            target/
+            .repro/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn configure_policy_from_env_updates_fields() {
-        let _guard = EnvGuard;
+        let _guard = EnvGuard::new();
         reset_policy_for_tests();
         std::env::set_var(ENV_ON_RECORDER_ERROR, "disable");
         std::env::set_var(ENV_REQUIRE_TRACE, "true");
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn configure_policy_from_env_disables_module_name_from_globals() {
-        let _guard = EnvGuard;
+        let _guard = EnvGuard::new();
         reset_policy_for_tests();
         std::env::set_var(ENV_MODULE_NAME_FROM_GLOBALS, "false");
         std::env::set_var(ENV_PROPAGATE_SCRIPT_EXIT, "false");
@@ -200,10 +200,9 @@ mod tests {
     }
 
     struct EnvGuard;
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for key in [
+    impl EnvGuard {
+        fn new() -> crate::policy::test_support::EnvGuard {
+            crate::policy::test_support::EnvGuard::new(&[
                 ENV_ON_RECORDER_ERROR,
                 ENV_REQUIRE_TRACE,
                 ENV_KEEP_PARTIAL_TRACE,
@@ -213,9 +212,7 @@ mod tests {
                 ENV_CAPTURE_IO,
                 ENV_MODULE_NAME_FROM_GLOBALS,
                 ENV_PROPAGATE_SCRIPT_EXIT,
-            ] {
-                std::env::remove_var(key);
-            }
+            ])
         }
     }
 }
