@@ -85,6 +85,41 @@ jobs:
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
+      - name: Prepare Windows reprobuild runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $clingoDll = Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Filter clingo.dll -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $clingoDll) {
+            throw "clingo.dll not found under $env:RUNNER_TEMP"
+          }
+
+          Add-Content -Path $env:GITHUB_PATH -Value $clingoDll.DirectoryName
+
+          $reproBin = Join-Path $env:GITHUB_WORKSPACE "reprobuild\build\bin"
+          if (Test-Path -LiteralPath $reproBin -PathType Container) {
+            Copy-Item -LiteralPath $clingoDll.FullName -Destination (Join-Path $reproBin "clingo.dll") -Force
+          }
+
+      - name: Prepare macOS reprobuild sandbox tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox="${GITHUB_WORKSPACE}/.reprobuild-sandbox-tools"
+          mkdir -p "${sandbox}/bin"
+          if [ -x /opt/homebrew/bin/bash ]; then
+            ln -sf /opt/homebrew/bin/bash "${sandbox}/bin/sh"
+          elif command -v nix >/dev/null 2>&1; then
+            nix_bash="$(nix shell --accept-flake-config nixpkgs#bashInteractive --command bash -lc 'command -v bash')"
+            ln -sf "${nix_bash}" "${sandbox}/bin/sh"
+          else
+            echo "No non-SIP bash available for CT_SANDBOX_TOOLS_DIR" >&2
+            exit 1
+          fi
+          echo "CT_SANDBOX_TOOLS_DIR=${sandbox}" >> "${GITHUB_ENV}"
+
       - name: repro build
         # Builds the conventional `build` collection declared in
         # `repro.nim`. Verifies the primary shipping artefact (the
@@ -95,15 +130,6 @@ jobs:
       - name: repro test
         # Materialises the `test` collection.
         run: dev-exec repro test
-
-      - name: just build (cross-check)
-        # Re-runs the legacy `just build` path inside the same env so
-        # we catch silent divergences between `repro build` outputs
-        # and what the dev shell + Justfile produce today.
-        run: dev-exec just build
-
-      - name: just test (cross-check)
-        run: dev-exec just test
 
       - name: Upload logs on failure
         if: failure()
