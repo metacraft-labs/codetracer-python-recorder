@@ -204,6 +204,7 @@ package codetracer_python_recorder:
       dylibExt
 
     let pyo3Env = @[("PYO3_PYTHON", pythonInterpreter)]
+    let cargoTestRunEnv = pyo3Env & @[("RUST_TEST_THREADS", "1")]
 
     let extensionBuild = cargo.build(
       release = true,
@@ -233,6 +234,11 @@ package codetracer_python_recorder:
     # ``cargo test`` (without ``--no-run``) re-uses those binaries and
     # actually runs them. The dependency from run -> build runs through
     # ``after`` plus the deps-dir entry in ``extraInputs``.
+    #
+    # The Rust unit tests embed one Python interpreter and exercise global
+    # recorder/policy/sys.modules state. Rust's default parallel test harness
+    # can interleave those PyO3 tests in one process, so the run edge forces a
+    # serial harness via ``RUST_TEST_THREADS=1``.
     let cargoTestsBuild = cargo.test(
       noRun = true,
       locked = true,
@@ -264,7 +270,7 @@ package codetracer_python_recorder:
         "codetracer-python-recorder/target/debug/deps",
         uvToolBootstrapMarker
       ],
-      extraEnv = pyo3Env)
+      extraEnv = cargoTestRunEnv)
 
     # Python-side pytest is driven through the Justfile + uv
     # workflow for now; wiring it as a reprobuild edge requires a
