@@ -22,12 +22,27 @@ on:
 
 jobs:
   reprobuild:
-    name: ${{ matrix.os }} — repro build/test
+    name: ${{ matrix.os }}-${{ matrix.arch }} — repro build/test
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: linux
+            arch: x64
+            runner: incus
+          - os: linux
+            arch: arm64
+            runner: tart-linux-arm
+          - os: macos
+            arch: arm64
+            runner: macos-tart
+          - os: windows
+            arch: x64
+            runner: win-ephemeral
+          - os: windows
+            arch: arm64
+            runner: win-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -186,7 +201,7 @@ print(f"clingo runtime staged at {ROOT / 'bin'}")
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: reprobuild-logs-${{ matrix.os }}
+          name: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             target/
             .repro/
