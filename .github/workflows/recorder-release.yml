@@ -20,7 +20,7 @@ env:
 jobs:
   verify:
     name: Verify Tests (Linux)
-    runs-on: ubuntu-latest
+    runs-on: incus
     steps:
       - uses: actions/checkout@v4
       - name: Setup Nix
@@ -48,29 +48,31 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
+            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS incus
             os: ubuntu-latest
             build-sdist: true
             publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: linux-aarch64
+            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS incus
             os: ubuntu-latest
             build-sdist: false
             publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
             manylinux: 2014
             target: ""
           - name: macos-x86_64
-            os: macos-13
+            os: macos-tart
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: x86_64
           - name: macos-aarch64
-            os: macos-14
+            os: macos-tart
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: aarch64
           - name: windows-amd64
-            os: windows-latest
+            os: [win-ephemeral, win-arm]
             build-sdist: false
             publish-args: --release --out dist
             target: ""
@@ -221,6 +223,7 @@ jobs:
   publish-testpypi:
     name: Publish to TestPyPI
     needs: build
+    # EXEMPTION (CIP-5): registry-publish — needs GitHub-hosted PyPI publish action
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -259,6 +262,7 @@ jobs:
     name: Publish to PyPI
     needs: publish-testpypi
     if: startsWith(github.ref, 'refs/tags/')
+    # EXEMPTION (CIP-5): registry-publish — needs GitHub-hosted PyPI publish action
     runs-on: ubuntu-latest
     environment:
       name: pypi-production

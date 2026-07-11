@@ -23,7 +23,7 @@ on:
 jobs:
   windows-diy:
     name: Windows DIY — just build/test
-    runs-on: windows-latest
+    runs-on: [win-ephemeral, win-arm]
     steps:
       - uses: actions/checkout@v4
 
