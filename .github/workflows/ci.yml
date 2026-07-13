@@ -10,7 +10,7 @@ on:
 jobs:
   nix-tests:
     name: Testing on Python ${{matrix.python-version}}
-    runs-on: incus
+    runs-on: eph-linux-x64
     strategy:
       matrix:
         #python-version: ["3.10","3.11","3.12","3.13"]
@@ -67,7 +67,7 @@ jobs:
   coverage:
     name: Coverage (Python 3.12)
     needs: nix-tests
-    runs-on: incus
+    runs-on: eph-linux-x64
     continue-on-error: true
     permissions:
       contents: read
@@ -153,7 +153,7 @@ jobs:
 
   nix-build:
     name: Verify nix flake packages build
-    runs-on: incus
+    runs-on: eph-linux-x64
     steps:
       - uses: actions/checkout@v4
 

@@ -20,7 +20,7 @@ env:
 jobs:
   verify:
     name: Verify Tests (Linux)
-    runs-on: incus
+    runs-on: eph-linux-x64
     steps:
       - uses: actions/checkout@v4
       - name: Setup Nix
@@ -48,31 +48,31 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS incus
+            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS eph-linux-x64
             os: ubuntu-latest
             build-sdist: true
             publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: linux-aarch64
-            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS incus
+            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS eph-linux-x64
             os: ubuntu-latest
             build-sdist: false
             publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
             manylinux: 2014
             target: ""
           - name: macos-x86_64
-            os: macos-tart
+            os: eph-macos-arm64
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: x86_64
           - name: macos-aarch64
-            os: macos-tart
+            os: eph-macos-arm64
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: aarch64
           - name: windows-amd64
-            os: [win-ephemeral, win-arm]
+            os: [eph-win-x64, eph-win-arm64]
             build-sdist: false
             publish-args: --release --out dist
             target: ""

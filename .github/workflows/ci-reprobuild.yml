@@ -29,19 +29,19 @@ jobs:
         include:
           - os: linux
             arch: x64
-            runner: incus
+            runner: eph-linux-x64
           - os: linux
             arch: arm64
-            runner: tart-linux-arm
+            runner: eph-linux-arm64
           - os: macos
             arch: arm64
-            runner: macos-tart
+            runner: eph-macos-arm64
           - os: windows
             arch: x64
-            runner: win-ephemeral
+            runner: eph-win-x64
           - os: windows
             arch: arm64
-            runner: win-arm
+            runner: eph-win-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4

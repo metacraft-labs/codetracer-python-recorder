@@ -18,7 +18,7 @@ on:
 
 jobs:
   pypi-bundling:
-    # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY setup-nim/setup-python toolchain not portable to NixOS incus
+    # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY setup-nim/setup-python toolchain not portable to NixOS eph-linux-x64
     runs-on: ubuntu-latest
     name: pypi bundling smoke-test
     steps:
