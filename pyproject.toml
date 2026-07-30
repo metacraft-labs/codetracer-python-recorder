@@ -34,3 +34,15 @@ test = [
   "codetracer-python-recorder",
   "codetracer-pure-python-recorder"
 ]
+
+# RS-M5 (Request Panel live sessions): the three web frameworks whose middleware
+# integration the recorder ships, plus an ASGI server to run the FastAPI demo
+# over real HTTP.  Needed by `tests/python/test_request_spans.py` and by
+# `just demo-request-panel-python`; kept in its own group so the core test run
+# does not pull a web stack it never imports.
+web = [
+  "flask>=2.3",
+  "django>=4.2",
+  "fastapi>=0.100",
+  "uvicorn>=0.23",
+]

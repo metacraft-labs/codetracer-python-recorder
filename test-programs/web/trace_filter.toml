@@ -1,0 +1,53 @@
+[meta]
+name = "codetracer-web-demo"
+version = 1
+description = "Record only the demo app module: skip Flask / Django / uvicorn internals so each request's span step range is exactly its handler's steps."
+labels = ["web", "demo", "rs-m5"]
+
+# Composed AFTER the builtin default filter.  Two facts about composition drive
+# the shape of this file (see `codetracer_trace_filter`'s loader/engine):
+#
+#   * `default_exec` is taken from the LAST source that sets it, so `skip` here
+#     replaces the builtin's `trace`; but
+#   * `default_exec` is only the fallback for code no RULE matched, and rules
+#     compose across sources with LAST MATCH WINS.  The builtin default filter
+#     contains `exec = "trace"` for anything under `site-packages`, so a bare
+#     `default_exec = "skip"` would still trace all of Flask / Werkzeug /
+#     uvicorn.  Measured: 31_862 steps and ~156 s just to reach "listening".
+#
+# Hence the explicit catch-all skip below, which must come BEFORE the app rule.
+[scope]
+default_exec = "skip"
+default_value_action = "inherit"
+
+[[scope.rules]]
+# Override every earlier source's rules, including the builtin's
+# "re-enable site-packages" one.
+selector = 'file:regex:.*'
+exec = "skip"
+reason = "Skip everything by default — the demo only wants its own app module"
+
+[[scope.rules]]
+# The demo app modules — `test-programs/web/<framework>/app.py`.  Matched by
+# file rather than package because the module name depends on how the server
+# harness imported it.  Last match wins, so this re-enables exactly one file.
+#
+# A `file:` selector is matched against the path RELATIVE to the filter's own
+# project root (`codetracer_trace_filter`'s `ScopeContext::derive`), and this
+# file's project root is the directory holding it — so the candidate string for
+# the demo app is exactly `flask/app.py`, with forward slashes on every
+# platform.  Two mistakes were made here and both are worth keeping named:
+#
+#   * `.*[\\/]web[\\/]...` insisted on a separator before `web`, which the
+#     relative candidate does not have — nothing matched and the recording came
+#     out with no handler steps in it at all.
+#   * `(.*[\\/])?(flask|...)[\\/]app\.py$` then also matched FLASK'S OWN
+#     `site-packages/flask/app.py` (files outside the project root fall back to
+#     matching the absolute path), so the framework was traced too: 1335 steps
+#     for eight requests, ~500 ms per request, and a row's double-click landed
+#     in `flask/app.py` instead of in the handler.
+#
+# Hence the fully anchored relative pattern.
+selector = 'file:regex:^(flask|fastapi|django)/app\.py$'
+exec = "trace"
+reason = "Trace the demo app's handlers — the only user code in this recording"

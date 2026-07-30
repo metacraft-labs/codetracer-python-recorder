@@ -26,6 +26,7 @@ use codetracer_trace_types::{
     RValue, TraceLowLevelEvent, VariableId,
 };
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use codetracer_trace_writer_nim::SpanRecord;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -825,6 +826,26 @@ impl Tracer for RuntimeTracer {
         self.io.clear_snapshots();
         self.lifecycle.reset_event_state();
         Ok(())
+    }
+
+    /// RS-M5: forward a span straight to the trace writer's span stream.
+    ///
+    /// No buffering and no recorder-side bookkeeping: the writer owns the span
+    /// stream, appends the record, and sets `meta.dat` bit 13 at close.  An
+    /// open record and its later completion are two ordinary appends with the
+    /// same `span_id`; the reader resolves them by last-record-wins.
+    fn register_span(&mut self, span: &SpanRecord) -> Result<(), String> {
+        TraceWriter::register_span(&mut *self.writer, span).map_err(|err| err.to_string())
+    }
+
+    /// RS-M5: ask the WRITER for the index its next event will take.
+    ///
+    /// Deliberately not a recorder-side counter of `register_step` calls: the
+    /// writer's step counter also advances for column deltas, raise / catch and
+    /// thread events, and it is that counter which defines the step ids a
+    /// reader walks and a span's `start_step` / `end_step` refer to.
+    fn next_step_index(&self) -> Option<u64> {
+        Some(TraceWriter::next_step_index(&*self.writer))
     }
 }
 

@@ -3,6 +3,7 @@
 use std::any::Any;
 
 use crate::code_object::CodeObjectWrapper;
+use codetracer_trace_writer_nim::SpanRecord;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
@@ -231,5 +232,31 @@ pub trait Tracer: Send + Any {
     /// Finish and close any underlying writers. Default is a no-op.
     fn finish(&mut self, _py: Python<'_>) -> PyResult<()> {
         Ok(())
+    }
+
+    /// RS-M5: append one span — a bounded, labeled interval of execution such
+    /// as an HTTP request — to the trace container's span stream.
+    ///
+    /// This is the path the WSGI / ASGI middleware take instead of writing a
+    /// `codetracer_spans.jsonl` sidecar: the span names a *(process, thread,
+    /// step range)* coordinate INSIDE the container being recorded, so the
+    /// Request Panel can seek from a row to the handler's first step.
+    ///
+    /// The default implementation returns an error rather than silently
+    /// dropping the span, so a middleware is never told a request was recorded
+    /// by a tracer that cannot record one.
+    fn register_span(&mut self, _span: &SpanRecord) -> Result<(), String> {
+        Err("the installed tracer does not support spans".to_string())
+    }
+
+    /// RS-M5: the step index the next recorded event will occupy — the
+    /// `start_step` a span opened right now must carry.  See
+    /// `NimTraceWriter::next_step_index` for why this must come from the writer
+    /// and not from a recorder-side count of step registrations.
+    ///
+    /// `None` means "this tracer has no step timeline", which callers must
+    /// distinguish from step 0.
+    fn next_step_index(&self) -> Option<u64> {
+        None
     }
 }

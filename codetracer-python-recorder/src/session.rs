@@ -68,6 +68,9 @@ pub fn start_tracing(
             );
             tracer.begin(&outputs, 1)?;
             tracer.install_io_capture(py, &policy)?;
+            // RS-M5: span ids are 1-based and monotonic *within a container*,
+            // so a second session in the same process restarts the sequence.
+            crate::spans::reset_span_ids();
 
             // Install callbacks
             install_tracer(py, Box::new(tracer))?;

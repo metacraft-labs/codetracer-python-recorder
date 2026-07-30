@@ -13,6 +13,7 @@ pub mod monitoring;
 mod policy;
 mod runtime;
 mod session;
+pub mod spans;
 pub mod trace_filter;
 
 pub use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
@@ -28,6 +29,12 @@ pub use crate::monitoring::{
     EventSet, Tracer,
 };
 pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing};
+// RS-M5: the span-emission surface the WSGI / ASGI middleware call so a
+// recorded HTTP request lands in the container's span stream instead of a
+// `codetracer_spans.jsonl` sidecar.
+pub use crate::spans::{
+    read_span_stream_json, register_span, span_allocate_id, span_next_step_index, trace_step_count,
+};
 
 use pyo3::prelude::*;
 
@@ -173,5 +180,11 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     m.add_function(wrap_pyfunction!(policy::py_configure_policy_from_env, m)?)?;
     m.add_function(wrap_pyfunction!(policy::py_policy_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(managed_upload_materialized_trace, m)?)?;
+    // RS-M5 span emission (see `src/spans.rs`).
+    m.add_function(wrap_pyfunction!(spans::register_span, m)?)?;
+    m.add_function(wrap_pyfunction!(spans::span_allocate_id, m)?)?;
+    m.add_function(wrap_pyfunction!(spans::span_next_step_index, m)?)?;
+    m.add_function(wrap_pyfunction!(spans::read_span_stream_json, m)?)?;
+    m.add_function(wrap_pyfunction!(spans::trace_step_count, m)?)?;
     Ok(())
 }
