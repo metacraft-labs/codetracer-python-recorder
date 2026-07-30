@@ -205,5 +205,31 @@ print(f"clingo runtime staged at {ROOT / 'bin'}")
           path: |
             target/
             .repro/
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: ignore
+
+      - name: Mirror test logs to S3 (non-blocking)
+        if: failure()
+        continue-on-error: true
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        with:
+          path: target/
+          prefix: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}/${{ github.run_id }}/target
+          endpoint: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          bucket: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          region: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          access-key-id: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}
+
+      - name: Mirror reprobuild logs to S3 (non-blocking)
+        if: failure()
+        continue-on-error: true
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        with:
+          path: .repro/
+          prefix: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}/${{ github.run_id }}/repro
+          endpoint: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          bucket: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          region: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          access-key-id: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}

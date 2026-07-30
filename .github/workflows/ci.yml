@@ -143,6 +143,19 @@ jobs:
           path: codetracer-python-recorder/target/coverage/coverage-comment.md
           if-no-files-found: warn
 
+      - name: Mirror coverage artefacts to S3 (non-blocking)
+        if: steps.coverage-run.outcome == 'success'
+        continue-on-error: true
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        with:
+          path: codetracer-python-recorder/target/coverage/
+          prefix: python-recorder-coverage/${{ github.run_id }}
+          endpoint: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
+          bucket: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}
+          region: ${{ vars.MCL_S3_ARTIFACTS_REGION }}
+          access-key-id: ${{ secrets.MCL_S3_ARTIFACTS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.MCL_S3_ARTIFACTS_SECRET_ACCESS_KEY }}
+
       - name: Comment coverage summary
         if: github.event_name == 'pull_request' && steps.coverage-run.outcome == 'success'
         uses: peter-evans/create-or-update-comment@v4
