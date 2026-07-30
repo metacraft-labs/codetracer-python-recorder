@@ -5,8 +5,8 @@ request becomes an **inline-bound** ``web-request`` span in the ``.ct`` containe
 the recorder is writing: HTTP metadata *plus* the step range the request
 executed, which is what lets CodeTracer's Request Panel seek from a row to that
 request's handler.  Before RS-M5 this middleware wrote a
-``codetracer_spans.jsonl`` sidecar with no link to any trace; see
-``span_recorder.py`` for what changed and why the sidecar is now opt-in.
+``codetracer_spans.jsonl`` sidecar with no link to any trace; RS-M12 removed
+that writer entirely — see ``span_recorder.py``.
 
 The span lifecycle, the step-range capture and the concurrency argument live in
 :mod:`codetracer_python_recorder.middleware.span_recorder`.
@@ -33,16 +33,18 @@ class CodeTracerWSGIMiddleware:
     """Record one span per request handled by the wrapped WSGI app.
 
     ``framework`` is recorded as the span's ``framework`` metadata value.
-    ``manifest_path`` opts into the legacy sidecar JSONL (see
-    ``span_recorder``); leaving it unset writes spans to the container only.
     ``concurrent`` should be set when the server dispatches requests to worker
     threads, so overlapping step ranges are declared rather than implied.
+
+    RS-M12 removed the ``manifest_path`` parameter along with the sidecar
+    writer.  It was the SECOND POSITIONAL argument, so a caller that still
+    passes it now gets a ``TypeError`` rather than silently configuring
+    nothing.
     """
 
     def __init__(
         self,
         app,
-        manifest_path: Optional[str] = None,
         *,
         framework: str = "",
         concurrent: bool = False,
@@ -53,13 +55,7 @@ class CodeTracerWSGIMiddleware:
             framework=framework,
             concurrent=concurrent,
             publish_open=publish_open,
-            manifest_path=manifest_path,
         )
-
-    @property
-    def manifest_path(self) -> Optional[str]:
-        """The configured sidecar path, if any.  Kept for callers that inspect it."""
-        return self.spans.manifest_path
 
     def __call__(self, environ, start_response):
         method = environ.get("REQUEST_METHOD", "GET")

@@ -2,9 +2,9 @@
 
 Since RS-M5 both middlewares write ``web-request`` spans into the ``.ct``
 container the recorder is producing (``spans.dat``), so a request row in
-CodeTracer's Request Panel can seek into that request's handler.  The legacy
-``codetracer_spans.jsonl`` sidecar is still written when a manifest path is
-configured explicitly, and is removed entirely in RS-M11.
+CodeTracer's Request Panel can seek into that request's handler.  RS-M12
+removed the legacy ``codetracer_spans.jsonl`` sidecar writer entirely; nothing
+here writes a file, and ``CODETRACER_SPAN_MANIFEST`` is no longer read.
 
 * :class:`CodeTracerWSGIMiddleware` — Flask, Django, any WSGI app.
 * :class:`CodeTracerASGIMiddleware` — FastAPI, Starlette, any ASGI app.

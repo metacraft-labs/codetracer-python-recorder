@@ -36,12 +36,16 @@ class CodeTracerASGIMiddleware:
 
     Non-HTTP scopes (``lifespan``, ``websocket``) pass straight through: they are
     not requests and have no ``http.*`` metadata to record.
+
+    RS-M12 removed the ``manifest_path`` parameter along with the sidecar
+    writer.  It was the SECOND POSITIONAL argument, so a caller that still
+    passes it now gets a ``TypeError`` rather than silently configuring
+    nothing.
     """
 
     def __init__(
         self,
         app,
-        manifest_path: Optional[str] = None,
         *,
         framework: str = "",
         publish_open: bool = True,
@@ -53,13 +57,7 @@ class CodeTracerASGIMiddleware:
             # sibling spans may overlap in step space even on one thread.
             concurrent=True,
             publish_open=publish_open,
-            manifest_path=manifest_path,
         )
-
-    @property
-    def manifest_path(self) -> Optional[str]:
-        """The configured sidecar path, if any.  Kept for callers that inspect it."""
-        return self.spans.manifest_path
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":

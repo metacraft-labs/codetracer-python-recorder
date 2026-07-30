@@ -54,7 +54,6 @@ sub-millisecond request legitimately rounds to 0 ms.
 
 from __future__ import annotations
 
-import json
 import sys
 import importlib
 from concurrent.futures import ThreadPoolExecutor
@@ -159,9 +158,18 @@ def _assert_common_shape(span: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_flask_requests_land_in_span_stream(tmp_path: Path) -> None:
+def test_flask_requests_land_in_span_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _require("flask", "Flask")
     trace_dir = tmp_path / "flask-session"
+
+    # RS-M12 removed the sidecar writer.  The opt-in that used to switch it
+    # back on is set ON PURPOSE and inherited by the recorded server, so the
+    # "no sidecar" assertion below proves the write path is GONE rather than
+    # merely switched off by default.
+    sidecar_probe = tmp_path / "opt-in-sidecar.jsonl"
+    monkeypatch.setenv("CODETRACER_SPAN_MANIFEST", str(sidecar_probe))
 
     expected = [
         ("GET", "/api/users", 200),
@@ -241,7 +249,12 @@ def test_flask_requests_land_in_span_stream(tmp_path: Path) -> None:
     assert [span["span_id"] for span in spans] == list(range(1, len(expected) + 1))
 
     # RS-M5's definition of done: the recorded path involves no sidecar file.
+    # RS-M12 went further and removed the writer, so neither the trace
+    # directory nor the explicitly requested opt-in path may hold one.
     assert not list(trace_dir.glob("*.jsonl")), "a sidecar manifest was written"
+    assert not sidecar_probe.exists(), (
+        "CODETRACER_SPAN_MANIFEST must no longer produce a JSONL sidecar"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -416,41 +429,43 @@ def test_django_requests_land_in_span_stream(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The middleware without a recording, and the sidecar's opt-in retirement
+# The middleware without a recording, and the sidecar's retirement
 # ---------------------------------------------------------------------------
 
 
-def test_middleware_without_a_recording_writes_nothing(tmp_path: Path) -> None:
+def test_middleware_without_a_recording_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A wrapped app that is not being recorded must still work.
 
-    The middleware is installed at import time in a real deployment, so it has to
-    be harmless when no session is active: no span, no sidecar, no exception.
+    The middleware is installed at import time in a real deployment, so it has
+    to be harmless when no session is active: no span, no file, no exception.
+
+    RS-M12 removed the sidecar writer, so the opt-in is switched ON here and
+    the assertion is that nothing appears anyway.  Asserting on an UNSET
+    variable would only have tested today's default.
     """
     from codetracer_python_recorder.middleware.wsgi import CodeTracerWSGIMiddleware
 
     manifest = tmp_path / "spans.jsonl"
+    monkeypatch.setenv("CODETRACER_SPAN_MANIFEST", str(manifest))
 
     def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/plain"), ("Content-Length", "2")])
         return [b"ok"]
 
     wrapped = CodeTracerWSGIMiddleware(app)
-    assert wrapped.manifest_path is None, (
-        "the sidecar must be opt-in: an unconfigured middleware writes only to the container"
-    )
     body = wrapped({"REQUEST_METHOD": "GET", "PATH_INFO": "/health"}, lambda *_: None)
     assert body == [b"ok"]
-    assert not manifest.exists()
+    assert not manifest.exists(), (
+        "CODETRACER_SPAN_MANIFEST must no longer produce a sidecar"
+    )
 
-    # Explicitly configured, the legacy JSONL still works — it is retained for one
-    # release for consumers of already-recorded sessions (RS-M11 removes it).
-    wrapped = CodeTracerWSGIMiddleware(app, str(manifest))
-    wrapped({"REQUEST_METHOD": "GET", "PATH_INFO": "/health"}, lambda *_: None)
-    record = json.loads(manifest.read_text().splitlines()[0])
-    assert record["span_type"] == SPAN_TYPE_WEB_REQUEST
-    assert record["metadata"]["http.method"] == "GET"
-    assert record["metadata"]["http.url"] == "/health"
-    assert record["metadata"]["http.status_code"] == "200"
+    # The parameter went with the writer.  It was the SECOND POSITIONAL
+    # argument, so a caller still passing it gets a TypeError rather than a
+    # silently ignored path.
+    with pytest.raises(TypeError):
+        CodeTracerWSGIMiddleware(app, str(manifest))
 
 
 # ---------------------------------------------------------------------------

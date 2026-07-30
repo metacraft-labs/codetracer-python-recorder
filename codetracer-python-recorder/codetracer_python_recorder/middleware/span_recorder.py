@@ -42,26 +42,24 @@ what every demo and integration test here uses — is unaffected, and the span
 entry points themselves are already thread-safe (they hold the tracer lock only
 while holding the GIL, and release the GIL while waiting for it).
 
-## Sidecar JSONL
+## No sidecar (RS-M12)
 
-Sidecar emission (``codetracer_spans.jsonl``) is retained for one release per
-the milestone plan, but is now **opt-in**: it happens only when a manifest path
-is passed explicitly or ``CODETRACER_SPAN_MANIFEST`` is set.  It used to default
-to ``/tmp/codetracer_spans.jsonl``, which would have meant every recorded
-request landing in BOTH the container and a sidecar — and RS-M5's definition of
-done is span emission "with no sidecar file involved".  The read-only consumers
-of already-written sidecars (``ct print``) are unaffected; RS-M11 removes the
-write path entirely.
+Until RS-M5 this middleware wrote request metadata to a
+``codetracer_spans.jsonl`` sidecar; RS-M5 moved it into the container's span
+stream and kept the sidecar writer one release behind an opt-in
+``CODETRACER_SPAN_MANIFEST``.  RS-M12 removed that writer: nothing here opens a
+file, and the environment variable is no longer read.  A sidecar row is not
+seekable — it names no coordinate in any recording — which is exactly what the
+span stream fixed, so there was nothing left for it to carry.  Sessions
+recorded before the change are still readable through CodeTracer's db-backend
+shim (``src/db-backend/src/request_spans.rs``).
 """
 
 from __future__ import annotations
 
-import json
-import os
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from ..spans import (
     SPAN_STATUS_ERROR,
@@ -72,8 +70,6 @@ from ..spans import (
     next_step_index,
     register_span,
 )
-
-ENV_SPAN_MANIFEST = "CODETRACER_SPAN_MANIFEST"
 
 
 def _current_thread_id() -> int:
@@ -251,8 +247,6 @@ class PendingRequestSpan:
                 metadata=metadata,
             )
 
-        self._recorder.write_sidecar(self, status_code, duration_ms, metadata)
-
 
 class RequestSpanRecorder:
     """Allocates and publishes one span per HTTP request.
@@ -272,14 +266,10 @@ class RequestSpanRecorder:
         framework: str = "",
         concurrent: bool = False,
         publish_open: bool = True,
-        manifest_path: Optional[str] = None,
     ) -> None:
         self.framework = framework
         self.concurrent = concurrent
         self.publish_open = publish_open
-        # Opt-in only — see this module's header on sidecar retirement.
-        self.manifest_path = manifest_path or os.environ.get(ENV_SPAN_MANIFEST)
-        self._sidecar_lock = threading.Lock()
 
     def begin(
         self,
@@ -300,36 +290,6 @@ class RequestSpanRecorder:
             pending.publish_open()
         return pending
 
-    def write_sidecar(
-        self,
-        pending: PendingRequestSpan,
-        status_code: int,
-        duration_ms: int,
-        metadata: Sequence[Tuple[str, str]],
-    ) -> None:
-        """Append the legacy JSONL line, when a manifest path was configured.
-
-        Retained for one release for consumers of already-recorded sessions; not
-        written unless explicitly asked for.  Never raises: the sidecar is
-        diagnostic, and a full disk must not break the wrapped application.
-        """
-        if not self.manifest_path:
-            return
-        record = {
-            "id": f"span_{pending.span_id}",
-            "label": pending.label,
-            "span_type": SPAN_TYPE_WEB_REQUEST,
-            "metadata": dict(metadata),
-            "status": "error" if status_code >= 400 else "ok",
-            "end_time": datetime.now(timezone.utc).isoformat(),
-        }
-        try:
-            with self._sidecar_lock:
-                with open(self.manifest_path, "a") as handle:
-                    handle.write(json.dumps(record) + "\n")
-        except OSError:
-            pass
-
 
 def parse_status_code(status: object) -> int:
     """Extract the numeric status from a WSGI ``"200 OK"`` status line.
@@ -346,7 +306,6 @@ def parse_status_code(status: object) -> int:
 
 
 __all__: Iterable[str] = (
-    "ENV_SPAN_MANIFEST",
     "PendingRequestSpan",
     "RequestSpanRecorder",
     "parse_status_code",

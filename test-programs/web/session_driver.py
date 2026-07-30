@@ -106,9 +106,11 @@ class ServerUnderRecorder:
         env = dict(os.environ)
         # Unbuffered, so the READY handshake is not stuck in a pipe buffer.
         env["PYTHONUNBUFFERED"] = "1"
-        # A stray manifest env var from the developer's shell would re-enable the
-        # sidecar this milestone removed from the recorded path.
-        env.pop("CODETRACER_SPAN_MANIFEST", None)
+        # RS-M12 removed the sidecar writer, so CODETRACER_SPAN_MANIFEST is
+        # deliberately NOT stripped here: whatever the surrounding shell sets,
+        # the recorded server must produce no sidecar.  `codetracer`'s
+        # `no_recorder_writes_sidecar_manifests` sets it on purpose and asserts
+        # exactly that.
         argv = [
             self.python,
             str(SERVE_SCRIPT),
