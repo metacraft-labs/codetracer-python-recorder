@@ -23,7 +23,12 @@ on:
 jobs:
   windows-diy:
     name: Windows DIY — just build/test
-    runs-on: [eph-win-x64, eph-win-arm64]
+    # Single label, not an array: `runs-on: [a, b]` is an AND over labels (one
+    # runner carrying BOTH), not a fallback. eph-win-x64 and eph-win-arm64 are
+    # separate pools on separate hosts, so the array matched no runner and the
+    # job queued until GitHub's 24h timeout. To span both classes use a matrix
+    # axis (`matrix: runs-on: [...]` + `runs-on: ${{ matrix.runs-on }}`).
+    runs-on: eph-win-x64
     steps:
       - uses: actions/checkout@v4
 
