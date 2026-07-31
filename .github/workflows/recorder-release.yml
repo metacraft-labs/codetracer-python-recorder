@@ -45,29 +45,29 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            os: ubuntu-latest
+            os: eph-linux-x64
             build-sdist: true
             publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: linux-aarch64
-            os: ubuntu-latest
+            os: eph-linux-x64
             build-sdist: false
             publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
             manylinux: 2014
             target: ""
           - name: macos-x86_64
-            os: macos-13
+            os: eph-macos-arm64
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: x86_64
           - name: macos-aarch64
-            os: macos-14
+            os: eph-macos-arm64
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: aarch64
           - name: windows-amd64
-            os: windows-latest
+            os: eph-win-x64
             build-sdist: false
             publish-args: --release --out dist
             target: ""
