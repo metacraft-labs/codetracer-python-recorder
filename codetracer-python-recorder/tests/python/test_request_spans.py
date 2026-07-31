@@ -58,7 +58,7 @@ import sys
 import importlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import pytest
 
@@ -67,8 +67,11 @@ from codetracer_python_recorder.spans import (
     SPAN_STATUS_OK,
     SPAN_TYPE_WEB_REQUEST,
     read_span_stream,
+    span_metadata_value,
     trace_step_count,
 )
+
+from .support.ctfs import ct_print_full
 
 # ``test_request_spans.py`` → ``python/`` → ``tests/`` →
 # ``codetracer-python-recorder/`` (inner) → repo root.
@@ -542,3 +545,108 @@ def test_threaded_wsgi_requests_land_in_span_stream(tmp_path: Path) -> None:
     )
     # The queries distinguish the requests, so every span kept its own URL.
     assert sorted(_meta(span)["http.url"] for span in spans) == sorted(slow_urls)
+
+
+# ---------------------------------------------------------------------------
+# a span's start_step must seek into that request's own handler
+# ---------------------------------------------------------------------------
+
+
+def _step_table(container: Path) -> Dict[int, dict]:
+    """``step_index -> decoded step`` for *container*, via ``ct-print --full``.
+
+    The canonical CTFS reader, the same one ``test_cli_integration.py`` and
+    ``test_column_aware_steps.py`` decode through — not a second parser that
+    could share a bug with the writer.
+    """
+    bundle = ct_print_full(container)
+    return {
+        event["step_index"]: event
+        for event in bundle["events"]
+        if event["kind"] == "step"
+    }
+
+
+def _position_at(steps: Dict[int, dict], step_index: int) -> Tuple[str, int]:
+    """The ``(path, line)`` a reader displays when it seeks to *step_index*.
+
+    A ``DeltaColumn`` step carries no position of its own — it INHERITS the
+    position of the step before it — and the decoder omits such steps from its
+    listing entirely.  Walking back to the nearest listed step therefore
+    reproduces exactly what a seek to *step_index* would show.
+    """
+    probe = step_index
+    while probe >= 0 and probe not in steps:
+        probe -= 1
+    assert probe >= 0, f"no decodable step at or before index {step_index}"
+    event = steps[probe]
+    return event["path"], event["line"]
+
+
+def test_flask_span_start_step_seeks_into_its_own_handler(tmp_path: Path) -> None:
+    """Double-clicking a request must land in THAT request's handler.
+
+    A span's ``start_step`` is the coordinate the Request Panel seeks to, so
+    the step it names must report the same source line as the handler's own
+    entry step.  It did not for **parameterised** routes: the recorder
+    registers a callee's arguments as step variables just before
+    ``register_call``, at a point where the caller's step has already been
+    flushed, and the writer used to give the resulting synthetic step a
+    zero-delta column position — i.e. the line of whatever was recorded last,
+    which at a request boundary is the PREVIOUS request's ``after_request``
+    hook.  Seeking there opened a stale line belonging to a different request.
+
+    ``/api/users/<int:user_id>`` (a handler that takes an argument) is the
+    case that reproduced it; the argument-less handlers around it are asserted
+    in the same loop so the test also shows they were never affected.
+    """
+    _require("flask", "Flask")
+    trace_dir = tmp_path / "flask-seek-session"
+
+    # A parameterised route must follow a request that ends in the
+    # after_request hook, which is what makes the inherited position stale.
+    urls = ["/api/users", "/api/users/2", "/api/reports/slow", "/api/users/999"]
+
+    with ServerUnderRecorder("flask", trace_dir) as server:
+        statuses = [server.request(url)[0] for url in urls]
+    assert statuses == [200, 200, 200, 404], statuses
+
+    container = server.container()
+    spans = _web_spans(container)
+    assert len(spans) == len(urls), (
+        f"expected {len(urls)} spans, got {[span['label'] for span in spans]}"
+    )
+
+    steps = _step_table(container)
+    parameterised = 0
+
+    for span, url in zip(spans, urls):
+        start = span["start_step"]
+        end = span["end_step"]
+        # The handler's own entry step: the first step inside the span's range
+        # that the decoder attributes to a recorded call.
+        handler_entry = next(
+            (i for i in range(start, end + 1) if i in steps and steps[i].get("function")),
+            None,
+        )
+        assert handler_entry is not None, (
+            f"{url}: no step in range {start}..{end} belongs to a recorded call"
+        )
+        seeked = _position_at(steps, start)
+        entry = _position_at(steps, handler_entry)
+        assert seeked == entry, (
+            f"{url}: the Request Panel seeks to step {start}, which displays "
+            f"{seeked[0]}:{seeked[1]}, but this request's handler "
+            f"({steps[handler_entry]['function']}) starts at "
+            f"{entry[0]}:{entry[1]} (step {handler_entry}). "
+            "The synthetic step the writer invents for the handler's orphaned "
+            "call arguments inherited an unrelated earlier position instead of "
+            "carrying the callee's own definition site."
+        )
+        if "<" in span_metadata_value(span, "http.route"):
+            parameterised += 1
+
+    assert parameterised >= 2, (
+        "this test is only meaningful if it covers parameterised routes; "
+        f"it saw {parameterised}"
+    )
