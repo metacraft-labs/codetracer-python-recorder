@@ -51,9 +51,9 @@ jobs:
             manylinux: 2014
             target: ""
           - name: linux-aarch64
-            os: eph-linux-x64
+            os: eph-linux-arm64
             build-sdist: false
-            publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
+            publish-args: --release --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: macos-aarch64
