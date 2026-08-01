@@ -5,6 +5,18 @@ on:
     tags:
       - recorder-v*
   workflow_dispatch:
+    inputs:
+      publish_testpypi:
+        description: >-
+          Also publish the built artefacts to TestPyPI. Default is a
+          build-only validation run (verify + build all matrix legs +
+          upload artefacts) that publishes NOTHING — use it to confirm a
+          workflow or runner change (e.g. the native eph-linux-arm64
+          wheel build) still produces wheels without risking a release.
+          PyPI (production) is never published from a manual dispatch;
+          only a `recorder-v*` tag push does that.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -213,6 +225,11 @@ jobs:
   publish-testpypi:
     name: Publish to TestPyPI
     needs: build
+    # Publish on a real tag push, or on a manual dispatch only when the
+    # operator explicitly opts in. A plain workflow_dispatch is a build-only
+    # validation run (verify + build + upload artefacts) that publishes
+    # nothing.
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_testpypi)
     runs-on: [self-hosted, nixos]
     environment:
       name: testpypi
