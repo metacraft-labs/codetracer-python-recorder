@@ -61,7 +61,7 @@ jobs:
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment
-        run: nix develop --command bash -lc 'just venv ${{matrix.python-version}} dev'
+        run: nix develop --command bash -c 'just venv ${{matrix.python-version}} dev'
 
       - name: Build ct-print binary
         # tests/python/test_cli_integration.py shells out to
@@ -70,19 +70,19 @@ jobs:
         # pure-python recorder reference oracle.  Compile it from
         # codetracer_ct_print.nim into the expected path.
         run: |
-          nix develop --command bash -lc '
+          nix develop --command bash -c '
             cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
             nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
           '
 
       - name: Verify recorder version metadata
-        run: nix develop --command bash -lc 'python3 scripts/check_recorder_version.py'
+        run: nix develop --command bash -c 'python3 scripts/check_recorder_version.py'
 
       - name: Rust tests
-        run: nix develop --command bash -lc 'just cargo-test'
+        run: nix develop --command bash -c 'just cargo-test'
 
       - name: Python tests
-        run: nix develop --command bash -lc 'just py-test'
+        run: nix develop --command bash -c 'just py-test'
 
   coverage:
     name: Coverage (Python 3.12)
@@ -139,17 +139,17 @@ jobs:
           substituters: ${{ vars.SUBSTITUTERS }}
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.12)
-        run: nix develop --command bash -lc 'just venv 3.12 dev'
+        run: nix develop --command bash -c 'just venv 3.12 dev'
 
       - name: Collect coverage
         id: coverage-run
-        run: nix develop --command bash -lc 'just coverage'
+        run: nix develop --command bash -c 'just coverage'
 
       - name: Generate coverage comment
         if: steps.coverage-run.outcome == 'success'
         run: |
           ROOT="$(pwd)"
-          nix develop --command bash -lc "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
+          nix develop --command bash -c "python3 codetracer-python-recorder/scripts/generate_coverage_comment.py \
             --rust-summary codetracer-python-recorder/target/coverage/rust/summary.json \
             --python-json codetracer-python-recorder/target/coverage/python/coverage.json \
             --output codetracer-python-recorder/target/coverage/coverage-comment.md \
