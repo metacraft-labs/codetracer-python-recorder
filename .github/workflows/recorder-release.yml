@@ -100,6 +100,13 @@ jobs:
   build:
     name: Build Artefacts (${{ matrix.name }})
     needs: verify
+    # Real releases (tag pushes) gate the build on a green test suite. A
+    # manual build-only validation dispatch, however, exercises the build
+    # even when verify fails — you are validating that the wheels BUILD
+    # (e.g. after a runner/packaging change), not the test outcome.
+    # Publishing stays gated on tags / explicit opt-in regardless (see the
+    # publish-* jobs), so a dispatch never releases anything.
+    if: always() && (needs.verify.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
