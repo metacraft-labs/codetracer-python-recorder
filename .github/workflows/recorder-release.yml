@@ -35,6 +35,45 @@ jobs:
     runs-on: [self-hosted, nixos]
     steps:
       - uses: actions/checkout@v4
+
+      # The recorder crate path-depends on the codetracer-trace-format
+      # sibling (codetracer_ctfs / codetracer_trace_* at ../../) and the
+      # codetracer-trace-format-nim FFI source. Clone them next to the
+      # checkout, exactly like ci.yml, so `just test` / maturin can build.
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
+      - name: Clone codetracer-trace-format-nim (Nim FFI source)
+        run: |
+          PINS=".github/sibling-pins"
+          TFN_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TFN_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          if [ "${TFN_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
+          fi
+
       - name: Setup Nix
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
@@ -80,6 +119,49 @@ jobs:
             target: ""
     steps:
       - uses: actions/checkout@v4
+
+      # The recorder crate path-depends on the codetracer-trace-format
+      # sibling (codetracer_ctfs / codetracer_trace_* at ../../) and the
+      # codetracer-trace-format-nim FFI source. Clone them next to the
+      # checkout so maturin can resolve the path dependencies.
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        if: startsWith(matrix.name, 'linux-') || startsWith(matrix.name, 'macos-') || matrix.name == 'windows-amd64'
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
+      - name: Clone codetracer-trace-format-nim (Nim FFI source)
+        if: startsWith(matrix.name, 'linux-') || startsWith(matrix.name, 'macos-') || matrix.name == 'windows-amd64'
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TFN_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TFN_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          if [ "${TFN_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
+          fi
+
       - name: Check recorder version parity
         shell: bash
         run: |
