@@ -222,30 +222,30 @@ jobs:
             exit 1
           fi
 
-      - name: Build artefacts (Linux targets)
+      - name: Setup Nix
         if: startsWith(matrix.name, 'linux-')
-        uses: PyO3/maturin-action@v1
+        uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
-          command: build
-          args: ${{ matrix.publish-args }}
-          manylinux: ${{ matrix.manylinux }}
-          sccache: true
-          before-script-linux: |
-            set -eux
-            if command -v yum >/dev/null 2>&1; then
-              yum install -y capnproto
-            elif command -v dnf >/dev/null 2>&1; then
-              dnf install -y capnproto
-            elif command -v microdnf >/dev/null 2>&1; then
-              microdnf install -y capnproto
-            elif command -v apt-get >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y capnproto
-            else
-              echo "Unable to install capnproto: no supported package manager found" >&2
-              exit 1
-            fi
-          working-directory: codetracer-python-recorder
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build artefacts (Linux targets)
+        # The eph-linux-* self-hosted runners are NixOS VMs without a Docker
+        # daemon, so maturin's manylinux container build cannot run. Build in
+        # the repo's nix dev shell instead — it provides maturin, the Rust
+        # toolchain and capnproto, and the trace-format siblings are cloned
+        # next to the checkout. NOTE: this produces host-glibc (nixpkgs) wheels
+        # tagged linux_<arch>, NOT manylinux — fine for validating that the
+        # native (incl. eph-linux-arm64) build compiles, but PyPI needs a
+        # manylinux strategy (Docker on the runners, or auditwheel) before this
+        # feeds a real publish. See PR description.
+        if: startsWith(matrix.name, 'linux-')
+        run: |
+          nix develop --command bash -c '
+            cd codetracer-python-recorder
+            maturin build ${{ matrix.publish-args }}
+          '
 
       - name: Install Python 3.12 (macOS)
         if: startsWith(matrix.name, 'macos-')
