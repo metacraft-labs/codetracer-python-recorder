@@ -82,6 +82,16 @@ jobs:
           nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.13)
         run: nix develop --command bash -c 'just venv 3.13 dev'
+      - name: Build ct-print binary
+        # The integration tests shell out to
+        # ../codetracer-trace-format-nim/ct-print to decode CTFS bundles
+        # back into the legacy JSON shape (see ci.yml). Compile it from
+        # codetracer_ct_print.nim into the expected path.
+        run: |
+          nix develop --command bash -c '
+            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+            nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
+          '
       - name: Run test suite
         run: nix develop --command bash -c 'just test'
       - name: Check recorder version parity
