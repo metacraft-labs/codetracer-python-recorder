@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use recorder_errors::{enverr, ErrorCode};
 use codetracer_trace_types::{Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use recorder_errors::{enverr, ErrorCode};
 
 use crate::errors::Result;
 use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
@@ -93,11 +93,7 @@ impl TraceOutputPaths {
             // activation path) we fall back to an empty slice and the
             // reader surfaces column = 1 for steps on this file.
             let line_lengths = read_line_lengths_for_path(start_path);
-            match TraceWriter::register_path_with_line_lengths(
-                writer,
-                start_path,
-                &line_lengths,
-            ) {
+            match TraceWriter::register_path_with_line_lengths(writer, start_path, &line_lengths) {
                 Ok(start_path_id) => {
                     // P6.2: the activation path's first registration is
                     // also the canonical hook point for the recorder-
@@ -109,11 +105,7 @@ impl TraceOutputPaths {
                     // the call is essentially free.  See
                     // [`maybe_register_autoformat_view_for_path`] for
                     // the full decision tree.
-                    maybe_register_autoformat_view_for_path(
-                        writer,
-                        start_path_id,
-                        start_path,
-                    );
+                    maybe_register_autoformat_view_for_path(writer, start_path_id, start_path);
                 }
                 Err(err) => {
                     log::debug!(

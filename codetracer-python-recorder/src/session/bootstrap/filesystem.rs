@@ -2,8 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use recorder_errors::{enverr, usage, ErrorCode};
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use recorder_errors::{enverr, usage, ErrorCode};
 
 use crate::errors::Result;
 

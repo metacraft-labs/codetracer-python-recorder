@@ -8,8 +8,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pyo3::prelude::*;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
+use pyo3::prelude::*;
 
 use crate::errors::Result;
 use crate::trace_filter::engine::TraceFilterEngine;
@@ -52,7 +52,14 @@ impl TraceSessionBootstrap {
         activation_path: Option<&Path>,
         explicit_trace_filters: Option<&[PathBuf]>,
     ) -> Result<Self> {
-        Self::prepare_with_framework(py, trace_directory, format, activation_path, explicit_trace_filters, None)
+        Self::prepare_with_framework(
+            py,
+            trace_directory,
+            format,
+            activation_path,
+            explicit_trace_filters,
+            None,
+        )
     }
 
     /// Prepare a tracing session with optional test framework filter support.

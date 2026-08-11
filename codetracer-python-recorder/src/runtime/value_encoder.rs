@@ -13,11 +13,11 @@
 
 use std::collections::HashSet;
 
-use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 use codetracer_trace_types::{TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::StreamingValueEncoder;
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 
 /// Maximum recursion depth for streaming encoding. Protects against
 /// pathological nesting that would overflow the encoder's compound stack

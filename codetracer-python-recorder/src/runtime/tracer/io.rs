@@ -4,9 +4,9 @@ use crate::runtime::io_capture::{
     IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
 };
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
-use pyo3::prelude::*;
 use codetracer_trace_types::{EventLogKind, Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
+use pyo3::prelude::*;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
@@ -63,11 +63,7 @@ impl IoCoordinator {
     }
 
     /// Drain remaining chunks and uninstall the capture pipeline.
-    pub(crate) fn teardown(
-        &mut self,
-        py: Python<'_>,
-        writer: &mut dyn TraceWriter,
-    ) -> bool {
+    pub(crate) fn teardown(&mut self, py: Python<'_>, writer: &mut dyn TraceWriter) -> bool {
         let Some(mut pipeline) = self.pipeline.take() else {
             return false;
         };
@@ -104,11 +100,7 @@ impl IoCoordinator {
         self.snapshots.record(thread_id, path_id, line, frame_id);
     }
 
-    fn drain_chunks(
-        &self,
-        pipeline: &IoCapturePipeline,
-        writer: &mut dyn TraceWriter,
-    ) -> bool {
+    fn drain_chunks(&self, pipeline: &IoCapturePipeline, writer: &mut dyn TraceWriter) -> bool {
         let mut recorded = false;
         for chunk in pipeline.drain_chunks() {
             recorded |= self.record_chunk(writer, chunk);

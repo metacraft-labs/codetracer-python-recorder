@@ -434,9 +434,7 @@ fn run_black(content: &str) -> BlackOutcome {
     let formatted = match String::from_utf8(output.stdout) {
         Ok(s) => s,
         Err(err) => {
-            return BlackOutcome::Error(format!(
-                "black stdout was not valid UTF-8: {err}"
-            ));
+            return BlackOutcome::Error(format!("black stdout was not valid UTF-8: {err}"));
         }
     };
 
@@ -496,8 +494,7 @@ pub fn generate_inverse_sourcemap(
     // mapping — the formatter preserves statement order, so a later
     // formatted line can never legitimately point to an earlier
     // original line.
-    let mut segments: Vec<Vec<(i64, i64, i64, i64)>> =
-        Vec::with_capacity(formatted_lines.len());
+    let mut segments: Vec<Vec<(i64, i64, i64, i64)>> = Vec::with_capacity(formatted_lines.len());
     let mut orig_cursor: usize = 0;
 
     for line in &formatted_lines {
@@ -873,8 +870,7 @@ mod tests {
 
     #[test]
     fn generate_inverse_sourcemap_emits_valid_v3() {
-        let original =
-            "alpha_var=1; beta_var=2; gamma_var=alpha_var+beta_var";
+        let original = "alpha_var=1; beta_var=2; gamma_var=alpha_var+beta_var";
         let formatted = [
             "alpha_var = 1",
             "beta_var = 2",
@@ -899,12 +895,7 @@ mod tests {
     #[test]
     fn generate_inverse_sourcemap_segments_match_anchorable_lines() {
         let original = "alpha_name=1; beta_name=2; gamma_name=3";
-        let formatted = [
-            "alpha_name = 1",
-            "beta_name = 2",
-            "gamma_name = 3",
-        ]
-        .join("\n");
+        let formatted = ["alpha_name = 1", "beta_name = 2", "gamma_name = 3"].join("\n");
         let map = generate_inverse_sourcemap(original, &formatted, "lib.py");
         let mappings = map["mappings"].as_str().expect("mappings must be string");
         // 3 formatted lines, each with a unique identifier anchor: 3
@@ -976,7 +967,7 @@ mod tests {
     fn try_autoformat_skips_when_sibling_map_exists() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let source = tmp.path().join("lib.min.py");
-        std::fs::write(&source, "x" .repeat(600)).expect("write source");
+        std::fs::write(&source, "x".repeat(600)).expect("write source");
         let sibling_map = tmp.path().join("lib.min.py.map");
         std::fs::write(&sibling_map, "{\"version\": 3}").expect("write map");
 

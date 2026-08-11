@@ -143,7 +143,10 @@ mod tests {
             assert!(!events.is_empty());
             assert_eq!(events[0].stream, IoStream::Stdout);
             assert_eq!(events[0].operation, IoOperation::Write);
-            assert_eq!(std::str::from_utf8(&events[0].payload).expect("utf8 payload"), "hello");
+            assert_eq!(
+                std::str::from_utf8(&events[0].payload).expect("utf8 payload"),
+                "hello"
+            );
         });
     }
 
@@ -161,7 +164,10 @@ mod tests {
             assert!(!events.is_empty());
             assert_eq!(events[0].stream, IoStream::Stderr);
             assert_eq!(events[0].operation, IoOperation::Write);
-            assert_eq!(std::str::from_utf8(&events[0].payload).expect("utf8 payload"), "oops");
+            assert_eq!(
+                std::str::from_utf8(&events[0].payload).expect("utf8 payload"),
+                "oops"
+            );
         });
     }
 
@@ -180,7 +186,10 @@ mod tests {
             let latest = events.last().expect("at least one event");
             assert_eq!(latest.stream, IoStream::Stdin);
             assert_eq!(latest.operation, IoOperation::ReadLine);
-            assert_eq!(std::str::from_utf8(&latest.payload).expect("utf8 payload"), "line1\n");
+            assert_eq!(
+                std::str::from_utf8(&latest.payload).expect("utf8 payload"),
+                "line1\n"
+            );
         });
     }
 

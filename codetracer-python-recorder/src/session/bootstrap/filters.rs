@@ -59,7 +59,10 @@ pub fn load_trace_filter_with_framework(
             }
             _ => {
                 // Unknown framework - log warning but continue
-                log::warn!("Unknown test framework '{}', no builtin filter applied", framework);
+                log::warn!(
+                    "Unknown test framework '{}', no builtin filter applied",
+                    framework
+                );
             }
         }
     }
@@ -203,13 +206,10 @@ pub mod tests {
         let root = temp.path();
         let script = write_app(root);
 
-        let engine = load_trace_filter_with_framework(
-            None,
-            script.to_str().expect("utf8"),
-            Some("pytest"),
-        )
-        .expect("load")
-        .expect("engine");
+        let engine =
+            load_trace_filter_with_framework(None, script.to_str().expect("utf8"), Some("pytest"))
+                .expect("load")
+                .expect("engine");
 
         let paths: Vec<PathBuf> = engine
             .summary()
@@ -253,13 +253,9 @@ pub mod tests {
         let root = temp.path();
         let script = write_app(root);
 
-        let engine = load_trace_filter_with_framework(
-            None,
-            script.to_str().expect("utf8"),
-            None,
-        )
-        .expect("load")
-        .expect("engine");
+        let engine = load_trace_filter_with_framework(None, script.to_str().expect("utf8"), None)
+            .expect("load")
+            .expect("engine");
 
         let paths: Vec<PathBuf> = engine
             .summary()

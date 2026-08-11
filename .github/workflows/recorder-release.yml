@@ -5,6 +5,18 @@ on:
     tags:
       - recorder-v*
   workflow_dispatch:
+    inputs:
+      publish_testpypi:
+        description: >-
+          Also publish the built artefacts to TestPyPI. Default is a
+          build-only validation run (verify + build all matrix legs +
+          upload artefacts) that publishes NOTHING — use it to confirm a
+          workflow or runner change (e.g. the native eph-linux-arm64
+          wheel build) still produces wheels without risking a release.
+          PyPI (production) is never published from a manual dispatch;
+          only a `recorder-v*` tag push does that.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,61 +35,153 @@ jobs:
     runs-on: eph-linux-x64
     steps:
       - uses: actions/checkout@v4
+
+      # The recorder crate path-depends on the codetracer-trace-format
+      # sibling (codetracer_ctfs / codetracer_trace_* at ../../) and the
+      # codetracer-trace-format-nim FFI source. Clone them next to the
+      # checkout, exactly like ci.yml, so `just test` / maturin can build.
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
+      - name: Clone codetracer-trace-format-nim (Nim FFI source)
+        run: |
+          PINS=".github/sibling-pins"
+          TFN_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TFN_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          if [ "${TFN_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
+          fi
+
       - name: Setup Nix
         uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
           attic-token: ${{ secrets.ATTIC_TOKEN }}
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
-          substituters: ${{ vars.SUBSTITUTERS }}
-          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare dev environment (Python 3.13)
-        run: nix develop ./nix --command bash -lc 'just venv 3.13 dev'
+        run: nix develop --command bash -c 'just venv 3.13 dev'
+      - name: Build ct-print binary
+        # The integration tests shell out to
+        # ../codetracer-trace-format-nim/ct-print to decode CTFS bundles
+        # back into the legacy JSON shape (see ci.yml). Compile it from
+        # codetracer_ct_print.nim into the expected path.
+        run: |
+          nix develop --command bash -c '
+            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+            nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
+          '
       - name: Run test suite
-        run: nix develop ./nix --command bash -lc 'just test'
+        run: nix develop --command bash -c 'just test'
       - name: Check recorder version parity
-        run: nix develop ./nix --command bash -lc 'python3 scripts/check_recorder_version.py'
+        run: nix develop --command bash -c 'python3 scripts/check_recorder_version.py'
 
   build:
     name: Build Artefacts (${{ matrix.name }})
     needs: verify
+    # Real releases (tag pushes) gate the build on a green test suite. A
+    # manual build-only validation dispatch, however, exercises the build
+    # even when verify fails — you are validating that the wheels BUILD
+    # (e.g. after a runner/packaging change), not the test outcome.
+    # Publishing stays gated on tags / explicit opt-in regardless (see the
+    # publish-* jobs), so a dispatch never releases anything.
+    if: always() && (needs.verify.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: linux-x86_64
-            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS eph-linux-x64
-            os: ubuntu-latest
+            os: eph-linux-x64
             build-sdist: true
             publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: linux-aarch64
-            # HOLD (CIP-5 Wave 4): STEP-RISKY — DIY maturin/apt-capnproto toolchain not portable to NixOS eph-linux-x64
-            os: ubuntu-latest
+            os: eph-linux-arm64
             build-sdist: false
-            publish-args: --release --interpreter python3.12 python3.13 --target aarch64-unknown-linux-gnu --out dist
+            publish-args: --release --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
-          - name: macos-x86_64
-            os: eph-macos-arm64
-            build-sdist: false
-            publish-args: --release --out dist --interpreter python3.12 python3.13
-            target: x86_64
           - name: macos-aarch64
             os: eph-macos-arm64
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: aarch64
           - name: windows-amd64
-            os: [eph-win-x64, eph-win-arm64]
+            os: eph-win-x64
             build-sdist: false
             publish-args: --release --out dist
             target: ""
     steps:
       - uses: actions/checkout@v4
+
+      # The recorder crate path-depends on the codetracer-trace-format
+      # sibling (codetracer_ctfs / codetracer_trace_* at ../../) and the
+      # codetracer-trace-format-nim FFI source. Clone them next to the
+      # checkout so maturin can resolve the path dependencies.
+      - name: Clone codetracer-trace-format (Cargo path dependency)
+        if: startsWith(matrix.name, 'linux-') || startsWith(matrix.name, 'macos-') || matrix.name == 'windows-amd64'
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TF_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TF_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format"
+          if [ "${TF_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" fetch origin "${TF_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}" 2>/dev/null || true
+          fi
+
+      - name: Clone codetracer-trace-format-nim (Nim FFI source)
+        if: startsWith(matrix.name, 'linux-') || startsWith(matrix.name, 'macos-') || matrix.name == 'windows-amd64'
+        shell: bash
+        run: |
+          PINS=".github/sibling-pins"
+          TFN_REF="main"
+          if [ -f "${PINS}" ]; then
+            PIN="$(grep '^codetracer-trace-format-nim ' "${PINS}" | cut -d' ' -f2)" || true
+            [ -n "${PIN}" ] && TFN_REF="${PIN}"
+          fi
+          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          if [ "${TFN_REF}" != "main" ]; then
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" fetch origin "${TFN_REF}" 2>/dev/null || true
+            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" checkout "${TFN_REF}" 2>/dev/null || true
+          fi
+
       - name: Check recorder version parity
         shell: bash
         run: |
@@ -121,30 +225,33 @@ jobs:
             exit 1
           fi
 
-      - name: Build artefacts (Linux targets)
+      - name: Setup Nix
         if: startsWith(matrix.name, 'linux-')
-        uses: PyO3/maturin-action@v1
+        uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
-          command: build
-          args: ${{ matrix.publish-args }}
-          manylinux: ${{ matrix.manylinux }}
-          sccache: true
-          before-script-linux: |
-            set -eux
-            if command -v yum >/dev/null 2>&1; then
-              yum install -y capnproto
-            elif command -v dnf >/dev/null 2>&1; then
-              dnf install -y capnproto
-            elif command -v microdnf >/dev/null 2>&1; then
-              microdnf install -y capnproto
-            elif command -v apt-get >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y capnproto
-            else
-              echo "Unable to install capnproto: no supported package manager found" >&2
-              exit 1
-            fi
-          working-directory: codetracer-python-recorder
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          nix-github-token: ${{ secrets.GITHUB_TOKEN }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
+
+      - name: Build artefacts (Linux targets)
+        # The eph-linux-* self-hosted runners are NixOS VMs without a Docker
+        # daemon, so maturin's manylinux container build cannot run. Build in
+        # the repo's nix dev shell instead — it provides maturin, the Rust
+        # toolchain and capnproto, and the trace-format siblings are cloned
+        # next to the checkout. NOTE: this produces host-glibc (nixpkgs) wheels
+        # tagged linux_<arch>, NOT manylinux — fine for validating that the
+        # native (incl. eph-linux-arm64) build compiles, but PyPI needs a
+        # manylinux strategy (Docker on the runners, or auditwheel) before this
+        # feeds a real publish. See PR description.
+        if: startsWith(matrix.name, 'linux-')
+        run: |
+          nix develop --command bash -c '
+            cd codetracer-python-recorder
+            maturin build ${{ matrix.publish-args }}
+          '
 
       - name: Install Python 3.12 (macOS)
         if: startsWith(matrix.name, 'macos-')
@@ -223,8 +330,12 @@ jobs:
   publish-testpypi:
     name: Publish to TestPyPI
     needs: build
-    # EXEMPTION (CIP-5): registry-publish — needs GitHub-hosted PyPI publish action
-    runs-on: ubuntu-latest
+    # Publish on a real tag push, or on a manual dispatch only when the
+    # operator explicitly opts in. A plain workflow_dispatch is a build-only
+    # validation run (verify + build + upload artefacts) that publishes
+    # nothing.
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_testpypi)
+    runs-on: eph-linux-x64
     environment:
       name: testpypi
     steps:
@@ -262,8 +373,7 @@ jobs:
     name: Publish to PyPI
     needs: publish-testpypi
     if: startsWith(github.ref, 'refs/tags/')
-    # EXEMPTION (CIP-5): registry-publish — needs GitHub-hosted PyPI publish action
-    runs-on: ubuntu-latest
+    runs-on: eph-linux-x64
     environment:
       name: pypi-production
       url: https://pypi.org/project/codetracer-python-recorder/
