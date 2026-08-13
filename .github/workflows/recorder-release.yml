@@ -239,18 +239,27 @@ jobs:
       - name: Build artefacts (Linux targets)
         # The eph-linux-* self-hosted runners are NixOS VMs without a Docker
         # daemon, so maturin's manylinux container build cannot run. Build in
-        # the repo's nix dev shell instead — it provides maturin, the Rust
-        # toolchain and capnproto, and the trace-format siblings are cloned
-        # next to the checkout. NOTE: this produces host-glibc (nixpkgs) wheels
-        # tagged linux_<arch>, NOT manylinux — fine for validating that the
-        # native (incl. eph-linux-arm64) build compiles, but PyPI needs a
-        # manylinux strategy (Docker on the runners, or auditwheel) before this
-        # feeds a real publish. See PR description.
+        # the repo's nix dev shell instead (maturin + Rust + capnproto + the
+        # sibling path deps), and make the wheels portable across distros with
+        # `maturin --zig`: zig links the extension against an old glibc so the
+        # wheel earns a real manylinux tag WITHOUT Docker
+        # (https://www.maturin.rs/distribution.html). manylinux2014 = glibc
+        # 2.17 (the floor Rust >=1.64 needs). zstd is statically built from
+        # source and capnp is pure-Rust, so glibc is the only runtime dep;
+        # maturin bundles anything else auditwheel-style. zig + cargo-zigbuild
+        # come from nixpkgs.
+        #
+        # `unset _PYTHON_HOST_PLATFORM` is essential: nixpkgs' python exports
+        # it (=linux-<arch>), and maturin honors it, overriding the tag to a
+        # bare `linux_<arch>` instead of running its manylinux compliance check.
+        # Unsetting it lets maturin compute the real manylinux_2_17 tag.
         if: startsWith(matrix.name, 'linux-')
         run: |
           nix develop --command bash -c '
+            unset _PYTHON_HOST_PLATFORM
             cd codetracer-python-recorder
-            maturin build ${{ matrix.publish-args }}
+            nix shell nixpkgs#zig nixpkgs#cargo-zigbuild --command \
+              maturin build ${{ matrix.publish-args }} --zig --compatibility manylinux2014
           '
 
       - name: Install Python 3.12 (macOS)
