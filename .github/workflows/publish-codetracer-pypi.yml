@@ -1,0 +1,236 @@
+name: publish-codetracer-pypi
+
+# Builds and publishes the `codetracer` PyPI package under the CodeTracer
+# Launcher spec's *bundling* model (codetracer-specs CodeTracer-Launcher.md
+# §5.1–5.2): the tiny Nim launcher binary bundled together WITH this repo's
+# Python recorder. `pip install codetracer` therefore yields launcher +
+# python-recorder in a single wheel — under bundling there is NO separate
+# recorder package fetched at install time.
+#
+# The build reproduces launcher-integration.yml in this repo exactly
+# (clone codetracer-launcher, build the launcher with nim + zig from
+# nixpkgs, run the launcher's packaging/pypi build with CT_RECORDER_SRC
+# pointed at this repo's recorder source) and then, unlike that smoke-test,
+# PUBLISHES the resulting wheels. The publish/gating is modeled on
+# codetracer-launcher's publish-pypi.yml.
+#
+# Toolchains come from nixpkgs on the self-hosted NixOS runner (per policy;
+# same choice as launcher-integration.yml): the launcher's build.sh
+# cross-compiles all five targets with `zig cc`, and the wheel build +
+# checks run in a venv created from nixpkgs' python. `nixpkgs#llvm` is added
+# so `llvm-strip` is available for the darwin/windows targets — without it
+# build.sh's 50 KB size gate can reject an unstripped Mach-O/PE binary.
+#
+# Gating (modeled on codetracer-launcher's publish-pypi.yml):
+#   * push of a v* tag        -> build + TestPyPI + PyPI
+#   * workflow_dispatch       -> build + TestPyPI; PyPI only when
+#                                dry_run == false
+#
+# Required secrets:
+#   CI_TOKEN_PROVIDER_APP_ID / CI_TOKEN_PROVIDER_PRIVATE_KEY
+#       org GitHub App used to clone the (pre-launch private)
+#       codetracer-launcher repo — the same secrets launcher-integration.yml
+#       already relies on.
+#   TEST_PYPI_TOKEN   PyPI API token with upload rights on the `codetracer`
+#                     project on test.pypi.org. Optional: the TestPyPI step
+#                     is skipped (not failed) when it is unset, so the build
+#                     + twine-check still act as a dry run.
+#   PYPI_TOKEN        PyPI API token with upload rights on the `codetracer`
+#                     project on pypi.org. REQUIRED for a real release; the
+#                     publish-pypi job fails loudly when it is unset.
+#
+# NOTE: the `codetracer` PyPI project is DISTINCT from this repo's own
+# `codetracer-python-recorder` project (published by recorder-release.yml
+# via OIDC trusted publishing). Publishing here needs the `codetracer`
+# project's own token / trusted-publisher wired into THIS repo's secrets.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'codetracer semver to release (defaults to the v* tag, else 0.1.0)'
+        required: false
+        default: ''
+      launcher_ref:
+        description: 'codetracer-launcher ref to build the launcher from'
+        required: false
+        default: main
+      dry_run:
+        description: 'Build + TestPyPI only; skip the real PyPI upload'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheels:
+    # Self-hosted per policy. One Linux runner builds every platform's
+    # wheel: build.sh cross-compiles the launcher for all five targets
+    # with `zig cc` (same set the launcher's size-gate matrix covers).
+    runs-on: eph-linux-x64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-musl-x86_64
+            bin:    launcher
+          - target: linux-musl-aarch64
+            bin:    launcher-linux-aarch64
+          - target: darwin-x86_64
+            bin:    launcher-darwin-x86_64
+          - target: darwin-aarch64
+            bin:    launcher-darwin-aarch64
+          - target: windows-x86_64
+            bin:    launcher.exe
+    name: wheel / ${{ matrix.target }}
+    steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - uses: actions/checkout@v4
+        with:
+          path: codetracer-python-recorder
+
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-launcher
+          ref: ${{ inputs.launcher_ref || 'main' }}
+          path: codetracer-launcher
+          gh-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            v="${{ inputs.version }}"
+          else
+            v="0.1.0"
+          fi
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "Resolved codetracer version: ${v}"
+
+      - name: Build launcher (${{ matrix.target }})
+        # build.sh cross-compiles via `zig cc`, so nim + zig from nixpkgs
+        # replace setup-nim / apt musl-tools; llvm provides `llvm-strip`
+        # for the Mach-O / PE strip pass that keeps binaries under the cap.
+        working-directory: codetracer-launcher
+        run: nix shell nixpkgs#nim nixpkgs#zig nixpkgs#llvm -c bash ./build.sh --target ${{ matrix.target }} --out ${{ matrix.bin }}
+
+      - name: Build bundled wheel
+        working-directory: codetracer-launcher/packaging/pypi
+        env:
+          CT_LAUNCHER_VERSION: ${{ steps.ver.outputs.version }}
+          CT_LAUNCHER_BIN: ${{ github.workspace }}/codetracer-launcher/out/${{ matrix.bin }}
+          CT_LAUNCHER_TARGET: ${{ matrix.target }}
+          # This repo's Python recorder source — vendored under
+          # codetracer/recorder/ in the wheel (bundling model, spec §5.1).
+          CT_RECORDER_SRC: ${{ github.workspace }}/codetracer-python-recorder/codetracer-python-recorder/codetracer_python_recorder
+        # A venv sidesteps NixOS' externally-managed (PEP 668) python; the
+        # --no-isolation build then uses the venv's build/setuptools/wheel.
+        run: |
+          nix shell nixpkgs#python312 -c bash -c '
+            python -m venv /tmp/build-venv
+            /tmp/build-venv/bin/pip install --upgrade pip build virtualenv setuptools wheel twine
+            /tmp/build-venv/bin/python -m build --wheel --no-isolation -o dist
+            /tmp/build-venv/bin/python -m twine check dist/*.whl
+          '
+
+      - name: Verify wheel bundles launcher + recorder
+        working-directory: codetracer-launcher/packaging/pypi
+        run: |
+          nix shell nixpkgs#python312 -c python - <<'PY'
+          import pathlib, zipfile
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as zf:
+              names = zf.namelist()
+          assert any(n.startswith("codetracer/bin/ct") for n in names), names
+          assert any(n.startswith("codetracer/recorder/") for n in names), (
+              "bundling model requires the recorder vendored under "
+              "codetracer/recorder/; got: " + ", ".join(sorted(names)[:20])
+          )
+          print("OK:", wheels[0].name)
+          PY
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: codetracer-launcher/packaging/pypi/dist/*.whl
+          if-no-files-found: error
+
+  publish-testpypi:
+    # The TestPyPI upload is the "dry run against a real index": it runs on
+    # every trigger. When TEST_PYPI_TOKEN is unset it skips gracefully, so
+    # the build + twine check above still stand in as a pure dry run.
+    needs: build-wheels
+    runs-on: eph-linux-x64
+    name: TestPyPI (dry-run)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Aggregate wheels
+        run: |
+          mkdir -p dist
+          find artifacts -name '*.whl' -print -exec cp {} dist/ \;
+          ls -la dist/
+      - name: Upload to TestPyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_TOKEN }}
+        run: |
+          if [[ -z "$TWINE_PASSWORD" ]]; then
+            echo "::notice::TEST_PYPI_TOKEN not set; skipping the TestPyPI dry-run upload (wheels were still built + twine-checked)."
+            exit 0
+          fi
+          nix shell nixpkgs#python312 -c bash -c '
+            python -m venv /tmp/twine-venv
+            /tmp/twine-venv/bin/pip install --upgrade pip twine
+            /tmp/twine-venv/bin/python -m twine upload --non-interactive \
+              --repository-url https://test.pypi.org/legacy/ --skip-existing dist/*.whl
+          '
+
+  publish-pypi:
+    needs: publish-testpypi
+    runs-on: eph-linux-x64
+    name: PyPI upload
+    # Guard rail: a v* tag always releases; a manual run releases only when
+    # the operator did not ask for a dry run.
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Aggregate wheels
+        run: |
+          mkdir -p dist
+          find artifacts -name '*.whl' -print -exec cp {} dist/ \;
+          ls -la dist/
+      - name: Upload to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [[ -z "$TWINE_PASSWORD" ]]; then
+            echo "::error::PYPI_TOKEN secret is not configured; cannot upload the codetracer package."
+            echo "Wire the codetracer PyPI project's token (or a trusted publisher) into this repo, or re-run with dry_run=true."
+            exit 1
+          fi
+          nix shell nixpkgs#python312 -c bash -c '
+            python -m venv /tmp/twine-venv
+            /tmp/twine-venv/bin/pip install --upgrade pip twine
+            /tmp/twine-venv/bin/python -m twine upload --non-interactive dist/*.whl
+          '
