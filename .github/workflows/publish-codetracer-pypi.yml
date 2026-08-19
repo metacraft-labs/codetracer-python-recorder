@@ -21,28 +21,24 @@ name: publish-codetracer-pypi
 # so `llvm-strip` is available for the darwin/windows targets — without it
 # build.sh's 50 KB size gate can reject an unstripped Mach-O/PE binary.
 #
-# Gating (modeled on codetracer-launcher's publish-pypi.yml):
-#   * push of a v* tag        -> build + TestPyPI + PyPI
-#   * workflow_dispatch       -> build + TestPyPI; PyPI only when
-#                                dry_run == false
+# Gating:
+#   * push of a v* tag   -> build (all targets) + PyPI upload
+#   * workflow_dispatch  -> build; PyPI only when dry_run == false
+# The wheel build runs `twine check` on every trigger — that is the dry run.
+# There is no TestPyPI upload (it would need a separate TestPyPI grant).
 #
-# Required secrets:
-#   CI_TOKEN_PROVIDER_APP_ID / CI_TOKEN_PROVIDER_PRIVATE_KEY
-#       org GitHub App used to clone the (pre-launch private)
-#       codetracer-launcher repo — the same secrets launcher-integration.yml
-#       already relies on.
-#   TEST_PYPI_TOKEN   PyPI API token with upload rights on the `codetracer`
-#                     project on test.pypi.org. Optional: the TestPyPI step
-#                     is skipped (not failed) when it is unset, so the build
-#                     + twine-check still act as a dry run.
-#   PYPI_TOKEN        PyPI API token with upload rights on the `codetracer`
-#                     project on pypi.org. REQUIRED for a real release; the
-#                     publish-pypi job fails loudly when it is unset.
-#
-# NOTE: the `codetracer` PyPI project is DISTINCT from this repo's own
-# `codetracer-python-recorder` project (published by recorder-release.yml
-# via OIDC trusted publishing). Publishing here needs the `codetracer`
-# project's own token / trusted-publisher wired into THIS repo's secrets.
+# Auth:
+#   CI_TOKEN_PROVIDER_APP_ID / CI_TOKEN_PROVIDER_PRIVATE_KEY — org GitHub App
+#       to clone the (pre-launch private) codetracer-launcher repo (same as
+#       launcher-integration.yml).
+#   PyPI upload uses OIDC *trusted publishing* — NO API token secret. The
+#       `codetracer` PyPI project is DISTINCT from this repo's own
+#       `codetracer-python-recorder` project, so it needs its OWN grant.
+#       Since `codetracer` did not exist on PyPI yet, that grant is a PENDING
+#       publisher registered on pypi.org: project `codetracer`, owner
+#       metacraft-labs, repo codetracer-python-recorder, workflow
+#       publish-codetracer-pypi.yml, environment `pypi`. The first tag publish
+#       claims + creates the project.
 
 on:
   push:
@@ -58,7 +54,7 @@ on:
         required: false
         default: main
       dry_run:
-        description: 'Build + TestPyPI only; skip the real PyPI upload'
+        description: 'Build only; skip the PyPI upload'
         required: false
         type: boolean
         default: false
@@ -170,46 +166,17 @@ jobs:
           path: codetracer-launcher/packaging/pypi/dist/*.whl
           if-no-files-found: error
 
-  publish-testpypi:
-    # The TestPyPI upload is the "dry run against a real index": it runs on
-    # every trigger. When TEST_PYPI_TOKEN is unset it skips gracefully, so
-    # the build + twine check above still stand in as a pure dry run.
+  publish-pypi:
     needs: build-wheels
     runs-on: eph-linux-x64
-    name: TestPyPI (dry-run)
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Aggregate wheels
-        run: |
-          mkdir -p dist
-          find artifacts -name '*.whl' -print -exec cp {} dist/ \;
-          ls -la dist/
-      - name: Upload to TestPyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_TOKEN }}
-        run: |
-          if [[ -z "$TWINE_PASSWORD" ]]; then
-            echo "::notice::TEST_PYPI_TOKEN not set; skipping the TestPyPI dry-run upload (wheels were still built + twine-checked)."
-            exit 0
-          fi
-          nix shell nixpkgs#python312 -c bash -c '
-            python -m venv /tmp/twine-venv
-            /tmp/twine-venv/bin/pip install --upgrade pip twine
-            /tmp/twine-venv/bin/python -m twine upload --non-interactive \
-              --repository-url https://test.pypi.org/legacy/ --skip-existing dist/*.whl
-          '
-
-  publish-pypi:
-    needs: publish-testpypi
-    runs-on: eph-linux-x64
-    name: PyPI upload
+    name: PyPI upload (OIDC trusted publisher)
     # Guard rail: a v* tag always releases; a manual run releases only when
     # the operator did not ask for a dry run.
     if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
     environment: pypi
+    permissions:
+      contents: read
+      id-token: write # mint a GitHub OIDC token to exchange for a PyPI upload token
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -219,18 +186,30 @@ jobs:
           mkdir -p dist
           find artifacts -name '*.whl' -print -exec cp {} dist/ \;
           ls -la dist/
-      - name: Upload to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      - name: Publish to PyPI via OIDC trusted publishing
+        # No API token: mint a short-lived PyPI token from the GitHub OIDC
+        # token. Requires the (pending) trusted publisher configured on the
+        # `codetracer` PyPI project — see the header. Docker-free: python +
+        # curl + jq + twine all come from nixpkgs, and pypa's composite
+        # uploader is avoided so nothing needs setup-python on NixOS.
         run: |
-          if [[ -z "$TWINE_PASSWORD" ]]; then
-            echo "::error::PYPI_TOKEN secret is not configured; cannot upload the codetracer package."
-            echo "Wire the codetracer PyPI project's token (or a trusted publisher) into this repo, or re-run with dry_run=true."
-            exit 1
-          fi
-          nix shell nixpkgs#python312 -c bash -c '
+          nix shell nixpkgs#python312 nixpkgs#curl nixpkgs#jq -c bash -c '
+            set -euo pipefail
+            oidc=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pypi" | jq -r ".value // empty")
+            if [ -z "$oidc" ]; then
+              echo "::error::could not obtain a GitHub OIDC token (is id-token: write set?)"; exit 1
+            fi
+            mint=$(curl -sS -X POST https://pypi.org/_/oidc/mint-token -d "{\"token\": \"${oidc}\"}")
+            token=$(printf "%s" "$mint" | jq -r ".token // empty")
+            if [ -z "$token" ]; then
+              echo "::error::PyPI did not mint an upload token — is the (pending) trusted publisher configured for the codetracer project?"
+              printf "%s\n" "$mint"
+              exit 1
+            fi
+            echo "::add-mask::$token"
             python -m venv /tmp/twine-venv
-            /tmp/twine-venv/bin/pip install --upgrade pip twine
-            /tmp/twine-venv/bin/python -m twine upload --non-interactive dist/*.whl
+            /tmp/twine-venv/bin/pip install --quiet --upgrade pip twine
+            TWINE_USERNAME=__token__ TWINE_PASSWORD="$token" \
+              /tmp/twine-venv/bin/twine upload --non-interactive dist/*.whl
           '
