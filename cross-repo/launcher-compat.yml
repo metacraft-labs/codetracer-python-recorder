@@ -1,0 +1,225 @@
+# =============================================================================
+# Launcher <-> recorder compatibility contract for codetracer-python-recorder.
+#
+# WHAT THIS FILE IS
+#   The checked-in contract between this recorder and the `ct` launcher, read
+#   at test time by the shared end-to-end driver
+#   `codetracer/ci/test/launcher-recorder-e2e.sh`
+#   (design: codetracer-specs/Testing/Launcher-Recorder-Compatibility-Tests.md
+#   §5.6, milestone LRC-2).
+#
+#   The driver builds the real launcher, the real desktop core and the real
+#   recorder, stages the real `codetracer-desktop` component bundle, and then
+#   runs each scenario below through the LAUNCHER binary, validating the
+#   produced trace with `ct-print` from codetracer-trace-format-nim.
+#
+#   Everything the driver asserts comes from this file.  That is the point: if
+#   this recorder changes its binary name, its output layout, the extensions it
+#   must be routed for, or the shape of the traces it produces, this file has
+#   to change in the SAME commit -- and the launcher/desktop side finds out on
+#   its next cross-repo run instead of silently diverging.
+#
+# WHO ELSE USES THIS SCHEMA
+#   Milestone LRC-4 adds the same file to codetracer-ruby-recorder,
+#   codetracer-js-recorder, codetracer-native-recorder and
+#   codetracer-beam-recorder.  Keep additions generic: anything that is really
+#   python-specific belongs under a scenario, not in the schema.
+#
+# -----------------------------------------------------------------------------
+# SCHEMA (launcher-compat/v1)
+# -----------------------------------------------------------------------------
+# The driver parses a deliberately small, strict subset of YAML with awk, so it
+# needs no python3 on the runner (see
+# codetracer-specs/Testing/Cross-Repo-CI-Integration.md, "NixOS Runner
+# Gotchas").  The subset is:
+#
+#   * two-space indentation, no tabs;
+#   * `key: value` scalars; values may be bare or double-quoted;
+#   * `key:` followed by an indented block (mapping) or by `- item` lines
+#     (sequence of scalars);
+#   * `- key: value` starts a mapping item of a sequence;
+#   * a line whose first non-space character is `#` is a comment.  INLINE
+#     comments are NOT supported -- `foo: bar # baz` sets foo to `bar # baz`.
+#
+# Quoting strips one surrounding pair of quotes and NOTHING ELSE: there is no
+# escape processing, so `"^ct [0-9]+\.[0-9]+"` reaches the driver with the
+# single backslash intact.  Write regexes and paths exactly as the driver
+# should see them.
+#
+# Top-level keys
+#   schema            Schema id.  The driver refuses anything but
+#                     `launcher-compat/v1`, so a future incompatible revision
+#                     fails loudly instead of being half-understood.
+#   recorder.repo     Sibling repo directory name, as checked out next to
+#                     `codetracer`.  Must match the driver's <recorder-repo>
+#                     argument.
+#   recorder.lang     The `ct` language key this recorder serves.  Must match
+#                     the driver's <lang> argument.
+#   recorder.binary   The executable name the desktop core looks up.  For
+#                     python this is `findTool("codetracer-python-recorder")`
+#                     in codetracer/src/common/paths.nim -- i.e. a plain PATH
+#                     search, which is what `discovery` below has to satisfy.
+#   recorder.version-prefix
+#                     The exact prefix `<binary> --version` must print, per
+#                     Recorder-CLI-Conventions.md §7.
+#   recorder.default-out-dir
+#                     The directory, relative to the recorder's cwd, this
+#                     recorder writes to when it is NOT told where to write.
+#                     Required: the driver proves `--out-dir` was passed by
+#                     showing this directory stayed empty, so it has to know
+#                     its name.  It is per-recorder on purpose — the python
+#                     recorder's `resolve_out_dir` falls back to `./trace-out`,
+#                     while Recorder-CLI-Conventions.md §3 documents
+#                     `./ct-traces/` as the convention; the two do not agree
+#                     today, and hardcoding either in the driver would make the
+#                     check silently vacuous for the other recorders.
+#
+#   build.sibling-key Argument passed to `codetracer/scripts/build-siblings.sh
+#                     --only <key>`; that script owns the per-repo build
+#                     command and runs it in the recorder repo's own pinned dev
+#                     shell.
+#   build.artifact    Path, relative to the recorder repo root, of the file
+#                     that build must produce.  The driver hard-fails if it is
+#                     missing after the build -- never skips.
+#
+#   discovery.method  How the driver makes the freshly built recorder visible
+#                     to the desktop core.  `path-prepend` = prepend
+#                     `discovery.path-prepend` (relative to the recorder repo)
+#                     to PATH.  `detect-siblings` = the repo is already handled
+#                     by codetracer/scripts/detect-siblings.sh and needs nothing
+#                     extra (the ruby/js/beam/native edges will use that).
+#   discovery.path-prepend
+#                     Directory to prepend for `method: path-prepend`.
+#
+# Scenario keys (`scenarios` is a sequence of mappings)
+#   id                Unique, stable, human-readable.  Reported in the
+#                     driver's per-scenario output and in its final count.
+#   kind              One of:
+#                       record            happy path: route, record, decode
+#                       negative-routing  the launcher must REFUSE to route
+#                       launcher-version  `ct --version` shape check
+#                       isolation         routing must break when the staged
+#                                         component root is emptied
+#   command           The `ct` subcommand under test (e.g. `record`).
+#   extension         The file extension the launcher must route on.  Stated
+#                     separately from the sample so the two can be checked
+#                     against each other: the driver asserts the sample really
+#                     has this extension, and for a `negative-routing` scenario
+#                     it additionally asserts the extension is well-formed (not
+#                     a dot-less argument -- a different, known routing gap) and
+#                     that `codetracer/resources/codetracer-desktop-capabilities`
+#                     genuinely does not declare it, so a negative case cannot
+#                     quietly stop being negative.
+#   sample            Path to the sample program, relative to the recorder
+#                     repo root.
+#   recorder-flag     Sequence: flags the desktop core must pass to the
+#                     recorder for this scenario (Recorder-CLI-Conventions.md
+#                     §3).  Each is asserted by its OBSERVABLE EFFECT, not by
+#                     scraping an argv the trace does not carry -- for
+#                     `--out-dir` that is "the trace landed in the directory
+#                     `ct -o` named, and no `./trace-out` default-location
+#                     fallback appeared in the recorder's cwd".  The driver's
+#                     table of checks is closed: a flag it has no check for is
+#                     a FAILURE, so a new recorder cannot earn a green
+#                     assertion by naming a flag nobody verifies.
+#   expect.exit-code  `0`, or `nonzero`.
+#   expect.trace-glob Shell glob, relative to the trace directory, that must
+#                     match at least one produced artifact.
+#   expect.min-events Minimum number of decoded events.  Guards against the
+#                     "trace exists but has 0 events" vacuous pass (§5.5).
+#   expect.function   Sequence: function names that must appear in the decoded
+#                     trace.
+#   expect.stdout-contains
+#                     Sequence: substrings that must appear in the recorded
+#                     program's stdout AS DECODED FROM THE TRACE (not from the
+#                     driver's own console).  `${CODETRACER_COMPONENT_DIR}` is
+#                     expanded by the driver to the staged component bundle
+#                     directory; the launcher is the only thing on this path
+#                     that exports that variable, so matching it proves the run
+#                     went through the launcher.
+#   expect.stderr-contains
+#                     Sequence: substrings the driver must find on stderr.
+#                     Used by the negative scenarios.
+#   expect.stdout-matches
+#                     A POSIX extended regex the command's stdout must match.
+#
+# REQUIRED KEYS FOR A `record` SCENARIO (enforced, not advisory)
+#   Because the driver reads every expectation from here, an omitted key would
+#   silently switch that assertion off and the run would still report PASS.
+#   `validate_fixture()` in the driver therefore refuses to start unless every
+#   `record` scenario declares:
+#     * `expect.trace-glob`;
+#     * `expect.min-events`, as a plain integer (remember: inline comments are
+#       NOT stripped, so `min-events: 20 # floor` is the value `20 # floor`);
+#     * at least one `expect.function`;
+#     * at least one `expect.stdout-contains`, AND one of them must name
+#       `${CODETRACER_COMPONENT_DIR}` — that assertion is the gate's only proof
+#       that the recording travelled through the LAUNCHER rather than through
+#       the desktop core directly, so no recorder may drop it;
+#     * at least one `recorder-flag` (design §5.6);
+#     * `recorder.default-out-dir` at the top level.
+# =============================================================================
+
+schema: launcher-compat/v1
+
+recorder:
+  repo: codetracer-python-recorder
+  lang: python
+  binary: codetracer-python-recorder
+  version-prefix: "codetracer-python-recorder "
+  default-out-dir: trace-out
+
+build:
+  sibling-key: codetracer-python-recorder
+  artifact: .venv/bin/codetracer-python-recorder
+
+discovery:
+  method: path-prepend
+  path-prepend: .venv/bin
+
+scenarios:
+  - id: record-python-happy-path
+    kind: record
+    command: record
+    extension: .py
+    sample: cross-repo/samples/launcher_compat_sample.py
+    recorder-flag:
+      - --out-dir
+    expect:
+      exit-code: 0
+      trace-glob: "*.ct"
+      min-events: 20
+      function:
+        - accumulate
+        - describe_launcher_route
+        - main
+      stdout-contains:
+        - "launcher-recorder-e2e: total=15"
+        - "launcher-recorder-e2e: component-dir=${CODETRACER_COMPONENT_DIR}"
+
+  - id: negative-unhandled-extension
+    kind: negative-routing
+    command: record
+    extension: .rs
+    sample: cross-repo/samples/launcher_compat_unhandled.rs
+    expect:
+      exit-code: nonzero
+      stderr-contains:
+        - "no component handles"
+        - "record"
+
+  - id: launcher-version-shape
+    kind: launcher-version
+    expect:
+      exit-code: 0
+      stdout-matches: "^ct [0-9]+\.[0-9]+"
+
+  - id: empty-component-root-breaks-routing
+    kind: isolation
+    command: record
+    extension: .py
+    sample: cross-repo/samples/launcher_compat_sample.py
+    expect:
+      exit-code: nonzero
+      stderr-contains:
+        - "no component handles"
