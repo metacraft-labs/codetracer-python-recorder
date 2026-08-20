@@ -1,0 +1,63 @@
+# =============================================================================
+# Recorder -> launcher end-to-end compatibility gate (THE RECORDER EDGE).
+#
+# THIN CALLER.  All of the work -- building the real launcher, the real
+# codetracer desktop core and THIS recorder, staging the codetracer-desktop
+# component bundle, running `ct record` through the LAUNCHER binary and decoding
+# the produced trace with `ct-print` -- lives in one reusable workflow so the
+# assertions can never drift between the three trigger directions:
+#
+#   metacraft-labs/codetracer/.github/workflows/launcher-recorder-e2e.yml
+#
+# Design: codetracer-specs/Testing/Launcher-Recorder-Compatibility-Tests.md
+#         section 6 "CI wiring: three trigger edges, one reusable workflow".
+# Milestone: LRC-3.
+#
+# WHAT THIS EDGE PINS.  This repository is the one under test, so it is pinned
+# to `github.sha`; the launcher and the desktop core are taken at their mainline
+# branch.  That is the design's provisional v1 "branch-ref" pinning; milestone
+# LRC-6 decides whether to move every sibling onto the reproducible
+# workspace-lock SHA instead.
+#
+# WHAT IT ASSERTS ABOUT THIS REPO.  Everything comes from this repo's own
+# checked-in contract fixture, `cross-repo/launcher-compat.yml`: the sample
+# programs, the extensions the launcher must route, the recorder flags the
+# desktop core must pass, and the expected decoded-trace shape.  If this
+# recorder changes its console-script name, its output layout, its `--version`
+# banner or the extensions it serves, that file has to change in the SAME
+# commit -- the driver refuses to run against a fixture that disagrees with it,
+# and rejects an INCOMPLETE fixture before anything is built.
+#
+# WHY IT IS NOT `launcher-integration.yml`.  That workflow is retained as a fast
+# pre-check, but it asserts only that `ct --version` matches
+# `^ct [0-9]+\.[0-9]+` and never runs `ct record`, so it is NON-AUTHORITATIVE
+# for the record contract.  This gate is the authority.
+#
+# NO PATH FILTERS, deliberately: LRC-3's verification is precisely that a
+# trivial commit triggers the edge.
+# =============================================================================
+
+name: launcher-recorder-e2e
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: python
+    uses: metacraft-labs/codetracer/.github/workflows/launcher-recorder-e2e.yml@dev
+    with:
+      edge: codetracer-python-recorder@${{ github.sha }} -> launcher
+      recorder-repo: codetracer-python-recorder
+      recorder-lang: python
+      recorder-ref: ${{ github.sha }}
+    # `inherit` rather than a named list: the CI Token Provider App ID is held
+    # as a repository SECRET here and as a repository VARIABLE elsewhere in the
+    # org, and the reusable workflow accepts either.
+    secrets: inherit

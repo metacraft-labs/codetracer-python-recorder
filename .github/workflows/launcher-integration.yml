@@ -5,6 +5,33 @@ name: launcher-integration
 # recorder's source. Mirrors the pattern in
 # codetracer-specs/Testing/Cross-Repo-CI-Integration.md.
 #
+# ---------------------------------------------------------------------------
+# SCOPE: PACKAGING ONLY. **NON-AUTHORITATIVE FOR THE RECORD CONTRACT.**
+#
+# This workflow asserts exactly one thing about behaviour: that the wheel's
+# `ct` prints a version matching `^ct [0-9]+\.[0-9]+`. It never runs
+# `ct record`, never drives this recorder, and never inspects a produced
+# trace, so a change to this recorder's CLI, its exit codes, its output layout
+# or its trace format stays GREEN here.
+#
+# It is deliberately RETAINED as a fast pre-check: it covers the pypi bundling
+# path nothing else covers, and it fails in seconds rather than in an hour.
+#
+# The authority for the launcher <-> recorder RECORD contract is the
+# end-to-end gate added by milestone LRC-3, which routes `ct record <sample>`
+# through the real launcher into the real desktop core and this real recorder
+# and validates the produced CTFS trace with `ct-print`:
+#
+#   .github/workflows/launcher-recorder-e2e.yml   (this repo's thin caller)
+#   cross-repo/launcher-compat.yml                (this repo's contract fixture)
+#   metacraft-labs/codetracer/.github/workflows/launcher-recorder-e2e.yml
+#   metacraft-labs/codetracer/ci/test/launcher-recorder-e2e.sh
+#
+# Design: codetracer-specs/Testing/Launcher-Recorder-Compatibility-Tests.md
+#         ("Motivation" explains why `ct --version` is not enough; section 6
+#         records that these smoke workflows stay as a fast pre-check).
+# ---------------------------------------------------------------------------
+#
 # Uses the org-wide metacraft-labs-ci-token-provider GitHub App
 # (CI_TOKEN_PROVIDER_APP_ID + CI_TOKEN_PROVIDER_PRIVATE_KEY) to mint
 # a short-lived token for cloning the (private during pre-launch)
