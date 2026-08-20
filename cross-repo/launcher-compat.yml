@@ -20,10 +20,13 @@
 #   its next cross-repo run instead of silently diverging.
 #
 # WHO ELSE USES THIS SCHEMA
-#   Milestone LRC-4 adds the same file to codetracer-ruby-recorder,
-#   codetracer-js-recorder, codetracer-native-recorder and
-#   codetracer-beam-recorder.  Keep additions generic: anything that is really
-#   python-specific belongs under a scenario, not in the schema.
+#   Milestone LRC-4 added the same file to codetracer-ruby-recorder and
+#   codetracer-js-recorder (both green, both wired into CI) and to
+#   codetracer-beam-recorder (checked in, NOT wired: that edge is blocked on a
+#   core/recorder invocation mismatch its own header documents).
+#   codetracer-native-recorder is still outstanding, blocked on the launcher's
+#   dot-less-argument routing gap.  Keep additions generic: anything that is
+#   really python-specific belongs under a scenario, not in the schema.
 #
 # -----------------------------------------------------------------------------
 # SCHEMA (launcher-compat/v1)
@@ -73,6 +76,11 @@
 #                     `./ct-traces/` as the convention; the two do not agree
 #                     today, and hardcoding either in the driver would make the
 #                     check silently vacuous for the other recorders.
+#                     The special value `.` means "the inherited working
+#                     directory itself" (codetracer-ruby-recorder falls back to
+#                     `Dir.pwd`); for that spelling the driver requires the
+#                     whole scratch cwd to be empty, which is strictly stronger
+#                     than the "a named subdirectory is absent" form.
 #
 #   build.sibling-key Argument passed to `codetracer/scripts/build-siblings.sh
 #                     --only <key>`; that script owns the per-repo build
@@ -87,9 +95,42 @@
 #                     `discovery.path-prepend` (relative to the recorder repo)
 #                     to PATH.  `detect-siblings` = the repo is already handled
 #                     by codetracer/scripts/detect-siblings.sh and needs nothing
-#                     extra (the ruby/js/beam/native edges will use that).
+#                     extra (the ruby, js and beam edges use that; verify it per
+#                     recorder rather than assuming — the driver asserts the
+#                     binary it resolved lives inside the recorder checkout).
 #   discovery.path-prepend
 #                     Directory to prepend for `method: path-prepend`.
+#   discovery.runtime Optional sequence.  The LANGUAGE RUNTIME executables this
+#                     recorder's toolchain needs and that neither
+#                     detect-siblings.sh nor the codetracer dev shell provides.
+#                     `recorder_dispatch.nim` models a language's toolchain as
+#                     up to two artifacts — `raRecorder` and `raRuntime` — and
+#                     `discovery.method` above only covers the first.  The
+#                     python recorder needs none (it is a self-contained console
+#                     script); ruby declares `ruby` because `ct` spawns
+#                     `ruby <recorder-script> …`, and the beam edge declares the
+#                     whole elixir/erlang toolchain because `ct` hands the
+#                     program to `elixir` / `escript` after a `--` separator.
+#                     The driver resolves each name from the RECORDER REPO'S OWN
+#                     pinned dev shell (`direnv exec <repo> command -v <name>`),
+#                     prepends its directory to PATH and asserts the name now
+#                     resolves to exactly that binary.  That source is not a
+#                     convenience: it is the version the recorder was built
+#                     against (decisively so for ruby, whose native extension is
+#                     bound to one interpreter's ABI), and it is the remedy the
+#                     product itself prints in `missingRecorderMessage`.
+#                     A runtime that cannot be resolved is a hard failure — and
+#                     so is one that resolves to an UNPINNED binary.  `direnv
+#                     exec` augments the ambient PATH rather than replacing it,
+#                     so a name the recorder's flake does not ship would
+#                     otherwise be satisfied by whatever the host carries (found
+#                     in review: a Windows `elixir` under /mnt/c/… on a WSL
+#                     host, reported as the recorder's "own pinned one").  The
+#                     driver therefore also requires the resolved path to live
+#                     in /nix/store or inside the recorder checkout, and names
+#                     the offending path when it does not.  Declare the runtime
+#                     in the recorder's dev shell rather than relying on the
+#                     host to have it.
 #
 # Scenario keys (`scenarios` is a sequence of mappings)
 #   id                Unique, stable, human-readable.  Reported in the
@@ -121,10 +162,20 @@
 #                     fallback appeared in the recorder's cwd".  The driver's
 #                     table of checks is closed: a flag it has no check for is
 #                     a FAILURE, so a new recorder cannot earn a green
-#                     assertion by naming a flag nobody verifies.
+#                     assertion by naming a flag nobody verifies.  The table
+#                     currently holds `--out-dir`/`--trace-dir`/`-o` and
+#                     `--source-dir` (codetracer-beam-recorder only, whose
+#                     observable effect is that the program's own sources are
+#                     compiled and bundled into the trace directory).  Adding a
+#                     recorder with a different flag means adding an arm with a
+#                     real check to `check_recorder_flag()`, not relaxing this.
 #   expect.exit-code  `0`, or `nonzero`.
 #   expect.trace-glob Shell glob, relative to the trace directory, that must
-#                     match at least one produced artifact.
+#                     match at least one produced artifact.  Per-recorder on
+#                     purpose: python and ruby write the `.ct` straight into the
+#                     directory they are given (`*.ct`), while
+#                     codetracer-js-recorder treats `--out-dir` as a container
+#                     of recordings and writes `trace-<n>/<program>.ct`.
 #   expect.min-events Minimum number of decoded events.  Guards against the
 #                     "trace exists but has 0 events" vacuous pass (§5.5).
 #   expect.function   Sequence: function names that must appear in the decoded
