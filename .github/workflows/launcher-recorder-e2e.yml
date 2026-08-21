@@ -26,22 +26,52 @@
 # different launcher on every re-run, and `clone-siblings` reported it with a
 # `::warning:: ... not reproducible` per entry.
 #
-# NOT GREEN YET, AND HONESTLY SO.  A lock-resolved sibling needs a workspace
-# lock keyed by THIS repo's commit.  On 2026-08-21 the newest one published for
-# codetracer-python-recorder in metacraft-labs/metacraft-manifests@latest is
-# 2026-07-06, and this repo's current `dev` HEAD has none, so this edge fails in
-# `Setup dev env` with "No workspace lock for codetracer-python-recorder" until
-# the workspace tooling publishes one.  That is a loud, named failure carrying
-# its own remedy, and it is the correct behaviour for a missing pin.
+# LOCK STATUS: RESOLVES TODAY, HAS NEVER RUN.  A lock-resolved sibling needs a
+# workspace lock keyed by THIS repo's commit, and one now exists.  On
+# 2026-08-22 a workspace lock was published for each of this gate's five
+# trigger repos to metacraft-labs/metacraft-manifests@latest (commit
+# 5de2a3ae), among them one keyed by this repo's `dev` HEAD at the time of
+# writing:
+#
+#   locks/codetracer/codetracer-python-recorder/
+#     46ebb4f205e233eee46640c474938a07689a0224.toml
+#
+# That was verified against a FRESH clone of the published manifest -- not the
+# working checkout that produced the lock -- using exactly the invocation
+# `clone-siblings` makes: `resolve-sibling-rev.sh --repo
+# codetracer-python-recorder --sibling <NAME> --sha 46ebb4f2 --no-walk`.
+# Every sibling resolves at exit 0 with a 40-hex revision.
+#
+# THAT IS THE ONLY THING THAT CHANGED.  This gate has still NEVER executed in
+# CI -- not once, on any of its five edges -- so nothing about it is
+# CI-verified and CI-green is not claimed here.  It remains blocked on
+# self-hosted runner capacity.
+#
+# AND IT IS ONE PUSH AWAY FROM RED AGAIN.  A lock answers for an EXACT commit.
+# `clone-siblings` looks one up with `--no-walk` for `github.sha` (plus
+# `github.event.before`, on `push` events only), and for a `pull_request` it
+# probes the PR BASE sha alone.  So the lock named above answers for that
+# commit and for no other -- including the commit that carries this comment.
+# Push to this repo without publishing a lock for the new tip and this edge is
+# straight back to failing in `Setup dev env` with "No workspace lock for
+# codetracer-python-recorder": one push of grace on a `push` event, because
+# the previous tip is probed as a fallback, and none at all on a
+# `pull_request` once the base branch moves past the locked commit.  That is
+# inherent to per-commit pinning rather than a defect, and it recurs on every
+# mainline commit.
 #
 # THE REMEDY IS NOT IN THIS REPOSITORY, and that matters when this job goes
-# red on a pull request: clearing it takes `repro workspace lock` in a
-# workspace containing this commit plus a push to metacraft-labs/
-# metacraft-manifests -- not a change here.  Do NOT paper over it by
-# reintroducing a `<name>=<ref>` sibling override; that is the policy
-# deviation milestone LRC-6 removed.  LRC-6's "confirm the lock-publication
-# path is green first" sub-deliverable is deliberately left unticked for
-# exactly this reason.
+# red on a pull request.  Clearing it takes `repro workspace lock
+# --trigger-repo=codetracer-python-recorder` in a workspace that contains the
+# commit under test, plus a push of the resulting lock to
+# metacraft-labs/metacraft-manifests -- not a change here.  `repro check
+# --mode=pre-push` does exactly that on its own, but ONLY in a workspace whose
+# `.repro/manifests` is a real git CHECKOUT of the manifest repo; where it is
+# a plain directory the lock is generated and then silently dropped with `lock
+# publish skipped: ... is not a git checkout`, which is precisely what had
+# left every edge of this gate unlocked before 2026-08-22.  Do NOT paper over
+# a missing lock by reintroducing a `<name>=<ref>` sibling override; that is
+# the policy deviation this wiring exists to remove.
 #
 # WHAT IT ASSERTS ABOUT THIS REPO.  Everything comes from this repo's own
 # checked-in contract fixture, `cross-repo/launcher-compat.yml`: the sample
