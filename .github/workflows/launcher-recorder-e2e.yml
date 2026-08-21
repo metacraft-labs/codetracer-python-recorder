@@ -14,10 +14,34 @@
 # Milestone: LRC-3.
 #
 # WHAT THIS EDGE PINS.  This repository is the one under test, so it is pinned
-# to `github.sha`; the launcher and the desktop core are taken at their mainline
-# branch.  That is the design's provisional v1 "branch-ref" pinning; milestone
-# LRC-6 decides whether to move every sibling onto the reproducible
-# workspace-lock SHA instead.
+# to `github.sha` -- and this caller does not have to say so.  The reusable
+# workflow makes the TRIGGERING repo its primary `actions/checkout` at
+# `${{ github.sha }}`, and inside a reusable workflow that context is the
+# caller's.  The launcher, the desktop core and codetracer-trace-format-nim are
+# cloned beside it at the revisions the per-commit WORKSPACE LOCK pins for this
+# commit, per metacraft-dev-guidelines/policies/ci-shared-dev-env.md section
+# 3.2.  Until milestone LRC-6 this caller passed `recorder-ref:
+# ${{ github.sha }}` and the other three repos were taken at their mainline
+# branch TIP, which pins nothing: the same commit of this repo built against a
+# different launcher on every re-run, and `clone-siblings` reported it with a
+# `::warning:: ... not reproducible` per entry.
+#
+# NOT GREEN YET, AND HONESTLY SO.  A lock-resolved sibling needs a workspace
+# lock keyed by THIS repo's commit.  On 2026-08-21 the newest one published for
+# codetracer-python-recorder in metacraft-labs/metacraft-manifests@latest is
+# 2026-07-06, and this repo's current `dev` HEAD has none, so this edge fails in
+# `Setup dev env` with "No workspace lock for codetracer-python-recorder" until
+# the workspace tooling publishes one.  That is a loud, named failure carrying
+# its own remedy, and it is the correct behaviour for a missing pin.
+#
+# THE REMEDY IS NOT IN THIS REPOSITORY, and that matters when this job goes
+# red on a pull request: clearing it takes `repro workspace lock` in a
+# workspace containing this commit plus a push to metacraft-labs/
+# metacraft-manifests -- not a change here.  Do NOT paper over it by
+# reintroducing a `<name>=<ref>` sibling override; that is the policy
+# deviation milestone LRC-6 removed.  LRC-6's "confirm the lock-publication
+# path is green first" sub-deliverable is deliberately left unticked for
+# exactly this reason.
 #
 # WHAT IT ASSERTS ABOUT THIS REPO.  Everything comes from this repo's own
 # checked-in contract fixture, `cross-repo/launcher-compat.yml`: the sample
@@ -56,7 +80,6 @@ jobs:
       edge: codetracer-python-recorder@${{ github.sha }} -> launcher
       recorder-repo: codetracer-python-recorder
       recorder-lang: python
-      recorder-ref: ${{ github.sha }}
     # `inherit` rather than a named list: the CI Token Provider App ID is held
     # as a repository SECRET here and as a repository VARIABLE elsewhere in the
     # org, and the reusable workflow accepts either.
