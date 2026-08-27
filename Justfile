@@ -8,11 +8,27 @@ alias fmt := format
 
 # Development helpers for the monorepo
 
-# Python version used for development
-PYTHON_DEFAULT_VERSION := "3.13"
+# Python version used for development.
+#
+# NOT stated here any more. `.python-version` is the single source, and uv
+# reads it NATIVELY -- `uv sync` with no `-p` picks the interpreter that file
+# names, and `uv python install` will fetch it if the host lacks it. So the way
+# to make this recipe follow the pin is to stop passing `-p` at all, which is
+# also the only way that works on the native Windows lane, where `just` cannot
+# portably shell out to read a file.
+#
+# This variable used to say "3.13" while `just dev` in fact produced a 3.12
+# `.venv` -- uv took the first interpreter on PATH satisfying `requires-python`,
+# and which one that was depended on the ORDER of the flake devShell's package
+# list. The declaration and the artefact disagreed, and the artefact won.
 
-# Python versions used for multi-version testing/building with uv
-# Note: Project requires >=3.12,<3.14 per pyproject.toml
+# Python versions used for multi-version testing/building with uv.
+#
+# This is the SUPPORT MATRIX -- a different claim from "the version we build
+# against", which is `.python-version`. The declared version must be one of
+# these; codetracer's scripts/test-python-version-alignment.sh checks that it
+# is, and that both are admitted by `requires-python` in
+# codetracer-python-recorder/pyproject.toml.
 PY_VERSIONS := "3.12 3.13"
 PY_SHORT_VERSIONS := "12 13"
 
@@ -34,9 +50,15 @@ nix-test:
     nix build .#codetracer-pure-python-recorder --no-link
     nix build .#codetracer-python-recorder --no-link
 
-# Create a clean local virtualenv for Python tooling (without editable packages installed)
-venv version=PYTHON_DEFAULT_VERSION:
-    uv sync -p {{version}}
+# Create a clean local virtualenv for Python tooling (without editable packages
+# installed).
+#
+# With no argument this is `uv sync`, which reads `.python-version` -- the
+# single source. Pass a version only to deliberately exercise another
+# interpreter from PY_VERSIONS; that is what the multi-version CI matrix does,
+# and it is the ONLY thing that should ever pass one.
+venv version="":
+    uv sync {{ if version == "" { "" } else { "-p " + version } }}
 
 # Build the module in dev mode
 dev:
