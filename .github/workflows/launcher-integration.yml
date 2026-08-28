@@ -37,7 +37,7 @@ jobs:
         with:
           path: codetracer-python-recorder
 
-      - uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-launcher
           ref: main

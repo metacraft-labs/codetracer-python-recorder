@@ -30,7 +30,7 @@ jobs:
         # setup-dev-env clones the siblings listed in .github/sibling-repos
         # (codetracer-trace-format, codetracer-trace-format-nim) at the
         # workspace-lock-pinned revisions before materialising the nix env.
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
@@ -88,7 +88,7 @@ jobs:
         # setup-dev-env clones the siblings listed in .github/sibling-repos
         # (codetracer-trace-format, codetracer-trace-format-nim) at the
         # workspace-lock-pinned revisions before materialising the nix env.
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
@@ -146,7 +146,7 @@ jobs:
       - name: Mirror coverage artefacts to S3 (non-blocking)
         if: steps.coverage-run.outcome == 'success'
         continue-on-error: true
-        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
           path: codetracer-python-recorder/target/coverage/
           prefix: python-recorder-coverage/${{ github.run_id }}
@@ -179,7 +179,7 @@ jobs:
           owner: metacraft-labs
 
       - name: Setup dev env
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
