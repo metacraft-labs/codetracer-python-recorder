@@ -84,7 +84,7 @@ jobs:
           owner: metacraft-labs
 
       - name: Setup dev env (windows-diy flavor)
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: windows-diy
           gh-token: ${{ steps.ci_token.outputs.token }}
