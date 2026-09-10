@@ -8,6 +8,7 @@ pub mod code_object;
 mod errors;
 mod ffi;
 mod logging;
+pub mod markers;
 mod module_identity;
 pub mod monitoring;
 mod policy;
@@ -34,6 +35,12 @@ pub use crate::session::{flush_tracing, is_tracing, start_tracing, stop_tracing}
 // `codetracer_spans.jsonl` sidecar.
 pub use crate::spans::{
     read_span_stream_json, register_span, span_allocate_id, span_next_step_index, trace_step_count,
+};
+// Correlation markers — a value crossing a boundary, declared by the recorded
+// program itself.  The shared writer library owns what a marker IS; this is the
+// Python spelling of it.  See `src/markers.rs`.
+pub use crate::markers::{
+    ensure_marker_id, mark_correlation, mark_correlation_by_id, mark_span_coverage,
 };
 
 use pyo3::prelude::*;
@@ -186,5 +193,12 @@ fn codetracer_python_recorder(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRes
     m.add_function(wrap_pyfunction!(spans::span_next_step_index, m)?)?;
     m.add_function(wrap_pyfunction!(spans::read_span_stream_json, m)?)?;
     m.add_function(wrap_pyfunction!(spans::trace_step_count, m)?)?;
+    // Correlation markers (see `src/markers.rs`).  `ensure_marker_id` is the
+    // primary operation — hoisted out of a hot path so the per-crossing call
+    // does no string lookup.
+    m.add_function(wrap_pyfunction!(markers::ensure_marker_id, m)?)?;
+    m.add_function(wrap_pyfunction!(markers::mark_correlation_by_id, m)?)?;
+    m.add_function(wrap_pyfunction!(markers::mark_correlation, m)?)?;
+    m.add_function(wrap_pyfunction!(markers::mark_span_coverage, m)?)?;
     Ok(())
 }

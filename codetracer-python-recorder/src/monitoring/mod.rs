@@ -9,10 +9,12 @@ pub(crate) mod callbacks;
 pub(crate) mod install;
 pub mod tracer;
 
-pub use api::Tracer;
+pub use api::{CorrelationMarker, Tracer};
 pub use install::{
-    flush_installed_tracer, install_tracer, installed_tracer_next_step_index,
-    register_span_on_installed_tracer, uninstall_tracer, update_exit_status,
+    ensure_marker_id_on_installed_tracer, flush_installed_tracer, install_tracer,
+    installed_tracer_next_step_index, mark_correlation_on_installed_tracer,
+    mark_span_coverage_on_installed_tracer, register_span_on_installed_tracer, uninstall_tracer,
+    update_exit_status,
 };
 
 const MONITORING_TOOL_NAME: &str = "codetracer";

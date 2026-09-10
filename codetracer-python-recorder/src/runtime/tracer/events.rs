@@ -5,7 +5,8 @@ use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::logging::with_error_code;
 use crate::monitoring::{
-    events_union, CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, Tracer,
+    events_union, CallbackOutcome, CallbackResult, CorrelationMarker, EventSet, MonitoringEvents,
+    Tracer,
 };
 use crate::policy::policy_snapshot;
 use crate::runtime::activation::ActivationExitKind;
@@ -846,6 +847,78 @@ impl Tracer for RuntimeTracer {
     /// reader walks and a span's `start_step` / `end_step` refer to.
     fn next_step_index(&self) -> Option<u64> {
         Some(TraceWriter::next_step_index(&*self.writer))
+    }
+
+    /// Intern a correlation-marker boundary label in the writer's marker table.
+    ///
+    /// Straight through to the shared library, which owns the interning table
+    /// (`internal-files.md` § "Interning Tables").  The recorder deliberately
+    /// keeps no label cache of its own: a per-recorder cache is exactly the
+    /// drift the shared marker API exists to prevent.
+    fn ensure_marker_id(&mut self, label: &str) -> Result<u64, String> {
+        TraceWriter::ensure_marker_id(&mut *self.writer, label).map_err(|err| err.to_string())
+    }
+
+    /// Forward one boundary crossing to the writer.
+    ///
+    /// No buffering and no recorder-side bookkeeping: the writer builds the
+    /// `MarkerPayload`, attaches it to an IO event's metadata slot, and
+    /// populates `corrmark.ns` at close.  Notably it registers NO step, so the
+    /// marker lands on the line the call sits on and every later step index is
+    /// unchanged — which is what spans' `start_step` / `end_step` and every
+    /// other step-addressed coordinate are measured in.
+    fn mark_correlation(&mut self, marker: &CorrelationMarker<'_>) -> Result<(), String> {
+        match marker.marker_id {
+            // The numeric-id form is primary: the caller already interned.
+            Some(marker_id) => TraceWriter::mark_correlation_by_id(
+                &mut *self.writer,
+                marker_id,
+                marker.boundary,
+                marker.direction,
+                marker.key_value,
+                marker.show_value,
+                marker.description,
+                marker.key_text,
+                marker.show_text,
+            ),
+            // The string form: the shared library interns and forwards, so the
+            // wrapper lives in one place rather than in every recorder.
+            None => TraceWriter::mark_correlation(
+                &mut *self.writer,
+                marker.direction,
+                marker.boundary,
+                marker.key_value,
+                marker.show_value,
+                marker.description,
+                marker.key_text,
+                marker.show_text,
+            ),
+        }
+        .map_err(|err| err.to_string())
+    }
+
+    /// Forward distributed-trace span coverage to the writer.
+    ///
+    /// Routed through the writer's HEX entry point rather than decoding the ids
+    /// here: the correlation index keys on the wire bytes, and a per-recorder
+    /// hex decode is a chance for one recorder to key the index on something no
+    /// consumer computes — an index that is present, correct-looking, and
+    /// permanently unqueryable.
+    fn mark_span_coverage(
+        &mut self,
+        trace_id_hex: &str,
+        span_id_hex: &str,
+        wall_time_unix_ns: u64,
+        monotonic_time_ns: u64,
+    ) -> Result<(), String> {
+        TraceWriter::mark_span_coverage_hex(
+            &mut *self.writer,
+            trace_id_hex,
+            span_id_hex,
+            wall_time_unix_ns,
+            monotonic_time_ns,
+        )
+        .map_err(|err| err.to_string())
     }
 }
 
