@@ -1,0 +1,138 @@
+# Publish the workspace lock for a mainline commit GitHub created.
+#
+# WHY THIS WORKFLOW EXISTS
+# ------------------------
+# Every commit that leaves a developer's workspace is locked by the local
+# pre-push gate, which publishes `locks/<project>/codetracer-python-recorder/<sha>.toml` (or the
+# legacy `.xml`) to the manifests repo. That gate is the reproducibility
+# boundary and it stays the boundary: this workflow creates no lock, resolves
+# no sibling and cannot invent a pin.
+#
+# It exists because there is one class of commit the pre-push gate structurally
+# cannot reach: the commit GitHub creates server-side when a pull request lands.
+# Merge, squash or rebase, the result is a brand-new SHA that no hook ever saw.
+#
+# THE COST OF NOT HAVING IT. `setup-dev-env` provisions this repo's cross-repo
+# siblings through `clone-siblings`, which resolves each sibling's revision from
+# the workspace lock of a MAINLINE commit — `pull_request` -> `base.sha`,
+# `push` -> `github.sha` then `github.event.before` — probed with `--no-walk`.
+# With no publisher, no mainline commit of this repo ever acquired a lock, and
+# every job that needs a sibling died at
+#
+#   No workspace lock for codetracer-python-recorder (candidates: <sha>)
+#
+# in `Setup Dev Environment`, before reaching a build or a test.
+#
+# WHAT IT PUBLISHES
+# -----------------
+# An EXISTING lock record, re-anchored onto the mainline commit: every sibling
+# pin copied verbatim, and precisely one field changed — the record's own
+# coordinate, the entry naming this repo, whose revision moves to the mainline
+# SHA. Publication is additions-only and a published record is immutable.
+name: publish workspace lock
+
+on:
+  # POST-MERGE ON THE REAL MAINLINE HEAD. `push` is the one event that fires
+  # for every way a commit reaches the branch — direct push, merge commit,
+  # squash, rebase replay — on the real post-merge HEAD and in the repo's own
+  # context.
+  #
+  # WHAT IT RE-ANCHORS. `github.sha` is the new mainline HEAD (target) and
+  # `github.event.before` is the branch's PREVIOUS tip, which the prior push
+  # run already published a lock for. Each push therefore carries the previous
+  # HEAD's lock forward onto the new HEAD. The chain is self-sustaining once
+  # its head is locked; the first link is seeded through the
+  # `workflow_dispatch` path below.
+  #
+  # The DELIBERATE limitation shared by any forward carry: if a pushed commit
+  # BUMPED a sibling, the carried set predates that bump. Re-lock such a commit
+  # through the `workflow_dispatch` path below.
+  push:
+    branches: [dev]
+
+  # WHY THERE IS NO `pull_request_target: [closed]` LEG HERE, although the two
+  # reference wirings (`codetracer`, `infra`) carry one. That leg re-anchors
+  # from the PULL REQUEST HEAD's own lock, which only exists if the local
+  # pre-push gate published one when the branch was pushed. It does not today:
+  # the gate's publisher aborts before writing anything ("Warning: Failed to
+  # create lock file"), so no pull request head in this fleet is locked.
+  #
+  # The consequence is measurable rather than theoretical. `infra` carries that
+  # leg and no `push` leg: its last 15 runs are 15 failures, one per merged
+  # pull request, and `infra@live` is still unlocked. `codetracer` carries both
+  # and its `pull_request_target` leg has produced zero runs, so only the
+  # `push` leg has ever locked `dev`.
+  #
+  # Adding an always-red check to every repo would bury the signal it exists to
+  # raise, and it would buy nothing the `push` leg does not already do: `push`
+  # fires for every way a commit reaches the mainline, merge commit and squash
+  # and rebase replay included. Restore this leg once pull request heads are
+  # locked again — it is the only path that carries a sibling BUMP made by the
+  # pull request itself, which the forward carry below gets wrong by design.
+
+  # Backfill. Every mainline commit that landed before this workflow existed is
+  # still unlocked, and so is any commit whose publish failed transiently. This
+  # is how one is repaired, and how the forward carry above is seeded, with
+  # both SHAs stated explicitly rather than guessed.
+  workflow_dispatch:
+    inputs:
+      source-sha:
+        description: "The commit whose published lock supplies the sibling set (40-hex)."
+        required: true
+      target-sha:
+        description: "The mainline commit to publish the lock for (40-hex)."
+        required: true
+      base-ref:
+        description: "The mainline branch target-sha must be an ancestor of."
+        required: true
+        default: dev
+
+permissions:
+  contents: read
+
+# Serialise this repo's publishers. The action recovers from a lost push race
+# on its own — records are commit-addressed, so concurrent publishers write
+# disjoint paths — but a queue turns the common case into no race at all.
+# `cancel-in-progress` MUST stay false: two merges seconds apart must both end
+# up locked, and cancelling the first would leave its mainline commit unlocked
+# forever.
+concurrency:
+  group: publish-workspace-lock-codetracer-python-recorder
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # A push whose `before` is the all-zero SHA is a branch CREATION — there is
+    # no previous tip to carry a lock forward from.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       github.event.before != '0000000000000000000000000000000000000000')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate CI token
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Publish the workspace lock
+        uses: metacraft-labs/metacraft-github-actions/publish-workspace-lock@dev
+        with:
+          gh-token: ${{ steps.ci_token.outputs.token }}
+          repo: metacraft-labs/codetracer-python-recorder
+          # On push the sibling set is carried from the branch's PREVIOUS tip
+          # (`github.event.before`, already locked by the prior run) onto the
+          # new HEAD (`github.sha`); workflow_dispatch states both SHAs.
+          source-sha: >-
+            ${{ github.event.inputs.source-sha || github.event.before }}
+          target-sha: >-
+            ${{ github.event.inputs.target-sha || github.sha }}
+          base-ref: >-
+            ${{ github.event.inputs.base-ref || github.ref_name }}
+          provenance: >-
+            ${{ github.event_name == 'workflow_dispatch'
+                && 'a manual backfill'
+                || format('a push to {0}', github.ref_name) }}
