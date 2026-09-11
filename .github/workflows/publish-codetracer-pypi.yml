@@ -99,7 +99,7 @@ jobs:
       - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-launcher
-          ref: ${{ inputs.launcher_ref || 'main' }}
+          ref: ${{ inputs.launcher_ref || 'dev' }}
           path: codetracer-launcher
           gh-token: ${{ steps.app-token.outputs.token }}
 
