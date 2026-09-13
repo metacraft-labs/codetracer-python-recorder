@@ -32,7 +32,7 @@ env:
 jobs:
   verify:
     name: Verify Tests (Linux)
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
 
@@ -116,24 +116,24 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            os: eph-linux-x64
+            os: [self-hosted, linux, x64]
             build-sdist: true
             publish-args: --release --sdist --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: linux-aarch64
-            os: eph-linux-arm64
+            os: [self-hosted, linux, arm64]
             build-sdist: false
             publish-args: --release --interpreter python3.12 python3.13 --out dist
             manylinux: 2014
             target: ""
           - name: macos-aarch64
-            os: eph-macos-arm64
+            os: [self-hosted, macos, arm64]
             build-sdist: false
             publish-args: --release --out dist --interpreter python3.12 python3.13
             target: aarch64
           - name: windows-amd64
-            os: eph-win-x64
+            os: [self-hosted, windows, x64]
             build-sdist: false
             publish-args: --release --out dist
             target: ""
@@ -335,7 +335,7 @@ jobs:
     # validation run (verify + build + upload artefacts) that publishes
     # nothing.
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_testpypi)
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     environment:
       name: testpypi
     steps:
@@ -373,7 +373,7 @@ jobs:
     name: Publish to PyPI
     needs: publish-testpypi
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     environment:
       name: pypi-production
       url: https://pypi.org/project/codetracer-python-recorder/
