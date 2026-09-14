@@ -197,16 +197,46 @@ print(f"clingo runtime staged at {ROOT / 'bin'}")
         # Materialises the `test` collection.
         run: dev-exec repro test
 
+      # Diagnostics on failure. Three things below are load-bearing:
+      #
+      # 1. `include-hidden-files: true`. actions/upload-artifact@v4 defaults this
+      #    input to false, and @actions/glob then skips any entry it traverses whose
+      #    own basename starts with "." (internal-globber.ts:
+      #    `if (options.excludeHiddenFiles && path.basename(item.path).match(/^\./))
+      #    continue`). The old `path: .repro/` made `.repro` itself the search root,
+      #    so it was skipped outright and this step logged
+      #      "No files were found with the provided path: target/ .repro/"
+      #    which `if-no-files-found: ignore` then swallowed. Net effect: the build
+      #    engine's per-action stdio captures -- `<outDir>/build-engine-cache/
+      #    actions/<actionId>.stderr.log`, see repro_build_engine.nim -- have never
+      #    been uploaded from any leg of this workflow, on any platform.
+      # 2. Narrow paths. A whole `.repro/` tree measures ~1.1 GiB (dominated by
+      #    build-engine-cache/monitor-depfiles and dependency-evidence); the failure
+      #    report plus the per-action logs are ~600 KiB. `target/` was dropped: it is
+      #    a build-output tree rather than a log tree, it matches nothing in the Nim
+      #    repos, and where it does match it would permanently mask the warning below.
+      # 3. `if-no-files-found: warn` (the action's own default). This step only runs
+      #    on failure, so a warning costs nothing -- and it is exactly what would have
+      #    surfaced (1) years ago instead of hiding it behind a green step.
+      #
+      # Context, 2026-09: no leg of this workflow is green on ANY platform. Census of
+      # the job records: linux-x64 77 failure / 19 cancelled / 0 success, linux-arm64
+      # 77/19/0, macos-arm64 75/25/0, windows-x64 61/35/0. The only two successes on
+      # record are from 2026-07-06, under the pre-rename job names. The arm64 leg
+      # fails earlier than x64, and x64 fails for an unrelated project-level reason
+      # (`cannot open file: results`, codetracer_ct_print.nim(24, 8)). These
+      # artifacts are the only way to find out why any of it actually fails.
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            target/
-            .repro/
+            .repro/build/*/build-failure-report.json
+            .repro/build/*/build-engine-cache/actions/
+          include-hidden-files: true
           retention-days: 1
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: Mirror test logs to S3 (non-blocking)
         if: failure()
