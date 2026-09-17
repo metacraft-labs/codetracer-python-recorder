@@ -89,7 +89,7 @@ jobs:
           owner: metacraft-labs
 
       - name: Setup dev env (reprobuild flavor)
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: reprobuild
           repro-build-pin: codex/attic-ci-cache-vars
@@ -113,47 +113,47 @@ jobs:
             $env:REPROBUILD_CLINGO_ROOT = $clingoRoot
             python -m pip install --disable-pip-version-check --quiet zstandard==0.23.0
             @'
-import hashlib
-import io
-import os
-import pathlib
-import tarfile
-import urllib.request
-import zipfile
+          import hashlib
+          import io
+          import os
+          import pathlib
+          import tarfile
+          import urllib.request
+          import zipfile
 
-import zstandard
+          import zstandard
 
-URL = "https://conda.anaconda.org/conda-forge/win-64/clingo-5.8.0-py312h4128c23_0.conda"
-SHA256 = "9ffe4802f8d39991bef75a1548f10147a59e5549eca65fef5119eb281e4f343a"
-ROOT = pathlib.Path(os.environ["REPROBUILD_CLINGO_ROOT"])
-PKG = ROOT / "clingo.conda"
+          URL = "https://conda.anaconda.org/conda-forge/win-64/clingo-5.8.0-py312h4128c23_0.conda"
+          SHA256 = "9ffe4802f8d39991bef75a1548f10147a59e5549eca65fef5119eb281e4f343a"
+          ROOT = pathlib.Path(os.environ["REPROBUILD_CLINGO_ROOT"])
+          PKG = ROOT / "clingo.conda"
 
-urllib.request.urlretrieve(URL, PKG)
-actual = hashlib.sha256(PKG.read_bytes()).hexdigest()
-if actual != SHA256:
-    raise SystemExit(f"clingo package sha256 mismatch: {actual} != {SHA256}")
+          urllib.request.urlretrieve(URL, PKG)
+          actual = hashlib.sha256(PKG.read_bytes()).hexdigest()
+          if actual != SHA256:
+              raise SystemExit(f"clingo package sha256 mismatch: {actual} != {SHA256}")
 
-with zipfile.ZipFile(PKG) as archive:
-    pkg_member = next(
-        name for name in archive.namelist()
-        if name.startswith("pkg-") and name.endswith(".tar.zst")
-    )
-    payload = zstandard.ZstdDecompressor().decompress(archive.read(pkg_member))
+          with zipfile.ZipFile(PKG) as archive:
+              pkg_member = next(
+                  name for name in archive.namelist()
+                  if name.startswith("pkg-") and name.endswith(".tar.zst")
+              )
+              payload = zstandard.ZstdDecompressor().decompress(archive.read(pkg_member))
 
-with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tar:
-    for member in tar.getmembers():
-        name = member.name.replace("\\", "/")
-        if not name.startswith("Library/bin/") or member.isdir():
-            continue
-        rel = pathlib.PurePosixPath(name).relative_to("Library")
-        dest = ROOT / pathlib.Path(*rel.parts)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with tar.extractfile(member) as src, dest.open("wb") as out:
-            out.write(src.read())
+          with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tar:
+              for member in tar.getmembers():
+                  name = member.name.replace("\\", "/")
+                  if not name.startswith("Library/bin/") or member.isdir():
+                      continue
+                  rel = pathlib.PurePosixPath(name).relative_to("Library")
+                  dest = ROOT / pathlib.Path(*rel.parts)
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  with tar.extractfile(member) as src, dest.open("wb") as out:
+                      out.write(src.read())
 
-PKG.unlink(missing_ok=True)
-print(f"clingo runtime staged at {ROOT / 'bin'}")
-'@ | python -
+          PKG.unlink(missing_ok=True)
+          print(f"clingo runtime staged at {ROOT / 'bin'}")
+          '@ | python -
             $clingoDll = Get-ChildItem -LiteralPath $clingoRoot -Filter clingo.dll -Recurse -File -ErrorAction SilentlyContinue |
               Select-Object -First 1
           }
@@ -197,21 +197,51 @@ print(f"clingo runtime staged at {ROOT / 'bin'}")
         # Materialises the `test` collection.
         run: dev-exec repro test
 
+      # Diagnostics on failure. Three things below are load-bearing:
+      #
+      # 1. `include-hidden-files: true`. actions/upload-artifact@v4 defaults this
+      #    input to false, and @actions/glob then skips any entry it traverses whose
+      #    own basename starts with "." (internal-globber.ts:
+      #    `if (options.excludeHiddenFiles && path.basename(item.path).match(/^\./))
+      #    continue`). The old `path: .repro/` made `.repro` itself the search root,
+      #    so it was skipped outright and this step logged
+      #      "No files were found with the provided path: target/ .repro/"
+      #    which `if-no-files-found: ignore` then swallowed. Net effect: the build
+      #    engine's per-action stdio captures -- `<outDir>/build-engine-cache/
+      #    actions/<actionId>.stderr.log`, see repro_build_engine.nim -- have never
+      #    been uploaded from any leg of this workflow, on any platform.
+      # 2. Narrow paths. A whole `.repro/` tree measures ~1.1 GiB (dominated by
+      #    build-engine-cache/monitor-depfiles and dependency-evidence); the failure
+      #    report plus the per-action logs are ~600 KiB. `target/` was dropped: it is
+      #    a build-output tree rather than a log tree, it matches nothing in the Nim
+      #    repos, and where it does match it would permanently mask the warning below.
+      # 3. `if-no-files-found: warn` (the action's own default). This step only runs
+      #    on failure, so a warning costs nothing -- and it is exactly what would have
+      #    surfaced (1) years ago instead of hiding it behind a green step.
+      #
+      # Context, 2026-09: no leg of this workflow is green on ANY platform. Census of
+      # the job records: linux-x64 77 failure / 19 cancelled / 0 success, linux-arm64
+      # 77/19/0, macos-arm64 75/25/0, windows-x64 61/35/0. The only two successes on
+      # record are from 2026-07-06, under the pre-rename job names. The arm64 leg
+      # fails earlier than x64, and x64 fails for an unrelated project-level reason
+      # (`cannot open file: results`, codetracer_ct_print.nim(24, 8)). These
+      # artifacts are the only way to find out why any of it actually fails.
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            target/
-            .repro/
+            .repro/build/*/build-failure-report.json
+            .repro/build/*/build-engine-cache/actions/
+          include-hidden-files: true
           retention-days: 1
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: Mirror test logs to S3 (non-blocking)
         if: failure()
         continue-on-error: true
-        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
           path: target/
           prefix: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}/${{ github.run_id }}/target
@@ -224,7 +254,7 @@ print(f"clingo runtime staged at {ROOT / 'bin'}")
       - name: Mirror reprobuild logs to S3 (non-blocking)
         if: failure()
         continue-on-error: true
-        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
           path: .repro/
           prefix: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}/${{ github.run_id }}/repro
