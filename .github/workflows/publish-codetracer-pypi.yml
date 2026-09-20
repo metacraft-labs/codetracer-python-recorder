@@ -67,7 +67,7 @@ jobs:
     # Self-hosted per policy. One Linux runner builds every platform's
     # wheel: build.sh cross-compiles the launcher for all five targets
     # with `zig cc` (same set the launcher's size-gate matrix covers).
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     strategy:
       fail-fast: false
       matrix:
@@ -168,7 +168,7 @@ jobs:
 
   publish-pypi:
     needs: build-wheels
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     name: PyPI upload (OIDC trusted publisher)
     # Guard rail: a v* tag always releases; a manual run releases only when
     # the operator did not ask for a dry run.

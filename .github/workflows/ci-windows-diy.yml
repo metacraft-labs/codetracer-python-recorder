@@ -28,7 +28,7 @@ jobs:
     # separate pools on separate hosts, so the array matched no runner and the
     # job queued until GitHub's 24h timeout. To span both classes use a matrix
     # axis (`matrix: runs-on: [...]` + `runs-on: ${{ matrix.runs-on }}`).
-    runs-on: eph-win-x64
+    runs-on: [self-hosted, windows, x64]
     steps:
       - uses: actions/checkout@v4
 
