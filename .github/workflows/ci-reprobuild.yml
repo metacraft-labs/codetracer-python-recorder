@@ -29,19 +29,19 @@ jobs:
         include:
           - os: linux
             arch: x64
-            runner: eph-linux-x64
+            runner: [self-hosted, linux, x64]
           - os: linux
             arch: arm64
-            runner: eph-linux-arm64
+            runner: [self-hosted, linux, arm64]
           - os: macos
             arch: arm64
-            runner: eph-macos-arm64
+            runner: [self-hosted, macos, arm64]
           - os: windows
             arch: x64
-            runner: eph-win-x64
+            runner: [self-hosted, windows, x64]
           - os: windows
             arch: arm64
-            runner: eph-win-arm64
+            runner: [self-hosted, windows, arm64]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4

@@ -49,7 +49,7 @@ jobs:
     # runner instead of setup-nim / apt / setup-python: the launcher's
     # build.sh cross-compiles with `zig cc`, and the wheel build/smoke run
     # in a venv created from nixpkgs' python.
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64]
     name: pypi bundling smoke-test
     steps:
       - name: Generate CI token
