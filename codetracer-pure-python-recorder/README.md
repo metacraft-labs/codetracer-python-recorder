@@ -90,5 +90,5 @@ python src/trace.py <path to python file>
   invocation there documents how the native recorder's CTFS output
   is brought back into a JSON shape that can be compared against the
   pure recorder.
-- [`../CLAUDE.md`](../CLAUDE.md) — repo-level notes including the
+- [`../AGENTS.md`](../AGENTS.md) — repo-level notes including the
   rationale for keeping both recorders side by side.

@@ -492,7 +492,7 @@ fn classify_window(window: &[DecodedInstruction]) -> RValueShape {
     if filtered.len() >= 2 {
         // Safe: the filtered.len() >= 2 guard ensures last() is Some, but
         // an explicit `let Some(...)` keeps us off the unwrap path per the
-        // project's no-unwrap-in-production policy (CLAUDE.md).
+        // project's no-unwrap-in-production policy (AGENTS.md).
         let Some(last) = filtered.last() else {
             return RValueShape::Unknown;
         };
