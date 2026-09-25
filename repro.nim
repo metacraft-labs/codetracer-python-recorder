@@ -65,6 +65,7 @@
 ## the recipe consumes has a stdlib tarball entry.
 
 import repro_project_dsl
+import repro_dsl_stdlib/foreign_env
 import repro_dsl_stdlib/packages/sh
 
 package codetracer_python_recorder:
@@ -92,6 +93,9 @@ package codetracer_python_recorder:
   library codetracerPythonRecorder
 
   devEnv:
+    when not defined(windows):
+      useFlakeDevShell()
+
     activity "default"
 
   build:
