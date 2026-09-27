@@ -201,7 +201,7 @@ bump-version component:
     python3 scripts/bump_version.py {{component}} --all
 
 # --- M13: Packaging UX Standardization ---
-# Implements Repo-Requirements.md §2.8 packaging UX for the Python
+# Implements Repo-Requirements.md §2.5 packaging UX for the Python
 # language-ecosystem recorder. The Python recorder publishes a single
 # channel (pypi); the shortcuts are kept for symmetry with the spec.
 
