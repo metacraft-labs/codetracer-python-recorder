@@ -47,7 +47,8 @@ jobs:
         shell: bash
         run: |
           PINS=".github/sibling-pins"
-          TF_REF="main"
+          # The trace-format mainline is `dev`; the repo has no `main` branch.
+          TF_REF="dev"
           if [ -f "${PINS}" ]; then
             PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
             [ -n "${PIN}" ] && TF_REF="${PIN}"
