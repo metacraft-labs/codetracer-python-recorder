@@ -374,10 +374,19 @@ class TestHCRTraceContent:
         )
 
     def test_calls_total(self, hcr_trace_json: dict) -> None:
-        """Total call count: 1 main + 2 module + 36 function = 39."""
+        """Total call count: 1 <toplevel> root + 1 main + 2 module + 36 function = 40.
+
+        The <toplevel> root is opened by the writer's ``start``
+        (trace-events.md §"Recorder Integration — Starting a Recording");
+        the program's own <__main__> frame sits beneath it.
+        """
         calls = hcr_trace_json["calls"]
-        assert len(calls) == 39, (
-            f"Expected 39 total calls, got {len(calls)}"
+        assert len(calls) == 40, (
+            f"Expected 40 total calls, got {len(calls)}"
+        )
+        roots = [c for c in calls if c["depth"] == 0]
+        assert [c["function"] for c in roots] == ["<toplevel>"], (
+            f"Expected exactly one depth-0 frame, <toplevel>, got {roots}"
         )
 
     def test_call_ordering(self, hcr_trace_json: dict) -> None:
