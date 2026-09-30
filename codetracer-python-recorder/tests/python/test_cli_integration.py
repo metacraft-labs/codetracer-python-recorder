@@ -576,10 +576,11 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
         ``make_greeting``'s ``target_name`` parameter decodes back to
         ``ValueRecord::String { text: "world" }`` and its return value
         is ``ValueRecord::String { text: "hello, world" }``.
-      - **Function / path / counts / call-sequence anchors** — 10 steps,
-        3 calls, 1 io; calls are ``<__main__> → main → make_greeting``;
-        path table contains the canonical fixture; function table
-        contains ``<__main__>``, ``main`` and ``make_greeting``.
+      - **Function / path / counts / call-sequence anchors** — 12 steps,
+        4 calls, 1 io; calls are
+        ``<toplevel> → <__main__> → main → make_greeting``; path table
+        contains the canonical fixture; function table contains
+        ``<toplevel>``, ``<__main__>``, ``main`` and ``make_greeting``.
       - **IO event** — a single ``ioStdout`` write of ``"hello, world\\n"``.
 
     The canonical fixture below exercises:
@@ -651,8 +652,15 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     bundle = json.loads(proc.stdout)
 
     # ------------------------------------------------------------------
-    # Function table — ``<__main__>``, ``main`` and ``make_greeting``.
+    # Function table — ``<toplevel>``, ``<__main__>``, ``main`` and
+    # ``make_greeting``.
     # ------------------------------------------------------------------
+    # ``<toplevel>`` is the call tree's root, which the writer's
+    # ``start`` registers first (trace-format spec, trace-events.md
+    # §"Recorder Integration — Starting a Recording").
+    assert bundle["functions"][0] == "<toplevel>", (
+        f"<toplevel> must be function 0: {bundle['functions']!r}"
+    )
     # The Python recorder names the synthetic top-level frame
     # ``<__main__>`` (mirrors JS's ``<module>``).  ``ends_with`` checks
     # stay tolerant of any future namespacing prefix the recorder might
@@ -696,37 +704,36 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     #     coincides with the module's first line so only the main and
     #     make_greeting entry steps are net-new under ct-print's logical
     #     step count.)
-    #   - 3 call entries (<__main__> wrapper, main, make_greeting)
+    #   - 4 call entries: the <toplevel> root that the writer's
+    #     ``start`` opens, then the module's own <__main__> frame, main
+    #     and make_greeting. <__main__> is the module code object
+    #     executing, a real Python frame, so it sits at depth 1 under the
+    #     root rather than replacing it (trace-events.md §"<toplevel> is
+    #     the call tree's root and its id is fixed").
     #   - 1 io event (the ``print(result_text)`` write to stdout)
     # If these change, that's a real regression to investigate, not a
     # flake — pin the values strictly.
     assert bundle["counts"]["steps"] == 12, (
         f"expected 12 steps, got {bundle['counts']['steps']}; full counts: {bundle['counts']!r}"
     )
-    assert bundle["counts"]["calls"] == 3, (
-        f"expected 3 calls, got {bundle['counts']['calls']}; full counts: {bundle['counts']!r}"
+    assert bundle["counts"]["calls"] == 4, (
+        f"expected 4 calls, got {bundle['counts']['calls']}; full counts: {bundle['counts']!r}"
     )
     assert bundle["counts"]["io_events"] == 1, (
         f"expected 1 io_event, got {bundle['counts']['io_events']}; full counts: {bundle['counts']!r}"
     )
 
     # ------------------------------------------------------------------
-    # Call sequence — <__main__> → main → make_greeting.
+    # Call sequence — <toplevel> → <__main__> → main → make_greeting,
+    # one frame per depth.
     # ------------------------------------------------------------------
-    call_sequence = [
-        e["function"] for e in bundle["events"] if e["kind"] == "call_entry"
-    ]
-    assert len(call_sequence) == 3, (
-        f"expected 3 call_entry events, got {len(call_sequence)}: {call_sequence!r}"
+    call_entries = [e for e in bundle["events"] if e["kind"] == "call_entry"]
+    call_sequence = [e["function"] for e in call_entries]
+    assert call_sequence == ["<toplevel>", "<__main__>", "main", "make_greeting"], (
+        f"unexpected call_entry sequence: {call_sequence!r}"
     )
-    assert call_sequence[0].endswith("<__main__>"), (
-        f"first call must enter <__main__>, got {call_sequence[0]!r}"
-    )
-    assert call_sequence[1].endswith("main"), (
-        f"second call must enter main, got {call_sequence[1]!r}"
-    )
-    assert call_sequence[2].endswith("make_greeting"), (
-        f"third call must enter make_greeting, got {call_sequence[2]!r}"
+    assert [e["depth"] for e in call_entries] == [0, 1, 2, 3], (
+        f"unexpected call depths: {[(e['function'], e['depth']) for e in call_entries]!r}"
     )
 
     # ------------------------------------------------------------------
