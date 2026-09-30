@@ -4,7 +4,10 @@ on:
   push:
     branches: [main, dev, stable]
   pull_request:
-    branches: ['**']
+    # Every base branch except `agents`, which runs no CI (branching policy,
+    # 2026-09-29). Not only the mainlines: stacked PRs target other feature
+    # branches and need CI too (8761338).
+    branches-ignore: [agents]
     types: [opened, synchronize, reopened, ready_for_review]
 
 # Cancel superseded PR runs only: a new push to a PR makes its previous run
