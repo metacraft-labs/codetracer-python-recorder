@@ -1,7 +1,25 @@
 [project]
 name = "codetracer-python-recorders"
 version = "0.2.0"
-requires-python = ">=3.8"
+
+# This is the uv WORKSPACE root. Its `requires-python` governs the environment
+# `uv sync` builds, and that environment installs every member listed under
+# [tool.uv.workspace] plus the [dependency-groups] below — including
+# `codetracer-python-recorder`, which is a PyO3 extension module and is
+# therefore ABI-locked to a CPython minor version. So the workspace root cannot
+# honestly claim a wider window than its narrowest member.
+#
+# It said ">=3.8". That was false in both directions: `uv sync -p 3.8` was
+# accepted here and then failed resolving the compiled member, and anything
+# reading this file to decide which interpreters are supported was told four
+# minor versions that do not work. It now matches
+# codetracer-python-recorder/pyproject.toml exactly.
+#
+# codetracer-pure-python-recorder/pyproject.toml keeps its own, wider window:
+# it is pure Python with no compiled part, so it genuinely runs on more
+# interpreters than the workspace as a whole does. The two are different
+# claims and are stated separately rather than averaged.
+requires-python = ">=3.12,<3.14"
 dependencies = []
 
 [tool.uv]

@@ -1,0 +1,124 @@
+# =============================================================================
+# Recorder -> launcher end-to-end compatibility gate (THE RECORDER EDGE).
+#
+# THIN CALLER.  All of the work -- building the real launcher, the real
+# codetracer desktop core and THIS recorder, staging the codetracer-desktop
+# component bundle, running `ct record` through the LAUNCHER binary and decoding
+# the produced trace with `ct-print` -- lives in one reusable workflow so the
+# assertions can never drift between the three trigger directions:
+#
+#   metacraft-labs/codetracer/.github/workflows/launcher-recorder-e2e.yml
+#
+# Design: codetracer-specs/Testing/Launcher-Recorder-Compatibility-Tests.md
+#         section 6 "CI wiring: three trigger edges, one reusable workflow".
+# Milestone: LRC-3.
+#
+# WHAT THIS EDGE PINS.  This repository is the one under test, so it is pinned
+# to `github.sha` -- and this caller does not have to say so.  The reusable
+# workflow makes the TRIGGERING repo its primary `actions/checkout` at
+# `${{ github.sha }}`, and inside a reusable workflow that context is the
+# caller's.  The launcher, the desktop core and codetracer-trace-format-nim are
+# cloned beside it at the revisions the per-commit WORKSPACE LOCK pins for this
+# commit, per metacraft-dev-guidelines/policies/ci-shared-dev-env.md section
+# 3.2.  Until milestone LRC-6 this caller passed `recorder-ref:
+# ${{ github.sha }}` and the other three repos were taken at their mainline
+# branch TIP, which pins nothing: the same commit of this repo built against a
+# different launcher on every re-run, and `clone-siblings` reported it with a
+# `::warning:: ... not reproducible` per entry.
+#
+# LOCK STATUS: RESOLVES TODAY, HAS NEVER RUN.  A lock-resolved sibling needs a
+# workspace lock keyed by THIS repo's commit, and one now exists.  On
+# 2026-08-22 a workspace lock was published for each of this gate's five
+# trigger repos to metacraft-labs/metacraft-manifests@latest (commit
+# 5de2a3ae), among them one keyed by this repo's `dev` HEAD at the time of
+# writing:
+#
+#   locks/codetracer/codetracer-python-recorder/
+#     46ebb4f205e233eee46640c474938a07689a0224.toml
+#
+# That was verified against a FRESH clone of the published manifest -- not the
+# working checkout that produced the lock -- using exactly the invocation
+# `clone-siblings` makes: `resolve-sibling-rev.sh --repo
+# codetracer-python-recorder --sibling <NAME> --sha 46ebb4f2 --no-walk`.
+# Every sibling resolves at exit 0 with a 40-hex revision.
+#
+# THAT IS THE ONLY THING THAT CHANGED.  This gate has still NEVER executed in
+# CI -- not once, on any of its five edges -- so nothing about it is
+# CI-verified and CI-green is not claimed here.  It remains blocked on
+# self-hosted runner capacity.
+#
+# AND IT IS ONE PUSH AWAY FROM RED AGAIN.  A lock answers for an EXACT commit.
+# `clone-siblings` looks one up with `--no-walk` for `github.sha` (plus
+# `github.event.before`, on `push` events only), and for a `pull_request` it
+# probes the PR BASE sha alone.  So the lock named above answers for that
+# commit and for no other -- including the commit that carries this comment.
+# Push to this repo without publishing a lock for the new tip and this edge is
+# straight back to failing in `Setup dev env` with "No workspace lock for
+# codetracer-python-recorder": one push of grace on a `push` event, because
+# the previous tip is probed as a fallback, and none at all on a
+# `pull_request` once the base branch moves past the locked commit.  That is
+# inherent to per-commit pinning rather than a defect, and it recurs on every
+# mainline commit.
+#
+# THE REMEDY IS NOT IN THIS REPOSITORY, and that matters when this job goes
+# red on a pull request.  Clearing it takes `repro workspace lock
+# --trigger-repo=codetracer-python-recorder` in a workspace that contains the
+# commit under test, plus a push of the resulting lock to
+# metacraft-labs/metacraft-manifests -- not a change here.  `repro check
+# --mode=pre-push` does exactly that on its own, but ONLY in a workspace whose
+# `.repro/manifests` is a real git CHECKOUT of the manifest repo; where it is
+# a plain directory the lock is generated and then silently dropped with `lock
+# publish skipped: ... is not a git checkout`, which is precisely what had
+# left every edge of this gate unlocked before 2026-08-22.  Do NOT paper over
+# a missing lock by reintroducing a `<name>=<ref>` sibling override; that is
+# the policy deviation this wiring exists to remove.
+#
+# WHAT IT ASSERTS ABOUT THIS REPO.  Everything comes from this repo's own
+# checked-in contract fixture, `cross-repo/launcher-compat.yml`: the sample
+# programs, the extensions the launcher must route, the recorder flags the
+# desktop core must pass, and the expected decoded-trace shape.  If this
+# recorder changes its console-script name, its output layout, its `--version`
+# banner or the extensions it serves, that file has to change in the SAME
+# commit -- the driver refuses to run against a fixture that disagrees with it,
+# and rejects an INCOMPLETE fixture before anything is built.
+#
+# WHY IT IS NOT `launcher-integration.yml`.  That workflow is retained as a fast
+# pre-check, but it asserts only that `ct --version` matches
+# `^ct [0-9]+\.[0-9]+` and never runs `ct record`, so it is NON-AUTHORITATIVE
+# for the record contract.  This gate is the authority.
+#
+# NO PATH FILTERS, deliberately: LRC-3's verification is precisely that a
+# trivial commit triggers the edge.
+# =============================================================================
+
+name: launcher-recorder-e2e
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded PR runs only: a new push to a PR makes its previous run
+# moot, and stale runs otherwise hold scarce self-hosted runners. Every other
+# event (mainline push, merge_group, tag, dispatch, schedule) gets a group
+# unique to its run_id, so it is never cancelled and never cancels anything.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: python
+    uses: metacraft-labs/codetracer/.github/workflows/launcher-recorder-e2e.yml@dev
+    with:
+      edge: codetracer-python-recorder@${{ github.sha }} -> launcher
+      recorder-repo: codetracer-python-recorder
+      recorder-lang: python
+    # `inherit` rather than a named list: the CI Token Provider App ID is held
+    # as a repository SECRET here and as a repository VARIABLE elsewhere in the
+    # org, and the reusable workflow accepts either.
+    secrets: inherit

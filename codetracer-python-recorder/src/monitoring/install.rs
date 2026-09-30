@@ -4,11 +4,11 @@ use crate::code_object::CodeObjectRegistry;
 use crate::ffi;
 use codetracer_trace_writer_nim::SpanRecord;
 use log::warn;
-use std::time::{Duration, Instant};
 use pyo3::{prelude::*, types::PyModule};
 use recorder_errors::{usage, ErrorCode};
+use std::time::{Duration, Instant};
 
-use super::api::Tracer;
+use super::api::{CorrelationMarker, Tracer};
 use super::callbacks::{self, Global, GLOBAL};
 use super::{acquire_tool_id, free_tool_id, monitoring_events, set_events, NO_EVENTS};
 
@@ -154,7 +154,10 @@ fn lock_global_without_deadlock<T>(
 ///
 /// Safe to call from any thread; see [`lock_global_without_deadlock`] for the
 /// concurrency contract, which is not obvious and was not free.
-pub fn register_span_on_installed_tracer(py: Python<'_>, span: &SpanRecord) -> Result<bool, String> {
+pub fn register_span_on_installed_tracer(
+    py: Python<'_>,
+    span: &SpanRecord,
+) -> Result<bool, String> {
     lock_global_without_deadlock(py, |guard| match guard.as_mut() {
         Some(global) => global.tracer.register_span(span).map(|()| true),
         None => Ok(false),
@@ -166,9 +169,71 @@ pub fn register_span_on_installed_tracer(py: Python<'_>, span: &SpanRecord) -> R
 /// [`register_span_on_installed_tracer`].
 pub fn installed_tracer_next_step_index(py: Python<'_>) -> Option<u64> {
     lock_global_without_deadlock(py, |guard| {
-        guard.as_ref().and_then(|global| global.tracer.next_step_index())
+        guard
+            .as_ref()
+            .and_then(|global| global.tracer.next_step_index())
     })
     .unwrap_or(None)
+}
+
+/// Intern a correlation-marker boundary label on the installed tracer.
+///
+/// `Ok(None)` when no tracer is installed: a library that declares its
+/// boundaries unconditionally is not an error in a process nobody is recording,
+/// it just has nowhere to intern them.  Callers must distinguish that from
+/// marker id `0`.
+///
+/// Takes the label as `&str`, already rendered by the host at the PyO3
+/// boundary, so no host code can run while the lock below is held — see
+/// [`lock_global_without_deadlock`] and contract §11a.5.
+pub fn ensure_marker_id_on_installed_tracer(
+    py: Python<'_>,
+    label: &str,
+) -> Result<Option<u64>, String> {
+    lock_global_without_deadlock(py, |guard| match guard.as_mut() {
+        Some(global) => global.tracer.ensure_marker_id(label).map(Some),
+        None => Ok(None),
+    })?
+}
+
+/// Record one boundary crossing on the installed tracer.
+///
+/// `Ok(false)` when no tracer is installed; `Err` when one IS installed and
+/// refused the marker, so a recorded run never loses a boundary crossing
+/// silently.  Same concurrency contract as
+/// [`register_span_on_installed_tracer`]: every string in `marker` was rendered
+/// before this call, and the lock is held only for the writer call itself.
+pub fn mark_correlation_on_installed_tracer(
+    py: Python<'_>,
+    marker: &CorrelationMarker<'_>,
+) -> Result<bool, String> {
+    lock_global_without_deadlock(py, |guard| match guard.as_mut() {
+        Some(global) => global.tracer.mark_correlation(marker).map(|()| true),
+        None => Ok(false),
+    })?
+}
+
+/// Declare distributed-trace span coverage on the installed tracer.
+/// `Ok(false)` when no tracer is installed.
+pub fn mark_span_coverage_on_installed_tracer(
+    py: Python<'_>,
+    trace_id_hex: &str,
+    span_id_hex: &str,
+    wall_time_unix_ns: u64,
+    monotonic_time_ns: u64,
+) -> Result<bool, String> {
+    lock_global_without_deadlock(py, |guard| match guard.as_mut() {
+        Some(global) => global
+            .tracer
+            .mark_span_coverage(
+                trace_id_hex,
+                span_id_hex,
+                wall_time_unix_ns,
+                monotonic_time_ns,
+            )
+            .map(|()| true),
+        None => Ok(false),
+    })?
 }
 
 /// Provide the session exit status to the active tracer if one is installed.

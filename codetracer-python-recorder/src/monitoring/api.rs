@@ -9,6 +9,48 @@ use pyo3::types::PyAny;
 
 use super::{CallbackOutcome, CallbackResult, EventSet, MonitoringEvents, NO_EVENTS};
 
+/// One correlation-marker declaration, on its way to the shared writer library.
+///
+/// A struct rather than eight positional parameters because this shape travels
+/// through four layers (`#[pyfunction]` → `install` → [`Tracer`] → writer) and
+/// a positional list that long silently tolerates two same-typed fields being
+/// swapped.  Every field borrows: the strings were rendered by the host at the
+/// PyO3 boundary, before any lock was taken, and are forwarded to the C ABI as
+/// pointer + length without a copy or a NUL terminator.
+///
+/// Spec: `codetracer-specs/Testing/CTFS-Correlation-Marker-Contract.md` §11a.5.
+///
+/// There is deliberately NO step or geid field: a marker attaches to the
+/// enclosing step and mints none of its own (§11a.6).
+#[derive(Debug, Clone, Copy)]
+pub struct CorrelationMarker<'a> {
+    /// `Some` when the caller hoisted [`Tracer::ensure_marker_id`] out of its
+    /// hot path — the primary path.  `None` selects the string-label wrapper,
+    /// which interns inside the shared library so the ~20 recorders do not each
+    /// grow a label cache that drifts (§11a.4).
+    pub marker_id: Option<u64>,
+    /// The pairing domain.  Two markers sharing it with opposing directions
+    /// form a pair; it is also the TEXT the debugger displays, which is why it
+    /// is passed alongside `marker_id` rather than instead of it.
+    pub boundary: &'a str,
+    /// `"send"` or `"recv"`.  The shared library normalises anything else to
+    /// `"send"`: a marker with no side is unpairable, which is worse than one
+    /// that picked a side.
+    pub direction: &'a str,
+    /// The already-rendered match value — what pairs the two sides.
+    pub key_value: &'a str,
+    /// An already-rendered payload shown alongside the key.  `""` for none.
+    pub show_value: &'a str,
+    /// Free-text description.  `""` for none.
+    pub description: &'a str,
+    /// The name `key_value` was read under.  `""` takes the library default.
+    pub key_text: &'a str,
+    /// The name `show_value` was read under.  `""` takes the library default.
+    /// Load-bearing: an origin chain resumes its walk on this name in the
+    /// sending recording.
+    pub show_text: &'a str,
+}
+
 /// Trait implemented by tracing backends.
 ///
 /// Each method corresponds to an event from `sys.monitoring`. Default
@@ -258,5 +300,41 @@ pub trait Tracer: Send + Any {
     /// distinguish from step 0.
     fn next_step_index(&self) -> Option<u64> {
         None
+    }
+
+    /// Intern a correlation-marker boundary label and return its id.
+    ///
+    /// The primary marker operation, mirroring path interning: a caller hoists
+    /// it out of its hot path so [`Tracer::mark_correlation`] does no string
+    /// lookup per crossing.
+    ///
+    /// The default ERRORS rather than returning a placeholder id.  Every other
+    /// marker call keys on this id, so a backend that cannot intern cannot
+    /// write a findable marker — and handing back an id that indexes nothing
+    /// would produce markers that are *invisible* rather than broken, which is
+    /// the exact failure this design exists to remove.
+    fn ensure_marker_id(&mut self, _label: &str) -> Result<u64, String> {
+        Err("the installed tracer does not support correlation markers".to_string())
+    }
+
+    /// Record one boundary crossing.  Mints no step — the marker attaches to
+    /// the enclosing one (contract §11a.6).
+    ///
+    /// Errors by default, for the reason above: a caller told a boundary was
+    /// recorded must not have been told so by a tracer that cannot record one.
+    fn mark_correlation(&mut self, _marker: &CorrelationMarker<'_>) -> Result<(), String> {
+        Err("the installed tracer does not support correlation markers".to_string())
+    }
+
+    /// Declare that this recording covers a distributed-trace span, from the
+    /// hex ids an OTel API hands out.  Errors by default, as above.
+    fn mark_span_coverage(
+        &mut self,
+        _trace_id_hex: &str,
+        _span_id_hex: &str,
+        _wall_time_unix_ns: u64,
+        _monotonic_time_ns: u64,
+    ) -> Result<(), String> {
+        Err("the installed tracer does not support correlation markers".to_string())
     }
 }

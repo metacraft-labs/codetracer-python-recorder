@@ -9,11 +9,39 @@ description = "Pure-Python reference implementation of the CodeTracer Python rec
 authors = [{name = "Metacraft Labs Ltd"}]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.8"
+
+# This distribution has no compiled part, so unlike codetracer-python-recorder
+# it is NOT ABI-locked and genuinely does support a wider range of interpreters
+# than the workspace as a whole. The range it claimed, however, was not the
+# range it has.
+#
+# src/trace.py:238 is
+#
+#     def main(argv: List[str] | None = None) -> None:
+#
+# a PEP 604 union over a typing generic, in a module with no
+# `from __future__ import annotations`. Annotations on a `def` are evaluated
+# at definition time, and `_GenericAlias.__or__` did not exist before 3.10, so
+# on 3.8 and 3.9 the module does not even import. Measured, not inferred:
+#
+#     Python 3.9.20  import trace -> TypeError: unsupported operand type(s)
+#                                    for |: '_GenericAlias' and 'NoneType'
+#                                    (trace.py, line 238)
+#     Python 3.10.15 import trace -> ok
+#     Python 3.12.7  import trace -> ok
+#
+# So ">=3.8" named two interpreters on which this package is completely
+# non-functional. >=3.10 is the floor that is actually true. There is no upper
+# bound because there is no compiled artifact to bound.
+requires-python = ">=3.10"
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 [tool.setuptools]
