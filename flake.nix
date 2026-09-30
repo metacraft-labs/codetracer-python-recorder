@@ -304,6 +304,38 @@
               export CODETRACER_PYTHON_ABI_TAG="${python.abiTag}"
               export CODETRACER_PYTHON_CMD="${declaredPython}/bin/python3"
 
+              # `cargo <subcommand>` looks for `cargo-<subcommand>` in
+              # `$CARGO_HOME/bin` BEFORE it searches PATH. On any machine with
+              # rustup -- including the self-hosted macOS runner -- that
+              # directory holds rustup's proxies, so `cargo fmt` / `cargo
+              # clippy` run rustup's proxies instead of the rustfmt and clippy
+              # above and fail with "'cargo-fmt' is not installed for the
+              # toolchain" (or run a different release than this rustc).
+              #
+              # The shell therefore gets its own CARGO_HOME with no `bin/`, so
+              # subcommand lookup falls through to PATH. `registry/` and `git/`
+              # are symlinks to the real CARGO_HOME, and so are its config and
+              # credentials when present: the download cache is shared, and
+              # only the proxy directory is left behind.
+              _ct_real_cargo_home="''${CARGO_HOME:-$HOME/.cargo}"
+              _ct_cargo_home="''${XDG_CACHE_HOME:-$HOME/.cache}/codetracer-python-recorder/cargo-home"
+              if [ "$_ct_real_cargo_home" != "$_ct_cargo_home" ]; then
+                mkdir -p "$_ct_cargo_home" \
+                  "$_ct_real_cargo_home/registry" "$_ct_real_cargo_home/git"
+                # Re-pointed on every entry, so a changed CARGO_HOME is followed
+                # rather than left sharing the previous one's cache. Only a link
+                # is ever replaced; a real file placed here is left alone.
+                for _ct_entry in registry git config.toml credentials.toml; do
+                  if [ -e "$_ct_real_cargo_home/$_ct_entry" ] &&
+                    { [ -L "$_ct_cargo_home/$_ct_entry" ] ||
+                      [ ! -e "$_ct_cargo_home/$_ct_entry" ]; }; then
+                    ln -sfn "$_ct_real_cargo_home/$_ct_entry" "$_ct_cargo_home/$_ct_entry"
+                  fi
+                done
+                export CARGO_HOME="$_ct_cargo_home"
+              fi
+              unset _ct_real_cargo_home _ct_cargo_home _ct_entry
+
               ${preCommit.shellHook}
             '';
           };
