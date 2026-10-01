@@ -1649,14 +1649,49 @@ initializer("omega")
         });
     }
 
-    // FIXME(follow-up #254 phase 2): rewrite using `MetaDatReader` once the
-    // crate exposes filter-provenance accessors.  The original assertion
-    // read the trace_filter chain from the `trace_metadata.json` sidecar,
-    // which the v3 CTFS rollout retired.  Filter provenance is still
-    // recorded — it just lives inside `meta.dat` now (see TF-M7 spec § 7).
-    #[ignore]
+    /// Decode the trace-filter provenance block of a `meta.dat` buffer
+    /// (`internal-files.md` §"Flag bit 3 -- Trace filter provenance"):
+    /// `None` when flag bit 3 is clear, else the `(path, sha256 hex)`
+    /// entries in composition order. The recorder sets none of flag bits
+    /// 0-2, so the block is the first thing after `recorder_id`.
+    fn decode_filter_provenance(meta_dat: &[u8]) -> Option<Vec<(String, String)>> {
+        const FLAG_HAS_TRACE_FILTER_PROVENANCE: u16 = 0x08;
+        let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(meta_dat)
+            .unwrap_or_else(|err| panic!("meta.dat does not decode: {err}"));
+        assert_eq!(meta.flags & 0x07, 0, "unexpected meta.dat blocks before provenance");
+        if meta.flags & FLAG_HAS_TRACE_FILTER_PROVENANCE == 0 {
+            return None;
+        }
+        fn varint(data: &[u8], pos: &mut usize) -> u64 {
+            let mut value = 0u64;
+            let mut shift = 0;
+            loop {
+                let byte = data[*pos];
+                *pos += 1;
+                value |= u64::from(byte & 0x7f) << shift;
+                if byte & 0x80 == 0 {
+                    return value;
+                }
+                shift += 7;
+            }
+        }
+        let data = &meta.trailing;
+        let mut pos = 0usize;
+        let count = varint(data, &mut pos);
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let len = varint(data, &mut pos) as usize;
+            let path = String::from_utf8(data[pos..pos + len].to_vec()).expect("utf-8 path");
+            pos += len;
+            let sha: String = data[pos..pos + 32].iter().map(|b| format!("{b:02x}")).collect();
+            pos += 32;
+            entries.push((path, sha));
+        }
+        Some(entries)
+    }
+
     #[test]
-    fn trace_filter_metadata_includes_summary() {
+    fn trace_filter_provenance_is_recorded_in_meta_dat() {
         Python::with_gil(|py| {
             reset_policy(py);
             ensure_test_module(py);
@@ -1683,46 +1718,31 @@ initializer("omega")
                 value_default = "allow"
 
                 [[scope.rules.value_patterns]]
-                selector = "arg:password"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
                 selector = "local:password"
                 action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "local:secret"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "global:shared_secret"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "ret:literal:app.sec.sensitive"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "local:internal"
-                action = "drop"
                 "#,
             );
-            let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
+            let config = TraceFilterConfig::from_paths(&[filter_path.clone()]).expect("load filter");
             let engine = Arc::new(TraceFilterEngine::new(config));
+            let expected: Vec<(String, String)> = engine
+                .summary()
+                .entries
+                .iter()
+                .map(|entry| (entry.path.to_string_lossy().into_owned(), entry.sha256.clone()))
+                .collect();
+            assert!(
+                expected.iter().any(|(path, _)| Path::new(path) == filter_path),
+                "the filter chain should name {}: {expected:?}",
+                filter_path.display()
+            );
 
             let app_dir = project_root.join("app");
             fs::create_dir_all(&app_dir).expect("create app dir");
             let script_path = app_dir.join("sec.py");
             let body = r#"
-shared_secret = "initial"
-
 def sensitive(password):
     secret = "token"
-    internal = "hidden"
-    public = "visible"
-    globals()['shared_secret'] = password
     snapshot()
-    emit_return(password)
     return password
 
 sensitive("s3cr3t")
@@ -1731,13 +1751,13 @@ sensitive("s3cr3t")
             fs::write(&script_path, script).expect("write script");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
 
             let program = script_path.to_string_lossy().into_owned();
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::Ctfs,
                 None,
                 Some(engine),
                 false,
@@ -1759,12 +1779,19 @@ sensitive("s3cr3t")
 
             tracer.finish(py).expect("finish tracer");
 
-            // Filter chain provenance is now embedded in `meta.dat` inside
-            // the CTFS container (TF-M7 spec § 7).  This test is gated with
-            // `#[ignore]` above until the `MetaDatReader` exposes filter-
-            // provenance accessors; the original assertions read the
-            // retired `trace_metadata.json` sidecar.
-            let _ = outputs;
+            // The Nim writer names the container after the recorded program.
+            let containers: Vec<_> = fs::read_dir(outputs_dir.path())
+                .expect("list outputs dir")
+                .map(|entry| entry.expect("dir entry").path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+                .collect();
+            assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+            let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
+            let meta_dat = reader.read_file("meta.dat").expect("read meta.dat");
+            let recorded = decode_filter_provenance(&meta_dat)
+                .expect("meta.dat flag bit 3 (trace-filter provenance) is clear");
+            assert_eq!(recorded, expected, "meta.dat filter provenance");
         });
     }
 
