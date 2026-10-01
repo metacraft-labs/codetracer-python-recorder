@@ -472,37 +472,19 @@ def test_middleware_without_a_recording_writes_nothing(
 
 
 # ---------------------------------------------------------------------------
-# Threaded WSGI serving — a pre-existing recorder defect, kept executable
+# Threaded WSGI serving
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PRE-EXISTING RECORDER DEFECT, not a span bug: the recorder cannot trace "
-        "a multi-threaded program while several threads are active.  Every "
-        "sys.monitoring callback in src/monitoring/callbacks.rs takes the GLOBAL "
-        "tracer mutex WHILE HOLDING THE GIL, so as soon as one callback is "
-        "running and another thread hits an event, the second thread blocks on "
-        "the mutex without releasing the GIL and the first can never finish.  "
-        "Reproduced with the span middleware entirely removed (a plain Flask app "
-        "on a thread-per-request wsgiref server, recorder on, four concurrent "
-        "requests: all four time out), so fixing it means restructuring the "
-        "recorder's callback locking — out of scope for RS-M5.  When that lands, "
-        "this test should pass and strict xfail will say so by failing."
-    ),
-)
 def test_threaded_wsgi_requests_land_in_span_stream(tmp_path: Path) -> None:
     """Flask on a thread-per-request server, four requests at once.
 
-    This is how Flask and Django are actually deployed, so it is worth having an
-    executable statement of what happens today.  The span entry points are ready
-    for it — they take the tracer lock only while holding the GIL and release the
-    GIL while waiting for it, which is why a SINGLE request on a threaded server
-    works — but the recorder's own callbacks are not, hence the xfail above.
+    This is how Flask and Django are actually deployed.  Every request runs on
+    its own worker thread while the recorder's monitoring callbacks fire on all
+    of them, so it also exercises the tracer lock's hand-off between threads
+    (``test_threaded_recording.py`` pins that hand-off deterministically).
 
-    The waits are deliberately short: this test is expected to fail, and it
-    should do so in seconds rather than tie up CI for minutes.
+    The waits are short: a hang shows up in seconds rather than tying up CI.
     """
     _require("flask", "Flask")
     trace_dir = tmp_path / "flask-threaded-session"

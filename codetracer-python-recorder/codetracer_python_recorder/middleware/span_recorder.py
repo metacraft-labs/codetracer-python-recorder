@@ -29,18 +29,14 @@ rather than pretending otherwise: an overlapping span is marked
 ``concurrent_with_siblings`` and is not marked ``contiguous_on_one_thread``
 (Trace-Spans.md § 2.4), and it carries the OS thread id it ran on.
 
-## Known limitation: threaded WSGI servers
+## Threaded WSGI servers
 
 A thread-per-request server (Flask/Django behind gunicorn threads, or
-``wsgiref`` with ``ThreadingMixIn``) does not work **under the recorder** today,
-and not because of anything here: every ``sys.monitoring`` callback in the
-recorder takes its global tracer lock while holding the GIL, so two threads
-executing traced code at once deadlock.  Reproduced with this middleware removed
-entirely, and pinned by the strict-xfail
-``test_threaded_wsgi_requests_land_in_span_stream``.  Single-threaded serving —
-what every demo and integration test here uses — is unaffected, and the span
-entry points themselves are already thread-safe (they hold the tracer lock only
-while holding the GIL, and release the GIL while waiting for it).
+``wsgiref`` with ``ThreadingMixIn``) runs the recorder's monitoring callbacks on
+several threads at once.  The span entry points take the same tracer lock those
+callbacks do, the same way: only while holding the GIL, and with the GIL
+released while they wait for it.  Pinned by
+``test_threaded_wsgi_requests_land_in_span_stream``.
 
 ## No sidecar (RS-M12)
 

@@ -30,11 +30,10 @@ Five details matter:
    printed once the socket is listening, so callers wait on that line instead of
    sleeping — the socket is bound *before* the recording starts, so a client that
    connects immediately waits in the backlog and is still recorded.
-5. **No threads.**  Both serve loops run on the main thread, because the recorder
-   cannot reliably trace a program that starts a thread (see
-   ``test_threaded_wsgi_requests_land_in_span_stream``): a serving thread created
-   after the recording started hung this harness at ``Thread.start()`` before it
-   served anything.  It also makes the recorded step ranges deterministic.
+5. **No threads by default.**  Both serve loops run on the main thread, which
+   makes the recorded step ranges deterministic: requests are handled one at a
+   time, so their spans never overlap.  ``--threaded`` opts into a
+   thread-per-request WSGI server (``test_threaded_wsgi_requests_land_in_span_stream``).
 """
 
 from __future__ import annotations
@@ -89,8 +88,7 @@ def _build_wsgi_server(app, host: str, port: int, threaded: bool = False):
     Single-threaded by default: requests are handled one at a time, so a
     sequential client sees strictly disjoint span step ranges and the demo's step
     ranges mean what they look like.  ``threaded`` switches to a thread-per-request
-    server — how Flask and Django are actually deployed, and a configuration the
-    recorder cannot trace today (see
+    server — how Flask and Django are actually deployed (see
     ``test_threaded_wsgi_requests_land_in_span_stream``).
     """
     from socketserver import ThreadingMixIn
@@ -114,13 +112,10 @@ def _build_wsgi_server(app, host: str, port: int, threaded: bool = False):
 def _serve_wsgi(httpd, stop: threading.Event) -> None:
     """Serve on the MAIN thread until ``stop`` is set.
 
-    Deliberately not ``serve_forever`` on a helper thread: that needs a thread
-    created *while tracing is active*, and the recorder cannot reliably trace a
-    program that starts threads (the same defect
-    ``test_threaded_wsgi_requests_land_in_span_stream`` documents — it hung this
-    harness at ``Thread.start()`` before serving a single request).
-    ``handle_request`` with a timeout gives the same behaviour with no threads
-    at all: one request at a time, and the stop flag checked between requests.
+    Deliberately not ``serve_forever`` on a helper thread: ``handle_request``
+    with a timeout gives the same behaviour with no extra thread in the
+    recording, so the main thread's step timeline is the request handling and
+    nothing else, and the stop flag is checked between requests.
     """
     try:
         while not stop.is_set():
