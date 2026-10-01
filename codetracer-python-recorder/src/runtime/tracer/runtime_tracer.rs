@@ -261,7 +261,7 @@ impl RuntimeTracer {
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
-            .begin(&mut *self.writer, outputs, start_line)
+            .begin(&mut *self.writer, outputs, start_line, &self.filter)
             .map_err(ffi::map_recorder_error)?;
         Ok(())
     }

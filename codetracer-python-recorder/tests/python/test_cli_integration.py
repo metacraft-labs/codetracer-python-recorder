@@ -581,7 +581,7 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
         ``<toplevel> → <__main__> → main → make_greeting``; path table
         contains the canonical fixture; function table contains
         ``<toplevel>``, ``<__main__>``, ``main`` and ``make_greeting``.
-      - **IO event** — a single ``ioStdout`` write of ``"hello, world\\n"``.
+      - **IO event** — a single stdout ``Write`` of ``"hello, world\\n"``.
 
     The canonical fixture below exercises:
 
@@ -920,8 +920,9 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
         f"expected exactly 1 io event, got {len(io_events)}: {io_events!r}"
     )
     io = io_events[0]
-    assert io["io_kind"] == "ioStdout", (
-        f"io event should be ioStdout, got {io['io_kind']!r}"
+    # ``io_kind`` is the exact ``EventLogKind`` name; stdout is ``Write``.
+    assert io["io_kind"] == "Write", (
+        f"io event should be Write (stdout), got {io['io_kind']!r}"
     )
     # ``print`` appends a trailing newline; the recorder captures the
     # raw bytes written to stdout, so the newline must be present.

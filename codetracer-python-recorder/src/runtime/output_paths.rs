@@ -67,11 +67,18 @@ impl TraceOutputPaths {
     /// `decodeGlobalPositionIndex` round-trip.  Registering the path
     /// here, with the line lengths, before `start` is the cleanest
     /// fix.
+    ///
+    /// `before_first_record` runs after the writer is opened and before
+    /// `start`, the trace's first record. The CTFS writer commits
+    /// `meta.dat` at the first record and refuses every `meta.dat`-
+    /// affecting call after it (`ctfs-container.md` §6 "Durability"), so
+    /// filter provenance and any other `meta.dat` field belong there.
     pub fn configure_writer(
         &self,
         writer: &mut dyn TraceWriter,
         start_path: &Path,
         start_line: u32,
+        before_first_record: impl FnOnce(&mut dyn TraceWriter) -> Result<()>,
     ) -> Result<()> {
         TraceWriter::begin_writing_trace_events(writer, self.events()).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to begin trace events")
@@ -117,6 +124,7 @@ impl TraceOutputPaths {
                 }
             }
         }
+        before_first_record(writer)?;
         TraceWriter::start(writer, start_path, Line(start_line as i64));
         Ok(())
     }
@@ -266,7 +274,7 @@ mod tests {
         let mut writer = NonStreamingTraceWriter::new("program.py", &[]);
 
         paths
-            .configure_writer(&mut writer, &start_path, 123)
+            .configure_writer(&mut writer, &start_path, 123, |_| Ok(()))
             .expect("configure writer");
 
         let recorded_path = writer.events.iter().find_map(|event| match event {
