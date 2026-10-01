@@ -72,6 +72,13 @@ package codetracer_python_recorder:
   uses:
     "rustc >=1.85"
     "cargo >=1.85"
+    # C compiler driver — rustc links through `cc`, and build scripts
+    # (cc-rs, the Nim FFI) compile C. Declaring it puts its directory on
+    # every cargo edge's PATH. Windows links with MSVC instead.
+    when defined(linux):
+      "gcc"
+    elif defined(macosx):
+      "clang"
     "python-dev >=3.10"
     "nim >=2.2 <3.0"
     "nimble"
