@@ -55,7 +55,11 @@ pub fn start_tracing(
             )
             .map_err(ffi::map_recorder_error)?;
 
-            let outputs = TraceOutputPaths::new(bootstrap.trace_directory(), bootstrap.format());
+            let outputs = TraceOutputPaths::new(
+                bootstrap.trace_directory(),
+                bootstrap.format(),
+                bootstrap.program(),
+            );
             let policy = policy_snapshot();
 
             let mut tracer = RuntimeTracer::new(

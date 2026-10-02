@@ -726,7 +726,7 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -821,7 +821,7 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -930,7 +930,7 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -1626,7 +1626,7 @@ initializer("omega")
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0, "program.py");
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
@@ -1773,9 +1773,9 @@ sensitive("s3cr3t")
             fs::write(&script_path, script).expect("write script");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
-
             let program = script_path.to_string_lossy().into_owned();
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
@@ -1861,8 +1861,8 @@ snapshot()
             fs::write(&script_path, &script).expect("write script");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
             let program = script_path.to_string_lossy().into_owned();
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
@@ -1999,8 +1999,8 @@ snapshot()
             fs::write(&script_path, &script).expect("write script");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
             let program = script_path.to_string_lossy().into_owned();
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
@@ -2777,7 +2777,7 @@ snapshot()
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0, "program.py");
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
@@ -2802,36 +2802,59 @@ snapshot()
         });
     }
 
+    /// The `.ct` containers in `dir`: what a failed recording leaves behind.
+    fn ct_containers(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .expect("read outputs dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+            .collect()
+    }
+
+    /// Begin a real CTFS recording of `program.py` into a fresh directory and
+    /// mark it failed, so `finish` has to decide about the container the
+    /// writer actually created.
+    fn failed_ctfs_recording() -> (tempfile::TempDir, tempfile::TempDir, RuntimeTracer) {
+        let script_dir = tempfile::tempdir().expect("script dir");
+        let program_path = script_dir.path().join("program.py");
+        std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+        let outputs_dir = tempfile::tempdir().expect("outputs dir");
+        let program = program_path.to_string_lossy().into_owned();
+        let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+
+        let mut tracer = RuntimeTracer::new(
+            &program,
+            &[],
+            TraceEventsFileFormat::Ctfs,
+            None,
+            None,
+            false,
+        );
+        tracer.begin(&outputs, 1).expect("begin tracer");
+        assert_eq!(
+            ct_containers(outputs_dir.path()),
+            vec![outputs_dir.path().join("program.ct")],
+            "the writer must have created the recording's container"
+        );
+        tracer.mark_failure();
+        (script_dir, outputs_dir, tracer)
+    }
+
     #[test]
     fn finish_removes_partial_outputs_when_policy_forbids_keep() {
         Python::with_gil(|py| {
             reset_policy(py);
 
-            let script_dir = tempfile::tempdir().expect("script dir");
-            let program_path = script_dir.path().join("program.py");
-            std::fs::write(&program_path, "print('hi')\n").expect("write program");
-
-            let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
-
-            let mut tracer = RuntimeTracer::new(
-                program_path.to_string_lossy().as_ref(),
-                &[],
-                TraceEventsFileFormat::BinaryV0,
-                None,
-                None,
-                false,
-            );
-            tracer.begin(&outputs, 1).expect("begin tracer");
-            // The in-memory writer leaves nothing on disk; stand in for the
-            // partial events file the policy decides about.
-            std::fs::write(outputs.events(), b"partial").expect("write partial events");
-            tracer.mark_failure();
-
+            let (_script_dir, outputs_dir, mut tracer) = failed_ctfs_recording();
             tracer.finish(py).expect("finish after failure");
 
-            assert!(!outputs.events().exists(), "expected events file removed");
+            assert_eq!(
+                ct_containers(outputs_dir.path()),
+                Vec::<PathBuf>::new(),
+                "a failed recording's container must be removed when the policy does not keep \
+                 partial traces"
+            );
         });
     }
 
@@ -2852,31 +2875,14 @@ snapshot()
             )
             .expect("enable keep_partial policy");
 
-            let script_dir = tempfile::tempdir().expect("script dir");
-            let program_path = script_dir.path().join("program.py");
-            std::fs::write(&program_path, "print('hi')\n").expect("write program");
-
-            let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
-
-            let mut tracer = RuntimeTracer::new(
-                program_path.to_string_lossy().as_ref(),
-                &[],
-                TraceEventsFileFormat::BinaryV0,
-                None,
-                None,
-                false,
-            );
-            tracer.begin(&outputs, 1).expect("begin tracer");
-            // The in-memory writer leaves nothing on disk; stand in for the
-            // partial events file the policy decides about.
-            std::fs::write(outputs.events(), b"partial").expect("write partial events");
-            tracer.mark_failure();
-
+            let (_script_dir, outputs_dir, mut tracer) = failed_ctfs_recording();
             tracer.finish(py).expect("finish after failure");
 
-            assert!(outputs.events().exists(), "expected events file retained");
+            assert_eq!(
+                ct_containers(outputs_dir.path()),
+                vec![outputs_dir.path().join("program.ct")],
+                "a failed recording's container must be kept when the policy keeps partial traces"
+            );
 
             reset_policy(py);
         });

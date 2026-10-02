@@ -295,13 +295,8 @@ mod tests {
     use crate::logging::{init_rust_logging_with_default, snapshot_run_and_trace};
     use crate::policy::RecorderPolicy;
     use crate::runtime::output_paths::TraceOutputPaths;
-    use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
     use codetracer_trace_writer_nim::TraceEventsFileFormat;
     use recorder_errors::ErrorCode;
-
-    fn writer() -> NonStreamingTraceWriter {
-        NonStreamingTraceWriter::new("program.py", &[])
-    }
 
     #[test]
     fn policy_requiring_trace_fails_without_events() {
@@ -324,31 +319,39 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_removes_partial_outputs() {
+    fn cleanup_removes_the_container_the_writer_created() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs);
-        let mut controller = LifecycleController::new("program.py", None);
-        let mut writer = writer();
+        let program = tmp.path().join("program.py");
+        std::fs::write(&program, "print('hi')\n").expect("write program");
+        let program = program.to_string_lossy().into_owned();
+        let out = tmp.path().join("out");
+        std::fs::create_dir(&out).expect("create out dir");
+
+        let outputs = TraceOutputPaths::new(&out, TraceEventsFileFormat::Ctfs, &program);
+        let mut controller = LifecycleController::new(&program, None);
+        let mut writer =
+            codetracer_trace_writer_nim::create_trace_writer(&program, &[], TraceEventsFileFormat::Ctfs);
 
         controller
             .begin(
-                &mut writer,
+                &mut *writer,
                 &outputs,
                 1,
                 &FilterCoordinator::new(None),
-                &mut PathTables::new(false),
+                &mut PathTables::new(true),
             )
             .expect("begin lifecycle");
-
-        std::fs::write(outputs.events(), "events").expect("write events");
+        let container = out.join("program.ct");
+        assert!(container.exists(), "the writer must have created {}", container.display());
 
         controller
             .cleanup_partial_outputs()
             .expect("cleanup outputs");
 
         assert!(
-            !outputs.events().exists(),
-            "expected events file removed after cleanup"
+            !container.exists(),
+            "cleanup must remove the container the writer created, {}",
+            container.display()
         );
     }
 
