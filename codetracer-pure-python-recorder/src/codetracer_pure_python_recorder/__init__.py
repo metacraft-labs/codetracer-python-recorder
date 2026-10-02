@@ -6,16 +6,15 @@ sibling top-level ``trace`` module; this package mainly provides a
 console-script entry point (``cli.py``) so the recorder can be invoked
 as ``codetracer-record``.
 
-The pure-Python recorder is **JSON-only by design** and serves as the
-cross-validation oracle for the production native recorder at
-``../codetracer-python-recorder/`` (Rust + PyO3, CTFS v3 output). The
-test suite runs both recorders against the same programs and uses
-``ct print --json-events`` to bring the native recorder's CTFS output
-back into a comparable JSON shape — see this package's ``README.md``
-and the sibling project's ``tests/python/test_cli_integration.py`` for
-the full rationale.
+This recorder is a **test oracle, not a production recorder**. It
+writes JSON only, and CodeTracer cannot open that output: it is not a
+recording. The production recorder is ``../codetracer-python-recorder/``
+(Rust + PyO3, CTFS ``.ct`` output). The test suite records the same
+programs with both, converts the ``.ct`` with ``ct print``, and compares
+-- see ``codetracer-python-recorder/tests/python/test_pure_oracle.py``
+and this package's ``README.md`` / ``AGENTS.md``.
 
-Do not migrate this package to CTFS without coordinating with the
-test framework.
+Do not migrate this package to CTFS: that would remove the independent
+oracle.
 """
 __all__ = []

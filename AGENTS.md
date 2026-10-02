@@ -40,18 +40,18 @@ This is a monorepo containing **two separate recorder implementations, by design
     filters, etc.).
   - `tests/python/` — Python integration and unit tests.
   - `Cargo.toml` — Rust workspace member.
-* `codetracer-pure-python-recorder/` — A pure-Python **reference
-  implementation** that deliberately emits the legacy JSON trace
-  shape. Not a fallback; it is the cross-validation oracle that keeps
-  the native recorder honest. The test suite runs the same programs
-  through both recorders and uses `ct print --json-events` (from
-  `codetracer-trace-format-nim`) to bring the native recorder's CTFS
-  output back into a comparable JSON shape — see
-  `codetracer-python-recorder/tests/python/test_cli_integration.py`.
-  **Do not migrate it to CTFS** without coordinating with the test
-  framework; doing so would silently weaken the test suite by
-  removing the independent reference. See
-  `codetracer-pure-python-recorder/README.md` for the full rationale.
+* `codetracer-pure-python-recorder/` — **a test oracle, not a production
+  recorder.** A small pure-Python recorder that writes JSON (`trace.json`
+  and sidecars). **CodeTracer cannot open its output** — it is not a
+  recording — and must not be taught to. Its only purpose is the testing
+  protocol: run the same program through the pure recorder (JSON) and the
+  production recorder (`.ct`), convert the `.ct` with `ct print`
+  (`ct-print --full` from `codetracer-trace-format-nim`), and compare.
+  That comparison is
+  `codetracer-python-recorder/tests/python/test_pure_oracle.py`; it must
+  never become vacuous (it asserts both sides recorded calls, steps and
+  values). **Do not migrate it to CTFS**, and do not add a JSON output to
+  the production recorder. See `codetracer-pure-python-recorder/AGENTS.md`.
 * `scripts/` — Helper scripts (version bumping, coverage rendering, etc.).
 
 # You don't have access to the internet

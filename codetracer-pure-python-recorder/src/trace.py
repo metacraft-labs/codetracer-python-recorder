@@ -1,25 +1,21 @@
 """Pure-Python **reference** recorder for CodeTracer.
 
 This module is the executable entry point of the
-``codetracer-pure-python-recorder`` package. It emits the legacy JSON
-trace shape — **by design**.
+``codetracer-pure-python-recorder`` package, a **test oracle, not a
+production recorder**. It writes JSON (``trace.json`` and sidecars)
+by design, and CodeTracer cannot open that output.
 
-The production recorder lives at
-``../codetracer-python-recorder/`` (Rust + PyO3 extension built via
-maturin) and emits CTFS v3 binary trace bundles per
-``codetracer-specs/Recorder-CLI-Conventions.md`` §4. The repository
-test suite runs the same test programs through both recorders and
-brings the native recorder's CTFS output back into a comparable JSON
-shape by shelling out to ``ct print --json-events`` (from
-``codetracer-trace-format-nim``) — see
-``codetracer-python-recorder/tests/python/test_cli_integration.py``.
+The production recorder lives at ``../codetracer-python-recorder/``
+(Rust + PyO3) and writes CTFS ``.ct`` recordings per
+``codetracer-specs/Recorder-CLI-Conventions.md`` §4. The test suite
+records the same programs with both recorders, converts the ``.ct``
+with ``ct print`` (``ct-print --full`` from
+``codetracer-trace-format-nim``), and compares the two -- see
+``codetracer-python-recorder/tests/python/test_pure_oracle.py``.
 
-Treating the pure-Python recorder as the canonical reference is what
-gives the test suite an *independent* oracle: any behaviour drift in
-the native recorder shows up as structural divergence from this
-module's output. Do not migrate this module to CTFS v3 without
-coordinating with the test framework; the cost would be a silently
-weaker test suite.
+Keeping this implementation independent is what makes it an oracle:
+drift in the production recorder shows up as a divergence from this
+module's output. Do not migrate it to CTFS.
 
 See ``codetracer-pure-python-recorder/README.md`` for the full
 rationale and the practical guidance on changing the trace shape.

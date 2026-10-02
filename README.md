@@ -7,15 +7,14 @@ This repository hosts **two recorders by design**:
   and tighter tooling; emits CTFS v3 binary trace bundles per
   `codetracer-specs/Recorder-CLI-Conventions.md` §4. Use this in real
   deployments.
-- **codetracer-pure-python-recorder** — a pure-Python *reference
-  implementation* that deliberately emits the legacy JSON trace
-  shape. It is the cross-validation oracle that keeps the native
-  recorder honest: the test suite runs the same programs through both
-  recorders and uses `ct print --json-events` to bring the native
-  recorder's CTFS output back into a comparable JSON shape (see
-  `codetracer-python-recorder/tests/python/test_cli_integration.py`).
-  **Do not migrate it to CTFS** without coordinating with the test
-  framework; see
+- **codetracer-pure-python-recorder** — **a test oracle, not a
+  production recorder.** A small pure-Python recorder that writes JSON
+  (`trace.json` and sidecars). **CodeTracer cannot open its output**;
+  it is not a recording. It exists for one testing protocol: the test
+  suite runs the same program through the pure recorder (JSON) and the
+  production recorder (`.ct`), converts the `.ct` with `ct print`, and
+  compares the two (see
+  `codetracer-python-recorder/tests/python/test_pure_oracle.py`). See
   [`codetracer-pure-python-recorder/README.md`](codetracer-pure-python-recorder/README.md)
   for the full rationale.
 
@@ -36,7 +35,7 @@ Quick catch example:
 from codetracer_python_recorder import RecorderError, start, stop
 
 try:
-    session = start("/tmp/trace", format="json")
+    session = start("/tmp/trace")
 except RecorderError as err:
     print(f"Recorder failed: {err.code}")
     for key, value in err.context.items():
@@ -118,12 +117,15 @@ Install from PyPI:
 pip install codetracer-pure-python-recorder
 ```
 
+This is a test oracle; use it only to cross-check the production
+recorder. CodeTracer cannot open what it writes.
+
 CLI usage:
 
 ```bash
 codetracer-record <path to python file>
-# produces several trace json files in the current directory
-# or in the folder of `$CODETRACER_DB_TRACE_PATH` if such an env var is defined
+# writes trace.json, trace_paths.json and trace_metadata.json into the
+# current directory (test-oracle output, not a recording)
 ```
 
 During development you can also run it directly:
