@@ -111,14 +111,11 @@ The recorder now installs a JSON logger on first import. Logs include `run_id`, 
 
 ### codetracer-pure-python-recorder
 
-Install from PyPI:
-
-```bash
-pip install codetracer-pure-python-recorder
-```
-
 This is a test oracle; use it only to cross-check the production
-recorder. CodeTracer cannot open what it writes.
+recorder. CodeTracer cannot open what it writes. It is not published to
+PyPI (its `pyproject.toml` carries the `Private :: Do Not Upload`
+classifier, which PyPI refuses); the test suite runs it from this
+checkout, and `just test-pure` runs its own tests.
 
 CLI usage:
 
