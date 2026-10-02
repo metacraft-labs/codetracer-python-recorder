@@ -1942,6 +1942,124 @@ snapshot()
         });
     }
 
+    /// The single `.ct` container a recording wrote into `dir`.
+    fn recorded_container(dir: &Path) -> std::path::PathBuf {
+        let containers: Vec<_> = fs::read_dir(dir)
+            .expect("list outputs dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+            .collect();
+        assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+        containers[0].clone()
+    }
+
+    /// `internal-files.md` §"`paths.dat` Layout A": a file whose source
+    /// cannot be read is registered with the conventional table, 100000
+    /// lines of 1024 positions, and a step on it whose column exceeds 1024
+    /// is recorded at column 1024.
+    #[test]
+    fn an_unreadable_source_gets_the_conventional_table_and_clamped_columns() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            // Compiled under a path that does not exist on disk, as code
+            // whose file was deleted after import is.
+            let gone_path = project_root.join("gone.py");
+            let padding = vec!["1"; 600].join(" + ");
+            let far_line = format!("    ({padding}); far_store = 5; capture_line(frame.f_code, frame.f_lineno)");
+            let gone_source = format!(
+                "import inspect\nfrom test_tracer import capture_line, capture_py_start\n\n\ndef far():\n    frame = inspect.currentframe()\n    capture_py_start(frame.f_code, frame.f_lasti)\n{far_line}\n    return far_store\n"
+            );
+            let far_lineno = 8u32;
+            let store_column = far_line.find("far_store").expect("store") as u32 + 1;
+            assert!(store_column > 1024, "the store must sit past column 1024: {store_column}");
+
+            let script_path = project_root.join("main.py");
+            let body = format!(
+                "\nnamespace = {{}}\nexec(compile({gone_source:?}, {gone:?}, \"exec\"), namespace)\nnamespace[\"far\"]()\nsnapshot()\n",
+                gone = gone_path.to_string_lossy()
+            );
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, &script).expect("write script");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
+            let program = script_path.to_string_lossy().into_owned();
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Ctfs,
+                None,
+                None,
+                false,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!("import runpy\nrunpy.run_path(r\"{}\")", script_path.display());
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+            tracer.finish(py).expect("finish tracer");
+
+            let container = recorded_container(outputs_dir.path());
+            let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+            let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut reader)
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            let mut all_tables = Vec::new();
+            let mut gone_id = None;
+            for id in 0..tables.path_count() as u64 {
+                let path = tables.path_str(id).expect("path");
+                let line_lengths = tables.path_line_lengths(id).expect("line lengths");
+                if Path::new(&path) == gone_path {
+                    gone_id = Some(id);
+                    assert!(
+                        line_lengths.len() == 100_000 && line_lengths.iter().all(|&len| len == 1024),
+                        "{path} is unreadable and should carry the conventional table \
+                         (100000 lines of 1024); got {} line(s), first {:?}",
+                        line_lengths.len(),
+                        &line_lengths[..line_lengths.len().min(4)]
+                    );
+                }
+                all_tables.push(line_lengths);
+            }
+            let gone_id = gone_id.expect("gone.py has a paths.dat record");
+
+            let decoder = codetracer_trace_reader::global_position_decoder::GlobalPositionDecoder::from_line_lengths(all_tables);
+            let mut steps = codetracer_trace_reader::step_stream_reader::StepStreamReader::open(&mut reader)
+                .expect("open steps")
+                .expect("the trace has a step stream");
+            let far_columns: Vec<u32> = steps
+                .read_all()
+                .expect("read steps")
+                .into_iter()
+                .filter_map(|record| match record {
+                    codetracer_trace_writer::step_stream::StepStreamRecord::Step { global_line_index } => Some(global_line_index),
+                    codetracer_trace_writer::step_stream::StepStreamRecord::DeltaColumn { global_position_index, .. } => {
+                        Some(global_position_index)
+                    }
+                    _ => None,
+                })
+                .map(|position| decoder.decode_global_position_index(position).expect("decode step"))
+                .filter(|pos| pos.file == gone_id && pos.line == far_lineno)
+                .map(|pos| pos.column)
+                .collect();
+            assert_eq!(
+                far_columns.last().copied(),
+                Some(1024),
+                "the step on gone.py line {far_lineno} (store at column {store_column}) should be recorded at column 1024; \
+                 columns on that line: {far_columns:?}"
+            );
+        });
+    }
+
     fn assert_var(snapshot: &Snapshot, name: &str, expected: SimpleValue) {
         let actual = snapshot
             .vars
