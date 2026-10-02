@@ -331,6 +331,9 @@ impl RuntimeTracer {
         let name = self.function_name(py, code)?;
         let filename = code.filename(py)?;
         let first_line = code.first_line(py)?;
+        // A function registration interns its file; give the file its
+        // per-line table first.
+        self.ensure_path_line_lengths(Path::new(filename));
         let function_id = TraceWriter::ensure_function_id(
             &mut *self.writer,
             name.as_str(),
@@ -1658,7 +1661,11 @@ initializer("omega")
         const FLAG_HAS_TRACE_FILTER_PROVENANCE: u16 = 0x08;
         let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(meta_dat)
             .unwrap_or_else(|err| panic!("meta.dat does not decode: {err}"));
-        assert_eq!(meta.flags & 0x07, 0, "unexpected meta.dat blocks before provenance");
+        assert_eq!(
+            meta.flags & 0x07,
+            0,
+            "unexpected meta.dat blocks before provenance"
+        );
         if meta.flags & FLAG_HAS_TRACE_FILTER_PROVENANCE == 0 {
             return None;
         }
@@ -1683,7 +1690,10 @@ initializer("omega")
             let len = varint(data, &mut pos) as usize;
             let path = String::from_utf8(data[pos..pos + len].to_vec()).expect("utf-8 path");
             pos += len;
-            let sha: String = data[pos..pos + 32].iter().map(|b| format!("{b:02x}")).collect();
+            let sha: String = data[pos..pos + 32]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             pos += 32;
             entries.push((path, sha));
         }
@@ -1722,16 +1732,24 @@ initializer("omega")
                 action = "redact"
                 "#,
             );
-            let config = TraceFilterConfig::from_paths(&[filter_path.clone()]).expect("load filter");
+            let config =
+                TraceFilterConfig::from_paths(&[filter_path.clone()]).expect("load filter");
             let engine = Arc::new(TraceFilterEngine::new(config));
             let expected: Vec<(String, String)> = engine
                 .summary()
                 .entries
                 .iter()
-                .map(|entry| (entry.path.to_string_lossy().into_owned(), entry.sha256.clone()))
+                .map(|entry| {
+                    (
+                        entry.path.to_string_lossy().into_owned(),
+                        entry.sha256.clone(),
+                    )
+                })
                 .collect();
             assert!(
-                expected.iter().any(|(path, _)| Path::new(path) == filter_path),
+                expected
+                    .iter()
+                    .any(|(path, _)| Path::new(path) == filter_path),
                 "the filter chain should name {}: {expected:?}",
                 filter_path.display()
             );
@@ -1785,7 +1803,11 @@ sensitive("s3cr3t")
                 .map(|entry| entry.expect("dir entry").path())
                 .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
                 .collect();
-            assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+            assert_eq!(
+                containers.len(),
+                1,
+                "expected one .ct container: {containers:?}"
+            );
             let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
                 .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
             let meta_dat = reader.read_file("meta.dat").expect("read meta.dat");
@@ -1865,17 +1887,33 @@ snapshot()
                 .map(|entry| entry.expect("dir entry").path())
                 .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
                 .collect();
-            assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+            assert_eq!(
+                containers.len(),
+                1,
+                "expected one .ct container: {containers:?}"
+            );
             let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
                 .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
-            let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut reader)
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
                 .expect("read interning tables")
                 .expect("the trace has interning tables");
-            assert!(tables.is_column_aware(), "the CTFS trace should be column-aware");
+            assert!(
+                tables.is_column_aware(),
+                "the CTFS trace should be column-aware"
+            );
 
             let expected: std::collections::HashMap<String, Vec<u32>> = [
-                (script_path.to_string_lossy().into_owned(), source_line_lengths(&script)),
-                (helper_path.to_string_lossy().into_owned(), source_line_lengths(helper_source)),
+                (
+                    script_path.to_string_lossy().into_owned(),
+                    source_line_lengths(&script),
+                ),
+                (
+                    helper_path.to_string_lossy().into_owned(),
+                    source_line_lengths(helper_source),
+                ),
             ]
             .into_iter()
             .collect();
@@ -1888,12 +1926,18 @@ snapshot()
                     "paths.dat record {id} ({path}) has file_size 0: line table {line_lengths:?}"
                 );
                 if let Some(want) = expected.get(&path) {
-                    assert_eq!(&line_lengths, want, "paths.dat record {id} ({path}) line table");
+                    assert_eq!(
+                        &line_lengths, want,
+                        "paths.dat record {id} ({path}) line table"
+                    );
                     seen.push(path);
                 }
             }
             for path in expected.keys() {
-                assert!(seen.contains(path), "{path} has no paths.dat record; recorded {seen:?}");
+                assert!(
+                    seen.contains(path),
+                    "{path} has no paths.dat record; recorded {seen:?}"
+                );
             }
         });
     }

@@ -543,15 +543,7 @@ impl Tracer for RuntimeTracer {
 
         if let Ok(filename) = code.filename(py) {
             let path = Path::new(filename);
-            let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-
-            // P1.3: ensure the writer's paths.dat per-line offset table is
-            // populated for this path before any step references it (the
-            // first sighting also fires the autoformat pass). Shared with
-            // `register_entry_step` so a call's definition-line entry step
-            // can't register the path *without* its line-lengths and
-            // corrupt later column/GLI resolution for that file.
-            self.ensure_path_line_lengths(path);
+            let path_id = self.intern_path(path);
 
             // P1.2: emit either a column-only DeltaColumn (tag 0x07)
             // event — when this step lands on the *same* line as the
@@ -1039,23 +1031,34 @@ fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_k
 }
 
 impl RuntimeTracer {
+    /// Intern `path` and return its id. In a column-aware trace the first
+    /// registration of a path writes its `paths.dat` record, and nothing
+    /// rewrites it, so the path is registered with its per-line table
+    /// before anything else (a step, a function, an I/O event) can intern
+    /// it bare. Every path a step or call references goes through here or
+    /// through [`Self::ensure_path_line_lengths`].
+    pub(super) fn intern_path(&mut self, path: &Path) -> PathId {
+        self.ensure_path_line_lengths(path);
+        TraceWriter::ensure_path_id(&mut *self.writer, path)
+    }
+
     /// P1.3: ensure the writer's `paths.dat` per-line offset table is
     /// populated for `path` the first time it is seen in column-aware mode,
     /// and fire the one-shot autoformat source-view pass on first sighting.
     ///
-    /// Shared by `on_line` and `register_entry_step` so that *every* path
-    /// gets its line-lengths registered before the first Step that
-    /// references it. If a Step were emitted for a path that had only been
-    /// interned via `ensure_path_id` (no line-lengths), the reader's
-    /// `decodeGlobalPositionIndex` round-trip would mis-resolve that file's
-    /// `(line, column)` pairs for the rest of the trace.
+    /// Called through [`Self::intern_path`] and before a function
+    /// registration, so that *every* path gets its line-lengths registered
+    /// before anything interns it. A path interned bare first keeps an empty
+    /// table: its `file_size` is zero, which `trace-events.md` §"Per-File
+    /// Contiguous Integer Ranges" forbids, and the reader's
+    /// `decodeGlobalPositionIndex` round-trip mis-resolves that file's
+    /// `(line, column)` pairs and the bases of every later file.
     ///
     /// If the source file isn't readable (subprocess source the recorder
-    /// lost access to, in-memory module, etc.) the path is registered with
-    /// an empty `line_lengths` slice — column resolution at read time then
-    /// falls back to surfacing `None`, the spec-sanctioned back-compat
-    /// default. Idempotent: recorded once per path.
-    fn ensure_path_line_lengths(&mut self, path: &Path) {
+    /// lost access to, in-memory module, etc.) the path is still registered
+    /// with an empty `line_lengths` slice, and has the same zero size.
+    /// Idempotent: recorded once per path.
+    pub(super) fn ensure_path_line_lengths(&mut self, path: &Path) {
         if !self.column_aware || self.paths_with_line_lengths.contains(path) {
             return;
         }
@@ -1063,7 +1066,10 @@ impl RuntimeTracer {
         let registration =
             TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
         match registration {
-            Ok(registered_path_id) => {
+            Ok(_) => {
+                // The id `register_path_with_line_lengths` returns is not
+                // the path's; look the now-interned path up.
+                let registered_path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
                 // P6.2: first sighting of this source path on the writer —
                 // fire the recorder-side autoformat pass once and, on a
                 // successful outcome, buffer the formatted view into
@@ -1118,11 +1124,7 @@ impl RuntimeTracer {
             Err(_) => return,
         };
         let path = Path::new(filename);
-        let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-
-        // P1.3: register line-lengths before the first Step references the
-        // path (same invariant on_line relies on).
-        self.ensure_path_line_lengths(path);
+        let path_id = self.intern_path(path);
 
         let line_value = Line(def_line as i64);
 
