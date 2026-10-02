@@ -2089,6 +2089,79 @@ snapshot()
         });
     }
 
+    /// `internal-files.md` §"`paths.dat` Layout A": a file that exists but
+    /// holds nothing is registered with the table `[1]`, so its size is not
+    /// zero.
+    #[test]
+    fn an_empty_module_is_registered_with_one_position() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let package_dir = project_root.join("ct_empty_pkg");
+            fs::create_dir(&package_dir).expect("create package");
+            let empty_module = package_dir.join("__init__.py");
+            fs::write(&empty_module, "").expect("write empty module");
+
+            // A real sys.monitoring session, so the import reports the empty
+            // module's code object as sys.monitoring does.
+            let script_path = project_root.join("main.py");
+            fs::write(&script_path, "import ct_empty_pkg\nvalue = 1\n").expect("write script");
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            // The session names the program, and its container, after argv[0].
+            let argv = CString::new(format!(
+                "import sys\nsys.argv = [r\"{}\"]",
+                script_path.display()
+            ))
+            .expect("argv code");
+            py.run(argv.as_c_str(), None, None).expect("set sys.argv");
+            crate::session::start_tracing(
+                &outputs_dir.path().to_string_lossy(),
+                "ctfs",
+                Some(&script_path.to_string_lossy()),
+                None,
+                None,
+            )
+            .expect("start tracing");
+            let run_code = format!(
+                "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\", run_name='__main__')",
+                project_root.display(),
+                script_path.display()
+            );
+            let run_code_c = CString::new(run_code).expect("script contains nul byte");
+            let run = py.run(run_code_c.as_c_str(), None, None);
+            crate::session::stop_tracing(Some(0)).expect("stop tracing");
+            run.expect("execute script");
+
+            let container = recorded_container(outputs_dir.path());
+            let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            let recorded: Vec<(String, Vec<u32>)> = (0..tables.path_count() as u64)
+                .map(|id| {
+                    (
+                        tables.path_str(id).expect("path"),
+                        tables.path_line_lengths(id).expect("line lengths"),
+                    )
+                })
+                .collect();
+            let empty = recorded
+                .iter()
+                .find(|(path, _)| Path::new(path) == empty_module)
+                .unwrap_or_else(|| {
+                    panic!("the empty module has no paths.dat record: {recorded:?}")
+                });
+            assert_eq!(empty.1, vec![1], "the empty module's line table");
+        });
+    }
+
     fn assert_var(snapshot: &Snapshot, name: &str, expected: SimpleValue) {
         let actual = snapshot
             .vars
