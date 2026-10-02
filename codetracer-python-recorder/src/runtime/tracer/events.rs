@@ -16,7 +16,6 @@ use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
 use crate::runtime::logging::log_event;
-use crate::runtime::output_paths::{source_line_table, CONVENTIONAL_LINE_POSITIONS};
 use crate::runtime::value_capture::{
     capture_call_arguments, encode_named_argument, record_return_value_streaming,
     record_visible_scope_streaming,
@@ -212,8 +211,8 @@ pub(super) fn suppress_events() -> bool {
 /// ``codetracer-trace-format-spec/internal-files.md`` §
 /// "Alternate Source Views (Deminification Support)" for the
 /// canonical ``view_kind`` enum.
-fn maybe_register_autoformat_view(
-    writer: &mut (dyn TraceWriter + Send),
+pub(crate) fn maybe_register_autoformat_view(
+    writer: &mut dyn TraceWriter,
     path_id: PathId,
     source_path: &Path,
 ) {
@@ -501,7 +500,7 @@ impl Tracer for RuntimeTracer {
             // CTFS spec, so we follow it with a DeltaColumn to land at
             // the desired column when `column_for_step > 1`.
             if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-                let new_column = self.step_column(path, column_line.0);
+                let new_column = self.path_tables.step_column(path, column_line.0);
                 let prev_line = self.last_line_per_frame.get(&frame_raw).copied();
                 let prev_column = self.last_column_per_frame.get(&frame_raw).copied();
                 let same_line = prev_line == Some(lineno);
@@ -714,7 +713,10 @@ impl Tracer for RuntimeTracer {
         let _trace_scope = self.lifecycle.trace_id_scope();
         let policy = policy_snapshot();
 
-        if self.io.teardown(py, &mut *self.writer) {
+        if self
+            .io
+            .teardown(py, &mut *self.writer, &mut self.path_tables)
+        {
             self.mark_event();
         }
 
@@ -978,85 +980,9 @@ fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_k
 }
 
 impl RuntimeTracer {
-    /// The column a step on `path` is recorded at. A file registered with
-    /// the conventional table has `CONVENTIONAL_LINE_POSITIONS` positions
-    /// per line, so a column past that is recorded at the last one
-    /// (`internal-files.md` §"`paths.dat` Layout A").
-    fn step_column(&self, path: &Path, column: i64) -> i64 {
-        if self.conventional_table_paths.contains(path) {
-            column.min(i64::from(CONVENTIONAL_LINE_POSITIONS))
-        } else {
-            column
-        }
-    }
-
-    /// Intern `path` and return its id. In a column-aware trace the first
-    /// registration of a path writes its `paths.dat` record, and nothing
-    /// rewrites it, so the path is registered with its per-line table
-    /// before anything else (a step, a function, an I/O event) can intern
-    /// it bare. Every path a step or call references goes through here or
-    /// through [`Self::ensure_path_line_lengths`].
+    /// Intern `path`, registering its table first (see `path_tables.rs`).
     pub(super) fn intern_path(&mut self, path: &Path) -> PathId {
-        self.ensure_path_line_lengths(path);
-        TraceWriter::ensure_path_id(&mut *self.writer, path)
-    }
-
-    /// P1.3: ensure the writer's `paths.dat` per-line offset table is
-    /// populated for `path` the first time it is seen in column-aware mode,
-    /// and fire the one-shot autoformat source-view pass on first sighting.
-    ///
-    /// Called through [`Self::intern_path`] and before a function
-    /// registration, so that *every* path gets its line-lengths registered
-    /// before anything interns it. A path interned bare first keeps an empty
-    /// table: its `file_size` is zero, which `trace-events.md` §"Per-File
-    /// Contiguous Integer Ranges" forbids, and the reader's
-    /// `decodeGlobalPositionIndex` round-trip mis-resolves that file's
-    /// `(line, column)` pairs and the bases of every later file.
-    ///
-    /// If the source file isn't readable (a file deleted after import, code
-    /// compiled under a path with no file behind it) the path is registered
-    /// with the conventional table, and its steps' columns are clamped
-    /// through [`Self::step_column`]. Idempotent: recorded once per path.
-    pub(super) fn ensure_path_line_lengths(&mut self, path: &Path) {
-        if !self.column_aware || self.paths_with_line_lengths.contains(path) {
-            return;
-        }
-        let table = source_line_table(path);
-        if table.conventional {
-            self.conventional_table_paths.insert(path.to_path_buf());
-        }
-        let registration = TraceWriter::register_path_with_line_lengths(
-            &mut *self.writer,
-            path,
-            &table.line_lengths,
-        );
-        match registration {
-            Ok(_) => {
-                // The id `register_path_with_line_lengths` returns is not
-                // the path's; look the now-interned path up.
-                let registered_path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-                // P6.2: first sighting of this source path on the writer —
-                // fire the recorder-side autoformat pass once and, on a
-                // successful outcome, buffer the formatted view into
-                // ``source_views.dat``. Best-effort: any error path is
-                // absorbed inside the helper and the recorder keeps going.
-                maybe_register_autoformat_view(&mut *self.writer, registered_path_id, path);
-            }
-            Err(err) => {
-                // Soft failure: the trace is still usable without per-line
-                // column counts (resolution falls back to None). Log once
-                // and move on; skip the autoformat pass too (without a
-                // registered path id the source-view emit would fail with
-                // "unknown path").
-                log::debug!(
-                    "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
-                     (column resolution will fall back to None for this file)",
-                    path.display(),
-                    err,
-                );
-            }
-        }
-        self.paths_with_line_lengths.insert(path.to_path_buf());
+        self.path_tables.intern(&mut *self.writer, path)
     }
 
     /// Emit the Step that anchors a call record's `entry_step` at the
@@ -1074,7 +1000,7 @@ impl RuntimeTracer {
     /// so this method emits the missing def-line anchor.
     ///
     /// The emission funnels through the same path-registration and
-    /// column-aware machinery as `on_line` (via `ensure_path_line_lengths`
+    /// column-aware machinery as `on_line` (via `intern_path`
     /// and the leftmost-STORE column from the bytecode line table) so the
     /// def-line step is byte-compatible with the body steps that follow.
     /// It updates the per-frame line/column cursors so the first body LINE
@@ -1118,7 +1044,7 @@ impl RuntimeTracer {
         // writer's column cursor to 1; a DeltaColumn(N-1) follows when the
         // resolved column is N>1.
         if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-            let new_column = self.step_column(path, column_line.0);
+            let new_column = self.path_tables.step_column(path, column_line.0);
             TraceWriter::register_step(&mut *self.writer, path, line_value);
             if new_column > 1 {
                 TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);

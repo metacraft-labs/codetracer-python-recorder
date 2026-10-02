@@ -2,6 +2,7 @@ use super::events::suppress_events;
 use super::filtering::{FilterCoordinator, TraceDecision};
 use super::io::IoCoordinator;
 use super::lifecycle::LifecycleController;
+use super::path_tables::PathTables;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::module_identity::{
@@ -164,20 +165,8 @@ pub struct RuntimeTracer {
     /// it; on legacy formats (`Json`, `BinaryV0`) this stays `false`
     /// and the recorder falls back to `register_step`-only.
     pub(super) column_aware: bool,
-    /// P1.3: set of source paths already registered with their per-line
-    /// column counts (paths.dat Layout A) so we don't re-read the file
-    /// or re-emit the line-length record for every `on_line` callback.
-    /// Membership in this set means "the writer has been told about
-    /// this path's `line_lengths` table"; absence triggers the first
-    /// `register_path_with_line_lengths` call on the next step into
-    /// that file.  Only populated when `column_aware` is on; on legacy
-    /// formats this stays empty and the recorder takes the legacy
-    /// `ensure_path_id` → `register_step` path.
-    pub(super) paths_with_line_lengths: std::collections::HashSet<std::path::PathBuf>,
-    /// Paths registered with the conventional table because their source
-    /// could not be read; columns on them are clamped (see
-    /// `events.rs::step_column`).
-    pub(super) conventional_table_paths: std::collections::HashSet<std::path::PathBuf>,
+    /// The `paths.dat` Layout A table of every file this trace mentions.
+    pub(super) path_tables: PathTables,
     /// M15: monotonic counter mirroring the writer's call-record index so we
     /// can stamp `RValue::FunctionReturn { call_key }` with the
     /// most-recently-popped call.
@@ -217,8 +206,7 @@ impl RuntimeTracer {
             last_line_per_frame: HashMap::new(),
             last_column_per_frame: HashMap::new(),
             column_aware,
-            paths_with_line_lengths: std::collections::HashSet::new(),
-            conventional_table_paths: std::collections::HashSet::new(),
+            path_tables: PathTables::new(column_aware),
             last_call_key: -1,
             session_exit: SessionExitState::default(),
         }
@@ -239,13 +227,16 @@ impl RuntimeTracer {
     }
 
     pub(super) fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if self.io.flush_before_step(thread_id, &mut *self.writer) {
+        if self
+            .io
+            .flush_before_step(thread_id, &mut *self.writer, &mut self.path_tables)
+        {
             self.mark_event();
         }
     }
 
     pub(super) fn flush_pending_io(&mut self) {
-        if self.io.flush_all(&mut *self.writer) {
+        if self.io.flush_all(&mut *self.writer, &mut self.path_tables) {
             self.mark_event();
         }
     }
@@ -266,7 +257,13 @@ impl RuntimeTracer {
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
-            .begin(&mut *self.writer, outputs, start_line, &self.filter)
+            .begin(
+                &mut *self.writer,
+                outputs,
+                start_line,
+                &self.filter,
+                &mut self.path_tables,
+            )
             .map_err(ffi::map_recorder_error)?;
         Ok(())
     }
@@ -338,7 +335,8 @@ impl RuntimeTracer {
         let first_line = code.first_line(py)?;
         // A function registration interns its file; give the file its
         // per-line table first.
-        self.ensure_path_line_lengths(Path::new(filename));
+        self.path_tables
+            .register(&mut *self.writer, Path::new(filename));
         let function_id = TraceWriter::ensure_function_id(
             &mut *self.writer,
             name.as_str(),

@@ -6,6 +6,7 @@ use crate::runtime::activation::ActivationController;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::tracer::filtering::FilterCoordinator;
+use crate::runtime::tracer::path_tables::{absolute_program_path, PathTables};
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use log::debug;
@@ -52,8 +53,10 @@ impl LifecycleController {
         outputs: &TraceOutputPaths,
         start_line: u32,
         filter: &FilterCoordinator,
+        tables: &mut PathTables,
     ) -> RecorderResult<()> {
-        let start_path = self.activation.start_path(&self.program_path);
+        let start_path = absolute_program_path(self.activation.start_path(&self.program_path));
+        let start_path = start_path.as_path();
         {
             let _mute = ScopedMuteIoCapture::new();
             log::debug!("{}", start_path.display());
@@ -62,7 +65,7 @@ impl LifecycleController {
         // env-var → CLI `--trace-filter:`) goes into `meta.dat`, which the
         // CTFS writer commits at the trace's first record — so it is
         // published here, before `start`, and never later.
-        outputs.configure_writer(writer, start_path, start_line, |writer| {
+        outputs.configure_writer(writer, start_path, start_line, tables, |writer| {
             Self::publish_filter_provenance(writer, filter)
         })?;
         self.output_paths = Some(outputs.clone());
@@ -328,7 +331,13 @@ mod tests {
         let mut writer = writer();
 
         controller
-            .begin(&mut writer, &outputs, 1, &FilterCoordinator::new(None))
+            .begin(
+                &mut writer,
+                &outputs,
+                1,
+                &FilterCoordinator::new(None),
+                &mut PathTables::new(false),
+            )
             .expect("begin lifecycle");
 
         std::fs::write(outputs.events(), "events").expect("write events");
