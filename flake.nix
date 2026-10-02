@@ -206,6 +206,13 @@
               && [ "$(${pkgs.coreutils}/bin/sha256sum "$_own_repo_root/flake.nix" | ${pkgs.coreutils}/bin/cut -d' ' -f1)" \
                 = "${builtins.hashFile "sha256" ./flake.nix}" ]; then
             ${script}
+            # git-hooks.nix's installer leaves core.hooksPath as the RELATIVE
+            # `.git/hooks`, in the config every worktree shares. A linked worktree
+            # cannot resolve it (there `.git` is a file), so git silently runs no
+            # hooks there. Point it at the common hooks directory instead.
+            if [ "$(${pkgs.git}/bin/git config --local --get core.hooksPath 2>/dev/null)" = .git/hooks ]; then
+              ${pkgs.git}/bin/git config --local core.hooksPath "$(${pkgs.git}/bin/git rev-parse --path-format=absolute --git-common-dir)/hooks"
+            fi
             fi
             unset _own_repo_root
           '';
