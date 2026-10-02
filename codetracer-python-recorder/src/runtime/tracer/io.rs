@@ -4,6 +4,7 @@ use crate::runtime::io_capture::{
     IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
 };
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
+use crate::runtime::tracer::filtering::is_real_filename;
 use crate::runtime::tracer::path_tables::PathTables;
 use codetracer_trace_types::{EventLogKind, Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
@@ -127,7 +128,10 @@ impl IoCoordinator {
         mut chunk: IoChunk,
     ) -> bool {
         if chunk.path_id.is_none() {
-            if let Some(path) = chunk.path.as_deref() {
+            // A synthetic code name is not a source file: it gets no
+            // `paths.dat` record (the enricher already passes over such
+            // frames; this keeps any other producer from naming one).
+            if let Some(path) = chunk.path.as_deref().filter(|path| is_real_filename(path)) {
                 // Output can be a file's first mention (untraced code in it
                 // writes before any traced step on the thread); the file
                 // still gets its real table.
