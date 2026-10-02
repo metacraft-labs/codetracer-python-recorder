@@ -26,10 +26,10 @@ drops what the two implementations legitimately record differently:
   Every local the pure recorder captured must be present in the production
   recorder's step with an equal value; extra production variables are
   tolerated.
-* when a line calls a function, ``ct-print`` lists the callee's argument
-  values after the caller step's own variables (so a step on
-  ``rest = factorial(n - 1)`` shows ``n`` twice, 5 and then 4). The
-  projection keeps the first value of each name, the frame's own.
+
+A step must not carry the same variable twice. A call's arguments belong to
+the callee's first step; finding one under the caller's step (``n`` listed as
+5 and then 4 on ``rest = factorial(n - 1)``) is reported as a mismatch.
 
 No mocks: both recorders run for real, in subprocesses, on real files, and
 ``ct-print`` is the real CTFS decoder.
@@ -99,6 +99,8 @@ class Projection:
     # locals[i] holds the variables at flow[i] when flow[i] is a line.
     locals: List[Dict[str, Any]] = field(default_factory=list)
     stdout: List[str] = field(default_factory=list)
+    # Steps that list one variable more than once.
+    duplicates: List[str] = field(default_factory=list)
 
     def emit(self, entry: Tuple[Any, ...], local_vars: Optional[Dict[str, Any]] = None) -> None:
         self.flow.append(entry)
@@ -199,13 +201,17 @@ def project_production(bundle: Dict[str, Any]) -> Projection:
             )
             frames.call(event["function"], args)
         elif kind == "step":
-            # A step's own snapshot comes first. When the step is followed
-            # by a call, ``ct-print`` also lists the callee's argument values
-            # under the caller's step (see the module header); keep the first
-            # value of each name, which is the frame's own.
             local_vars: Dict[str, Any] = {}
             for v in event.get("vars", []):
-                local_vars.setdefault(v["varname"], _value(v.get("value")))
+                name = v["varname"]
+                if name in local_vars:
+                    out.duplicates.append(
+                        f"step {event.get('step_index')} (line {event['line']}, "
+                        f"{event.get('function')}) lists {name!r} more than once: "
+                        f"{[_value(x.get('value')) for x in event['vars'] if x['varname'] == name]!r}"
+                    )
+                    continue
+                local_vars[name] = _value(v.get("value"))
             frames.line(int(event["line"]), local_vars)
         elif kind == "call_exit":
             frames.ret(_value(event.get("return_value")))
@@ -252,7 +258,7 @@ def record_production(program: Path, out_dir: Path) -> Dict[str, Any]:
 # --------------------------------------------------------------- comparison
 def compare(pure: Projection, production: Projection) -> Tuple[List[str], int]:
     """Return (mismatches, number of local values compared)."""
-    problems: List[str] = []
+    problems: List[str] = list(pure.duplicates) + list(production.duplicates)
     if pure.flow != production.flow:
         for i, (a, b) in enumerate(zip(pure.flow, production.flow)):
             if a != b:
@@ -329,7 +335,11 @@ def test_comparison_detects_a_wrong_value(tmp_path: Path) -> None:
     pure, production = _record_both(program, tmp_path)
 
     for i, entry in enumerate(production.flow):
-        if entry[0] == "line" and production.locals[i].get("n") == ("Int", 3):
+        if (
+            entry[0] == "line"
+            and production.locals[i].get("n") == ("Int", 3)
+            and "n" in pure.locals[i]
+        ):
             production.locals[i]["n"] = ("Int", 4)
             break
     else:
@@ -346,4 +356,41 @@ def test_comparison_detects_a_wrong_line(tmp_path: Path) -> None:
     i = next(i for i, e in enumerate(production.flow) if e[0] == "line" and i > 3)
     production.flow[i] = ("line", production.flow[i][1] + 100)
     problems, _ = compare(pure, production)
-    assert problems and "control flow diverges" in problems[0], problems
+    assert any("control flow diverges" in p for p in problems), problems
+
+
+def test_call_arguments_are_on_the_callees_first_step(tmp_path: Path) -> None:
+    """A call's arguments are the callee's variables, not the caller's.
+
+    ``factorial(5)`` calls ``factorial(4)`` from ``rest = factorial(n - 1)``.
+    The caller's step on that line must show only its own ``n`` (5); the
+    callee's ``n`` (4) belongs to the callee's first step.
+    """
+    program = TESTS_DIR / "oracle_programs" / "recursion.py"
+    work = tmp_path / "src"
+    work.mkdir()
+    local_program = work / program.name
+    shutil.copy(program, local_program)
+    bundle = record_production(local_program, tmp_path / "ct")
+
+    steps = [e for e in bundle["events"] if e.get("kind") == "step"]
+    entries = [e for e in bundle["events"] if e.get("kind") == "call_entry" and e["function"] == "factorial"]
+    assert len(entries) == 5, f"expected five factorial calls, got {len(entries)}"
+
+    def n_values(step: Dict[str, Any]) -> List[Any]:
+        return [_value(v.get("value")) for v in step.get("vars", []) if v["varname"] == "n"]
+
+    by_index = {s["step_index"]: s for s in steps}
+    for entry in entries:
+        expected = _value(entry["args"][0]["value"])
+        first = by_index[entry["entry_step"]]
+        assert n_values(first) == [expected], (
+            f"factorial(n={expected!r}): its first step (line {first['line']}) must carry n once, "
+            f"with the argument's value; it lists n = {n_values(first)!r}"
+        )
+    for step in steps:
+        if step.get("function") == "factorial" and step["line"] == 4:
+            assert len(n_values(step)) == 1, (
+                f"the caller's step on `rest = factorial(n - 1)` (step {step['step_index']}) must "
+                f"list only its own n; it lists n = {n_values(step)!r}"
+            )
