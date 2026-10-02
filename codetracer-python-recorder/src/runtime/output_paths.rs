@@ -238,7 +238,9 @@ pub(crate) struct SourceLineTable {
 /// emits through `write_delta_column`; a character count would shift
 /// columns by the number of multi-byte characters before the cursor.
 ///
-/// A file that cannot be read gets the conventional table
+/// A file whose lines hold no bytes gets one position on its first line,
+/// so an empty file is `[1]`. A file that cannot be read gets the
+/// conventional table
 /// ([`CONVENTIONAL_LINE_COUNT`] lines of [`CONVENTIONAL_LINE_POSITIONS`]):
 /// a Layout A table is never empty, and an empty one would give the file
 /// `file_size` 0 (`trace-events.md` §"Per-File Contiguous Integer
@@ -259,6 +261,12 @@ pub(crate) fn source_line_table(path: &Path) -> SourceLineTable {
             // A file that does not end with a newline still has a final line.
             if current_len > 0 || bytes.last() != Some(&b'\n') {
                 lines.push(current_len);
+            }
+            // A file that holds no bytes on any line (an empty `__init__.py`
+            // reads as `[0]`) would have `file_size` 0. Its first line gets
+            // one position, so an empty file is `[1]`.
+            if lines.iter().all(|&len| len == 0) {
+                lines[0] = 1;
             }
             SourceLineTable {
                 line_lengths: lines,
