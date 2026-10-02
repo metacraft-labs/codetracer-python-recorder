@@ -1795,6 +1795,109 @@ sensitive("s3cr3t")
         });
     }
 
+    /// The per-line byte lengths of `source`: one entry per line, the line's
+    /// bytes without its newline.
+    fn source_line_lengths(source: &str) -> Vec<u32> {
+        let mut lines: Vec<u32> = source.split('\n').map(|line| line.len() as u32).collect();
+        if source.ends_with('\n') {
+            lines.pop();
+        }
+        lines
+    }
+
+    /// `trace-events.md` §"Per-File Contiguous Integer Ranges": in a
+    /// column-aware trace every `paths.dat` record carries its file's
+    /// per-line table, and `file_size` (the table's sum) is never zero.
+    /// The table must be the source's, for files first reached by a call
+    /// or an import as much as for the activation script.
+    #[test]
+    fn every_column_aware_path_record_carries_its_source_line_table() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let helper_path = project_root.join("ct_path_table_helper.py");
+            // The helper reports its own call and line events, so it is first
+            // reached through a call record, as an imported module is.
+            let helper_source = "import inspect\nfrom test_tracer import capture_line, capture_py_start\n\n\ndef double(value):\n    frame = inspect.currentframe()\n    capture_py_start(frame.f_code, frame.f_lasti)\n    doubled = value * 2\n    capture_line(frame.f_code, frame.f_lineno)\n    return doubled\n";
+            fs::write(&helper_path, helper_source).expect("write helper");
+
+            let script_path = project_root.join("main.py");
+            let body = r#"
+import ct_path_table_helper
+
+result = ct_path_table_helper.double(21)
+snapshot()
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, &script).expect("write script");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs);
+            let program = script_path.to_string_lossy().into_owned();
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Ctfs,
+                None,
+                None,
+                false,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+            tracer.finish(py).expect("finish tracer");
+
+            let containers: Vec<_> = fs::read_dir(outputs_dir.path())
+                .expect("list outputs dir")
+                .map(|entry| entry.expect("dir entry").path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+                .collect();
+            assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+            let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
+            let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut reader)
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            assert!(tables.is_column_aware(), "the CTFS trace should be column-aware");
+
+            let expected: std::collections::HashMap<String, Vec<u32>> = [
+                (script_path.to_string_lossy().into_owned(), source_line_lengths(&script)),
+                (helper_path.to_string_lossy().into_owned(), source_line_lengths(helper_source)),
+            ]
+            .into_iter()
+            .collect();
+            let mut seen = Vec::new();
+            for id in 0..tables.path_count() as u64 {
+                let path = tables.path_str(id).expect("path");
+                let line_lengths = tables.path_line_lengths(id).expect("line lengths");
+                assert!(
+                    line_lengths.iter().any(|&len| len > 0),
+                    "paths.dat record {id} ({path}) has file_size 0: line table {line_lengths:?}"
+                );
+                if let Some(want) = expected.get(&path) {
+                    assert_eq!(&line_lengths, want, "paths.dat record {id} ({path}) line table");
+                    seen.push(path);
+                }
+            }
+            for path in expected.keys() {
+                assert!(seen.contains(path), "{path} has no paths.dat record; recorded {seen:?}");
+            }
+        });
+    }
+
     fn assert_var(snapshot: &Snapshot, name: &str, expected: SimpleValue) {
         let actual = snapshot
             .vars
