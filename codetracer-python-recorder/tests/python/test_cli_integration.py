@@ -932,3 +932,60 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     assert io["bytes_len"] == len("hello, world\n"), (
         f"io event bytes_len should be {len('hello, world\\n')}, got {io['bytes_len']}"
     )
+
+
+def _record_full(tmp_path: Path, body: str) -> tuple[Path, dict]:
+    script = tmp_path / "program.py"
+    _write_script(script, textwrap.dedent(body))
+    trace_dir = tmp_path / "trace"
+    result = _run_cli(["--out-dir", str(trace_dir), str(script)], cwd=tmp_path, env=_prepare_env())
+    assert result.returncode == 0, result.stderr
+    proc = subprocess.run(
+        [str(_ct_print_binary()), "--full", str(_find_ct_file(trace_dir))],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return script, json.loads(proc.stdout)
+
+
+def test_output_from_exec_code_lands_on_the_calling_step(tmp_path: Path) -> None:
+    """Output written by ``exec``'d code (filename ``<string>``) belongs to
+    the traced step that ran the ``exec``. Synthetic code names are not
+    source files: steps skip them, and output capture must not give them a
+    ``paths.dat`` record (each would carry the ~10^8-position conventional
+    table)."""
+    script, bundle = _record_full(
+        tmp_path,
+        """\
+        x = 1
+        exec("print('from exec')")
+        y = 2
+        """,
+    )
+    assert not [p for p in bundle["paths"] if p.startswith("<")], bundle["paths"]
+    io = [e for e in bundle["events"] if e["kind"] == "io" and e.get("text") == "from exec\n"]
+    assert len(io) == 1, io
+    steps = {e["step_index"]: e for e in bundle["events"] if e["kind"] == "step"}
+    step = steps[io[0]["step_id"]]
+    assert step["path"] == str(script) and step["line"] == 2, step
+
+
+def test_output_from_synthetic_frames_names_the_nearest_source_file(tmp_path: Path) -> None:
+    """Output from a thread whose innermost frames are all ``exec``'d code,
+    before any traced step on that thread, is attributed to the nearest
+    frame with a real file, and no synthetic name enters ``paths.dat``."""
+    _script, bundle = _record_full(
+        tmp_path,
+        """\
+        import threading
+        namespace = {}
+        exec("def a():\\n    b()\\ndef b():\\n    c()\\ndef c():\\n    print('from a thread')\\n", namespace)
+        worker = threading.Thread(target=namespace["a"])
+        worker.start()
+        worker.join()
+        """,
+    )
+    assert not [p for p in bundle["paths"] if p.startswith("<")], bundle["paths"]
+    io = [e for e in bundle["events"] if e["kind"] == "io" and e.get("text") == "from a thread\n"]
+    assert len(io) == 1, io
