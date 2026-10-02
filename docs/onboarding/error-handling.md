@@ -13,7 +13,7 @@ This note aligns new contributors and downstream consumers on the structured err
 from codetracer_python_recorder import RecorderError, TargetError, start, stop
 
 try:
-    session = start("/tmp/trace", format="json")
+    session = start("/tmp/trace")
 except RecorderError as err:
     print(f"Recorder failed: {err.code}")
     for key, value in err.context.items():
@@ -29,7 +29,7 @@ else:
 - Calling `start` twice raises `RuntimeError` from a thin Python guard. Everything after the guard uses `RecorderError`.
 
 ## CLI workflow and JSON trailers
-- Run `python -m codetracer_python_recorder --format=json app.py` to trace a script.
+- Run `python -m codetracer_python_recorder app.py` to trace a script. It writes a CTFS `.ct` recording; use `ct print` to inspect it as JSON or text.
 - Exit codes: `0` when the recorder completes without errors (default even if the script exits non-zero, warning emitted), `1` when a `RecorderError` escapes startup/shutdown, `2` on CLI misuse.
 - Use `--propagate-script-exit` (or set `CODETRACER_PROPAGATE_SCRIPT_EXIT=true`, `configure_policy(propagate_script_exit=True)`) when wrappers must mirror the script status.
 - Pass `--json-errors` (or `configure_policy(json_errors=True)`) to mirror each failure as a one-line JSON object on stderr.

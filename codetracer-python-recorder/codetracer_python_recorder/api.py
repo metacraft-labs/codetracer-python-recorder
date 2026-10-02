@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .formats import DEFAULT_FORMAT, TRACE_BINARY, TRACE_JSON
+from .formats import DEFAULT_FORMAT, TRACE_BINARY
 from .markers import (
     DIRECTION_RECV,
     DIRECTION_SEND,
@@ -26,7 +26,6 @@ __all__: Iterable[str] = (
     "TraceSession",
     "DEFAULT_FORMAT",
     "TRACE_BINARY",
-    "TRACE_JSON",
     "start",
     "stop",
     "is_tracing",

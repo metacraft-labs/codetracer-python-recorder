@@ -685,16 +685,16 @@ impl Tracer for RuntimeTracer {
         self.flush_pending_io();
         // For non-streaming formats we can update the events file.
         match self.format {
-            TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+            TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
+                // Streaming writer: no partial flush to avoid closing the stream.
+            }
+            _ => {
                 TraceWriter::finish_writing_trace_events(&mut *self.writer).map_err(|err| {
                     ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
                             .with_context("source", err.to_string()),
                     )
                 })?;
-            }
-            TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
-                // Streaming writer: no partial flush to avoid closing the stream.
             }
         }
         self.filter.clear_caches();

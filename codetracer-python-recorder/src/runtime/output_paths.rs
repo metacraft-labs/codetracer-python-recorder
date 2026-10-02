@@ -28,7 +28,6 @@ impl TraceOutputPaths {
     /// exist before initialisation; callers should ensure it is created.
     pub fn new(root: &Path, format: TraceEventsFileFormat) -> Self {
         let events_name = match format {
-            TraceEventsFileFormat::Json => "trace.json",
             TraceEventsFileFormat::Ctfs => "trace.ct",
             _ => "trace.bin",
         };
@@ -181,10 +180,10 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn json_paths_use_json_filenames() {
+    fn ctfs_paths_use_ct_extension() {
         let tmp = tempdir().expect("tempdir");
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
-        assert_eq!(paths.events(), tmp.path().join("trace.json").as_path());
+        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs);
+        assert_eq!(paths.events(), tmp.path().join("trace.ct").as_path());
     }
 
     #[test]
@@ -200,7 +199,7 @@ mod tests {
         let start_path = tmp.path().join("program.py");
         std::fs::write(&start_path, "print('hi')\n").expect("write script");
 
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
         let mut writer = NonStreamingTraceWriter::new("program.py", &[]);
 
         paths

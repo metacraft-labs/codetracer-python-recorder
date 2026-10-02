@@ -8,6 +8,7 @@ import pytest
 
 import codetracer_python_recorder as codetracer
 
+from .support.ctfs import find_ct_file, parse_ctfs_trace
 from codetracer_python_recorder.trace_balance import (
     TraceBalanceError,
     TraceBalanceResult,
@@ -141,7 +142,6 @@ value_default = "allow"
 
     session = codetracer.start(
         trace_dir,
-        format="json",
         start_on_enter=script,
         trace_filter=[filter_file],
     )
@@ -150,29 +150,19 @@ value_default = "allow"
     finally:
         session.stop()
 
-    events = load_trace_events(trace_dir / "trace.json")
-    function_names: dict[int, str] = {}
-    next_function_id = 0
-    for event in events:
-        payload = event.get("Function")
-        if payload:
-            function_names[next_function_id] = payload.get("name", "")
-            next_function_id += 1
+    trace = parse_ctfs_trace(find_ct_file(trace_dir))
+    function_names = {fid: fn["name"] for fid, fn in enumerate(trace.functions)}
 
     toplevel_ids = {fid for fid, name in function_names.items() if name == "<toplevel>"}
     assert len(toplevel_ids) == 1, f"expected single toplevel function, saw {toplevel_ids}"
 
-    toplevel_call_count = sum(
-        1
-        for event in events
-        if "Call" in event and event["Call"].get("function_id") in toplevel_ids
-    )
+    toplevel_call_count = sum(1 for fid in trace.calls if fid in toplevel_ids)
     assert toplevel_call_count == 1
 
     exit_returns = [
-        event["Return"]
-        for event in events
-        if "Return" in event and event["Return"].get("return_value", {}).get("text") == "<exit>"
+        ret
+        for ret in trace.returns
+        if (ret.get("return_value") or {}).get("text") == "<exit>"
     ]
     assert len(exit_returns) == 1
 

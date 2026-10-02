@@ -31,9 +31,11 @@ pub fn ensure_trace_directory(path: &Path) -> Result<()> {
 }
 
 /// Convert a user-provided format string into the runtime representation.
+///
+/// There is no JSON trace format: JSON traces are written only by the
+/// pure-Python test oracle, and CodeTracer cannot open them.
 pub fn resolve_trace_format(value: &str) -> Result<TraceEventsFileFormat> {
     match value.to_ascii_lowercase().as_str() {
-        "json" => Ok(TraceEventsFileFormat::Json),
         // Default binary format uses CBOR + Zstandard compression.
         "binary" | "bin" => Ok(TraceEventsFileFormat::Binary),
         // Legacy Cap'n Proto binary format.
@@ -41,7 +43,7 @@ pub fn resolve_trace_format(value: &str) -> Result<TraceEventsFileFormat> {
         "ctfs" => Ok(TraceEventsFileFormat::Ctfs),
         other => Err(usage!(
             ErrorCode::UnsupportedFormat,
-            "unsupported trace format '{}'. Expected one of: json, binary, binaryv0, ctfs",
+            "unsupported trace format '{}'. Expected one of: ctfs, binary, binaryv0",
             other
         )),
     }
@@ -105,11 +107,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_json_format() {
+        // The production recorder writes CTFS only. JSON traces come from
+        // the pure-Python test oracle, and CodeTracer cannot open them.
+        for value in ["json", "JSON"] {
+            let err = resolve_trace_format(value).expect_err("json must be rejected");
+            assert_eq!(err.code, ErrorCode::UnsupportedFormat);
+            let expected = err
+                .message()
+                .split("Expected one of:")
+                .nth(1)
+                .expect("the error lists the supported formats");
+            assert!(
+                !expected.contains("json"),
+                "json must not be listed as supported: {}",
+                err.message()
+            );
+        }
+    }
+
+    #[test]
     fn resolves_supported_formats() {
-        assert!(matches!(
-            resolve_trace_format("json").expect("json format"),
-            TraceEventsFileFormat::Json
-        ));
         assert!(matches!(
             resolve_trace_format("binary").expect("binary format"),
             TraceEventsFileFormat::Binary

@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn cleanup_removes_partial_outputs() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+        let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs);
         let mut controller = LifecycleController::new("program.py", None);
         let mut writer = writer();
 

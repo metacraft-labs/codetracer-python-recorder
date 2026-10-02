@@ -162,7 +162,7 @@ pub struct RuntimeTracer {
     /// P1.1 / P1.2: whether this tracer is allowed to emit column-only
     /// `DeltaColumn` events.  Mirrors the writer's column-aware-mode
     /// flag — only the canonical CTFS multi-stream backend supports
-    /// it; on legacy formats (`Json`, `BinaryV0`) this stays `false`
+    /// it; on the legacy `BinaryV0` format this stays `false`
     /// and the recorder falls back to `register_step`-only.
     pub(super) column_aware: bool,
     /// The `paths.dat` Layout A table of every file this trace mentions.
@@ -494,7 +494,7 @@ mod tests {
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -591,7 +591,7 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 Some(script_path.as_path()),
                 None,
                 false,
@@ -643,7 +643,7 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 "snapshot_script.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -721,12 +721,12 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -816,12 +816,12 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -925,12 +925,12 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -1186,7 +1186,7 @@ def start_call():
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -1311,7 +1311,7 @@ sensitive("s3cr3t")
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1424,7 +1424,7 @@ sensitive("s3cr3t")
             let tracer = RuntimeTracer::new(
                 "runner.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -1488,7 +1488,7 @@ dropper()
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1576,7 +1576,7 @@ initializer("omega")
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1625,12 +1625,13 @@ initializer("omega")
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -2775,12 +2776,13 @@ snapshot()
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -2810,17 +2812,21 @@ snapshot()
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
+            // The in-memory writer leaves nothing on disk; stand in for the
+            // partial events file the policy decides about.
+            std::fs::write(outputs.events(), b"partial").expect("write partial events");
             tracer.mark_failure();
 
             tracer.finish(py).expect("finish after failure");
@@ -2851,17 +2857,21 @@ snapshot()
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0);
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
             tracer.begin(&outputs, 1).expect("begin tracer");
+            // The in-memory writer leaves nothing on disk; stand in for the
+            // partial events file the policy decides about.
+            std::fs::write(outputs.events(), b"partial").expect("write partial events");
             tracer.mark_failure();
 
             tracer.finish(py).expect("finish after failure");
@@ -2937,7 +2947,7 @@ snapshot()
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
