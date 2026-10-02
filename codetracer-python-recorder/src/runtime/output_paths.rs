@@ -99,8 +99,12 @@ impl TraceOutputPaths {
             // is best-effort: if the file isn't readable (rare for the
             // activation path) we fall back to an empty slice and the
             // reader surfaces column = 1 for steps on this file.
-            let line_lengths = read_line_lengths_for_path(start_path);
-            match TraceWriter::register_path_with_line_lengths(writer, start_path, &line_lengths) {
+            let table = source_line_table(start_path);
+            match TraceWriter::register_path_with_line_lengths(
+                writer,
+                start_path,
+                &table.line_lengths,
+            ) {
                 Ok(start_path_id) => {
                     // P6.2: the activation path's first registration is
                     // also the canonical hook point for the recorder-
@@ -208,39 +212,64 @@ fn maybe_register_autoformat_view_for_path(
     }
 }
 
-/// P1.3: read `path` and compute the per-line column counts used as
-/// the `paths.dat` Layout A `line_lengths` table.  Mirrors the
-/// `read_line_lengths` helper in `events.rs` — duplicated here so the
-/// `configure_writer` hot path doesn't have to dip into the tracer-
-/// events module.  Returns an empty Vec when the file isn't readable
-/// or is a synthetic Python path (`<...>`).
+/// Lines in the conventional `paths.dat` Layout A table, registered for a
+/// file whose source cannot be read (`internal-files.md` §"`paths.dat`
+/// Layout A"). It is the column-aware counterpart of the line-count
+/// table's `100000` ceiling.
+pub(crate) const CONVENTIONAL_LINE_COUNT: usize = 100_000;
+
+/// Positions per line in the conventional table. A step on such a file
+/// whose column exceeds it is recorded at this column.
+pub(crate) const CONVENTIONAL_LINE_POSITIONS: u32 = 1024;
+
+/// A file's `paths.dat` Layout A per-line table.
+pub(crate) struct SourceLineTable {
+    pub line_lengths: Vec<u32>,
+    /// The source could not be read and `line_lengths` is the conventional
+    /// table, so columns on this file are clamped to
+    /// [`CONVENTIONAL_LINE_POSITIONS`].
+    pub conventional: bool,
+}
+
+/// The `paths.dat` Layout A table for `path`: one entry per source line,
+/// the line's **byte length** without its newline. CPython's
+/// `co_positions()` `col_offset` is a UTF-8 byte offset into the line, so
+/// a byte count keeps the table in the unit of the columns the recorder
+/// emits through `write_delta_column`; a character count would shift
+/// columns by the number of multi-byte characters before the cursor.
 ///
-/// Each entry is the byte length of the source line (excluding the
-/// trailing newline), matching CPython's `co_positions()` `col_offset`
-/// reporting convention.  See `events.rs::read_line_lengths` for the
-/// full rationale.
-fn read_line_lengths_for_path(path: &Path) -> Vec<u32> {
-    let lossy = path.to_string_lossy();
-    if lossy.starts_with('<') && lossy.ends_with('>') {
-        return Vec::new();
-    }
-    let Ok(bytes) = std::fs::read(path) else {
-        return Vec::new();
-    };
-    let mut lines: Vec<u32> = Vec::new();
-    let mut current_len: u32 = 0;
-    for byte in &bytes {
-        if *byte == b'\n' {
-            lines.push(current_len);
-            current_len = 0;
-        } else {
-            current_len = current_len.saturating_add(1);
+/// A file that cannot be read gets the conventional table
+/// ([`CONVENTIONAL_LINE_COUNT`] lines of [`CONVENTIONAL_LINE_POSITIONS`]):
+/// a Layout A table is never empty, and an empty one would give the file
+/// `file_size` 0 (`trace-events.md` §"Per-File Contiguous Integer
+/// Ranges").
+pub(crate) fn source_line_table(path: &Path) -> SourceLineTable {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let mut lines: Vec<u32> = Vec::new();
+            let mut current_len: u32 = 0;
+            for byte in &bytes {
+                if *byte == b'\n' {
+                    lines.push(current_len);
+                    current_len = 0;
+                } else {
+                    current_len = current_len.saturating_add(1);
+                }
+            }
+            // A file that does not end with a newline still has a final line.
+            if current_len > 0 || bytes.last() != Some(&b'\n') {
+                lines.push(current_len);
+            }
+            SourceLineTable {
+                line_lengths: lines,
+                conventional: false,
+            }
         }
+        Err(_) => SourceLineTable {
+            line_lengths: vec![CONVENTIONAL_LINE_POSITIONS; CONVENTIONAL_LINE_COUNT],
+            conventional: true,
+        },
     }
-    if current_len > 0 || bytes.last() != Some(&b'\n') {
-        lines.push(current_len);
-    }
-    lines
 }
 
 #[cfg(test)]

@@ -174,6 +174,10 @@ pub struct RuntimeTracer {
     /// formats this stays empty and the recorder takes the legacy
     /// `ensure_path_id` → `register_step` path.
     pub(super) paths_with_line_lengths: std::collections::HashSet<std::path::PathBuf>,
+    /// Paths registered with the conventional table because their source
+    /// could not be read; columns on them are clamped (see
+    /// `events.rs::step_column`).
+    pub(super) conventional_table_paths: std::collections::HashSet<std::path::PathBuf>,
     /// M15: monotonic counter mirroring the writer's call-record index so we
     /// can stamp `RValue::FunctionReturn { call_key }` with the
     /// most-recently-popped call.
@@ -214,6 +218,7 @@ impl RuntimeTracer {
             last_column_per_frame: HashMap::new(),
             column_aware,
             paths_with_line_lengths: std::collections::HashSet::new(),
+            conventional_table_paths: std::collections::HashSet::new(),
             last_call_key: -1,
             session_exit: SessionExitState::default(),
         }
@@ -1949,7 +1954,11 @@ snapshot()
             .map(|entry| entry.expect("dir entry").path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
             .collect();
-        assert_eq!(containers.len(), 1, "expected one .ct container: {containers:?}");
+        assert_eq!(
+            containers.len(),
+            1,
+            "expected one .ct container: {containers:?}"
+        );
         containers[0].clone()
     }
 
@@ -1969,13 +1978,18 @@ snapshot()
             // whose file was deleted after import is.
             let gone_path = project_root.join("gone.py");
             let padding = vec!["1"; 600].join(" + ");
-            let far_line = format!("    ({padding}); far_store = 5; capture_line(frame.f_code, frame.f_lineno)");
+            let far_line = format!(
+                "    ({padding}); far_store = 5; capture_line(frame.f_code, frame.f_lineno)"
+            );
             let gone_source = format!(
                 "import inspect\nfrom test_tracer import capture_line, capture_py_start\n\n\ndef far():\n    frame = inspect.currentframe()\n    capture_py_start(frame.f_code, frame.f_lasti)\n{far_line}\n    return far_store\n"
             );
             let far_lineno = 8u32;
             let store_column = far_line.find("far_store").expect("store") as u32 + 1;
-            assert!(store_column > 1024, "the store must sit past column 1024: {store_column}");
+            assert!(
+                store_column > 1024,
+                "the store must sit past column 1024: {store_column}"
+            );
 
             let script_path = project_root.join("main.py");
             let body = format!(
@@ -2000,7 +2014,10 @@ snapshot()
             {
                 let _guard = ScopedTracer::new(&mut tracer);
                 LAST_OUTCOME.with(|cell| cell.set(None));
-                let run_code = format!("import runpy\nrunpy.run_path(r\"{}\")", script_path.display());
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
                 let run_code_c = CString::new(run_code).expect("script contains nul byte");
                 py.run(run_code_c.as_c_str(), None, None)
                     .expect("execute script");
@@ -2010,7 +2027,10 @@ snapshot()
             let container = recorded_container(outputs_dir.path());
             let mut reader = codetracer_ctfs::CtfsReader::open(&container)
                 .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
-            let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut reader)
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
                 .expect("read interning tables")
                 .expect("the trace has interning tables");
             let mut all_tables = Vec::new();
@@ -2021,7 +2041,8 @@ snapshot()
                 if Path::new(&path) == gone_path {
                     gone_id = Some(id);
                     assert!(
-                        line_lengths.len() == 100_000 && line_lengths.iter().all(|&len| len == 1024),
+                        line_lengths.len() == 100_000
+                            && line_lengths.iter().all(|&len| len == 1024),
                         "{path} is unreadable and should carry the conventional table \
                          (100000 lines of 1024); got {} line(s), first {:?}",
                         line_lengths.len(),
@@ -2033,21 +2054,29 @@ snapshot()
             let gone_id = gone_id.expect("gone.py has a paths.dat record");
 
             let decoder = codetracer_trace_reader::global_position_decoder::GlobalPositionDecoder::from_line_lengths(all_tables);
-            let mut steps = codetracer_trace_reader::step_stream_reader::StepStreamReader::open(&mut reader)
-                .expect("open steps")
-                .expect("the trace has a step stream");
+            let mut steps =
+                codetracer_trace_reader::step_stream_reader::StepStreamReader::open(&mut reader)
+                    .expect("open steps")
+                    .expect("the trace has a step stream");
             let far_columns: Vec<u32> = steps
                 .read_all()
                 .expect("read steps")
                 .into_iter()
                 .filter_map(|record| match record {
-                    codetracer_trace_writer::step_stream::StepStreamRecord::Step { global_line_index } => Some(global_line_index),
-                    codetracer_trace_writer::step_stream::StepStreamRecord::DeltaColumn { global_position_index, .. } => {
-                        Some(global_position_index)
-                    }
+                    codetracer_trace_writer::step_stream::StepStreamRecord::Step {
+                        global_line_index,
+                    } => Some(global_line_index),
+                    codetracer_trace_writer::step_stream::StepStreamRecord::DeltaColumn {
+                        global_position_index,
+                        ..
+                    } => Some(global_position_index),
                     _ => None,
                 })
-                .map(|position| decoder.decode_global_position_index(position).expect("decode step"))
+                .map(|position| {
+                    decoder
+                        .decode_global_position_index(position)
+                        .expect("decode step")
+                })
                 .filter(|pos| pos.file == gone_id && pos.line == far_lineno)
                 .map(|pos| pos.column)
                 .collect();

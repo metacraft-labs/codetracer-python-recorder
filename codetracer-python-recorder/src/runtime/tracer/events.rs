@@ -16,6 +16,7 @@ use crate::runtime::frame_inspector::capture_frame;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::line_snapshots::FrameId;
 use crate::runtime::logging::log_event;
+use crate::runtime::output_paths::{source_line_table, CONVENTIONAL_LINE_POSITIONS};
 use crate::runtime::value_capture::{
     capture_call_arguments, encode_named_argument, record_return_value_streaming,
     record_visible_scope_streaming,
@@ -168,60 +169,6 @@ pub(super) fn suppress_events() -> bool {
     false
 }
 
-/// P1.3: read `path` and compute the per-line column counts used as the
-/// `paths.dat` Layout A `line_lengths` table.  Each entry is the
-/// **byte length** of the source line (excluding the trailing
-/// newline), matching CPython's ``co_positions()`` ``col_offset``
-/// reporting convention — see
-/// https://docs.python.org/3/reference/datamodel.html#codeobject.co_positions
-/// (col_offset is a UTF-8 byte offset into the source line, not a
-/// Unicode character index).
-///
-/// We deliberately use a byte count so the line_lengths table stays
-/// consistent with the columns the recorder emits via
-/// ``write_delta_column``.  The reader's
-/// ``decodeGlobalPositionIndex`` round-trip uses these counts to map
-/// ``(line, column)`` → ``global_position_index`` and back; any
-/// inconsistency in the unit would shift columns by the count of
-/// multi-byte UTF-8 characters preceding the cursor.
-///
-/// Returns `None` when the file isn't readable (subprocess source the
-/// recorder lost access to, in-memory module like `<string>`, the
-/// `<frozen importlib>` synthetic file, etc.) so the caller can fall
-/// back to registering the path with an empty slice — at read time the
-/// reader's `decodeGlobalPositionIndex` returns `None` when no per-line
-/// data is available, which keeps the trace valid.
-fn read_line_lengths(path: &Path) -> Option<Vec<u32>> {
-    // Synthetic / in-memory filenames Python uses for `eval`,
-    // `compile`, frozen imports, etc.  They aren't actual files; skip
-    // the disk read.  The reader will surface `None` for any step
-    // referencing one of these.
-    let lossy = path.to_string_lossy();
-    if lossy.starts_with('<') && lossy.ends_with('>') {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    // Split on b'\n'; an `\r\n` terminator is represented as a trailing
-    // CR byte at the end of the line, which is fine — it shifts the
-    // column-range by 1 byte (matching Python's source-position table
-    // for the same source bytes).
-    let mut lines: Vec<u32> = Vec::new();
-    let mut current_len: u32 = 0;
-    for byte in &bytes {
-        if *byte == b'\n' {
-            lines.push(current_len);
-            current_len = 0;
-        } else {
-            current_len = current_len.saturating_add(1);
-        }
-    }
-    // A file that does not end with a newline still has a final line.
-    if current_len > 0 || bytes.last() != Some(&b'\n') {
-        lines.push(current_len);
-    }
-    Some(lines)
-}
-
 /// P6.2: run the recorder-side autoformat pass on `source_path` and, on
 /// a successful outcome, buffer a ``black``-formatted view of the source
 /// into the CTFS writer's ``source_views.dat`` stream via
@@ -271,7 +218,7 @@ fn maybe_register_autoformat_view(
     source_path: &Path,
 ) {
     // Skip synthetic / in-memory paths early — same gate
-    // ``read_line_lengths`` uses, mirroring Python's ``<string>``,
+    // ``source_line_table`` uses, mirroring Python's ``<string>``,
     // ``<frozen ...>``, etc. naming convention.
     let lossy = source_path.to_string_lossy();
     if lossy.starts_with('<') && lossy.ends_with('>') {
@@ -554,7 +501,7 @@ impl Tracer for RuntimeTracer {
             // CTFS spec, so we follow it with a DeltaColumn to land at
             // the desired column when `column_for_step > 1`.
             if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-                let new_column = column_line.0;
+                let new_column = self.step_column(path, column_line.0);
                 let prev_line = self.last_line_per_frame.get(&frame_raw).copied();
                 let prev_column = self.last_column_per_frame.get(&frame_raw).copied();
                 let same_line = prev_line == Some(lineno);
@@ -1031,6 +978,18 @@ fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_k
 }
 
 impl RuntimeTracer {
+    /// The column a step on `path` is recorded at. A file registered with
+    /// the conventional table has `CONVENTIONAL_LINE_POSITIONS` positions
+    /// per line, so a column past that is recorded at the last one
+    /// (`internal-files.md` §"`paths.dat` Layout A").
+    fn step_column(&self, path: &Path, column: i64) -> i64 {
+        if self.conventional_table_paths.contains(path) {
+            column.min(i64::from(CONVENTIONAL_LINE_POSITIONS))
+        } else {
+            column
+        }
+    }
+
     /// Intern `path` and return its id. In a column-aware trace the first
     /// registration of a path writes its `paths.dat` record, and nothing
     /// rewrites it, so the path is registered with its per-line table
@@ -1054,17 +1013,23 @@ impl RuntimeTracer {
     /// `decodeGlobalPositionIndex` round-trip mis-resolves that file's
     /// `(line, column)` pairs and the bases of every later file.
     ///
-    /// If the source file isn't readable (subprocess source the recorder
-    /// lost access to, in-memory module, etc.) the path is still registered
-    /// with an empty `line_lengths` slice, and has the same zero size.
-    /// Idempotent: recorded once per path.
+    /// If the source file isn't readable (a file deleted after import, code
+    /// compiled under a path with no file behind it) the path is registered
+    /// with the conventional table, and its steps' columns are clamped
+    /// through [`Self::step_column`]. Idempotent: recorded once per path.
     pub(super) fn ensure_path_line_lengths(&mut self, path: &Path) {
         if !self.column_aware || self.paths_with_line_lengths.contains(path) {
             return;
         }
-        let line_lengths = read_line_lengths(path).unwrap_or_default();
-        let registration =
-            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
+        let table = source_line_table(path);
+        if table.conventional {
+            self.conventional_table_paths.insert(path.to_path_buf());
+        }
+        let registration = TraceWriter::register_path_with_line_lengths(
+            &mut *self.writer,
+            path,
+            &table.line_lengths,
+        );
         match registration {
             Ok(_) => {
                 // The id `register_path_with_line_lengths` returns is not
@@ -1153,7 +1118,7 @@ impl RuntimeTracer {
         // writer's column cursor to 1; a DeltaColumn(N-1) follows when the
         // resolved column is N>1.
         if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-            let new_column = column_line.0;
+            let new_column = self.step_column(path, column_line.0);
             TraceWriter::register_step(&mut *self.writer, path, line_value);
             if new_column > 1 {
                 TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);
