@@ -2162,6 +2162,160 @@ snapshot()
         });
     }
 
+    /// Run `code` under a real sys.monitoring session that writes a CTFS
+    /// trace into `outputs`, with `argv0` as the program and `filters` as
+    /// the trace-filter chain, and return every `paths.dat` record.
+    fn record_session_paths(
+        py: Python<'_>,
+        outputs: &Path,
+        argv0: &str,
+        filters: Option<Vec<String>>,
+        code: &str,
+    ) -> Vec<(String, Vec<u32>)> {
+        let argv = CString::new(format!("import sys\nsys.argv = [{argv0:?}]")).expect("argv code");
+        py.run(argv.as_c_str(), None, None).expect("set sys.argv");
+        crate::session::start_tracing(&outputs.to_string_lossy(), "ctfs", None, filters, None)
+            .expect("start tracing");
+        let code_c = CString::new(code).expect("code contains nul byte");
+        let run = py.run(code_c.as_c_str(), None, None);
+        crate::session::stop_tracing(Some(0)).expect("stop tracing");
+        run.expect("execute code");
+
+        let container = recorded_container(outputs);
+        let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+            .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+        let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+            &mut reader,
+        )
+        .expect("read interning tables")
+        .expect("the trace has interning tables");
+        (0..tables.path_count() as u64)
+            .map(|id| {
+                (
+                    tables.path_str(id).expect("path"),
+                    tables.path_line_lengths(id).expect("line lengths"),
+                )
+            })
+            .collect()
+    }
+
+    /// Output written by untraced code in a file, before any traced step on
+    /// the thread, names that file. The file's first mention must still
+    /// carry its real line table: the writer fixes a table at the first
+    /// mention and refuses a different one later.
+    #[test]
+    fn a_file_first_named_by_output_keeps_its_real_line_table() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            policy::configure_policy_py(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+            )
+            .expect("capture output through the line proxies");
+            let project = tempfile::tempdir().expect("project dir");
+            let root = project.path();
+            let helper_path = root.join("ct_io_helper.py");
+            // Output capture names the file of the frame two levels above the
+            // write, so the print sits three calls deep inside the helper.
+            let helper_source = "def quiet():\n    _relay()\n\n\ndef _relay():\n    _say()\n\n\ndef _say():\n    print('from an untraced function')\n\n\ndef loud():\n    value = 1\n    return value\n";
+            fs::write(&helper_path, helper_source).expect("write helper");
+            fs::write(root.join("ct_io_traced.py"), "marker = 1\n").expect("write traced module");
+            let launcher = root.join("launcher.py");
+            fs::write(&launcher, "pass\n").expect("write launcher");
+            let filter = root.join("filter.toml");
+            fs::write(
+                &filter,
+                r#"
+[meta]
+name = "untraced-quiet"
+version = 1
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+[[scope.rules]]
+selector = "pkg:ct_io_helper"
+exec = "skip"
+
+[[scope.rules]]
+selector = "obj:ct_io_helper.loud"
+exec = "trace"
+"#,
+            )
+            .expect("write filter");
+
+            let outputs = tempfile::tempdir().expect("outputs dir");
+            let code = format!(
+                "import sys\nsys.path.insert(0, r\"{root}\")\nimport ct_io_helper\nct_io_helper.quiet()\nimport ct_io_traced\nct_io_helper.loud()\n",
+                root = root.display()
+            );
+            let recorded = record_session_paths(
+                py,
+                outputs.path(),
+                &launcher.to_string_lossy(),
+                Some(vec![filter.to_string_lossy().into_owned()]),
+                &code,
+            );
+            let helper = recorded
+                .iter()
+                .find(|(path, _)| Path::new(path) == helper_path)
+                .unwrap_or_else(|| panic!("ct_io_helper.py has no paths.dat record: {recorded:?}"));
+            let want = source_line_lengths(helper_source);
+            assert!(
+                helper.1 == want,
+                "ct_io_helper.py should carry its source's table {want:?}; got {} line(s) starting {:?}",
+                helper.1.len(),
+                &helper.1[..helper.1.len().min(4)]
+            );
+        });
+    }
+
+    /// A program named by a relative argv[0] and the absolute filename
+    /// Python gives its code are one file, with one `paths.dat` record.
+    #[test]
+    fn a_relative_program_path_and_its_code_filename_are_one_path() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            let project = tempfile::tempdir().expect("project dir");
+            let root = project.path();
+            let script = root.join("ct_rel_main.py");
+            fs::write(&script, "value = 1\nvalue += 1\n").expect("write script");
+            let chdir = CString::new(format!("import os\nos.chdir(r\"{}\")", root.display()))
+                .expect("chdir code");
+            py.run(chdir.as_c_str(), None, None).expect("chdir");
+
+            let outputs = tempfile::tempdir().expect("outputs dir");
+            let code = format!(
+                "import runpy\nrunpy.run_path(r\"{}\", run_name='__main__')\n",
+                script.display()
+            );
+            let recorded = record_session_paths(py, outputs.path(), "ct_rel_main.py", None, &code);
+            let named: Vec<&(String, Vec<u32>)> = recorded
+                .iter()
+                .filter(|(path, _)| Path::new(path).file_name() == script.file_name())
+                .collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "ct_rel_main.py should have one paths.dat record: {recorded:?}"
+            );
+            assert_eq!(
+                Path::new(&named[0].0),
+                script,
+                "the record names the absolute path"
+            );
+        });
+    }
+
     fn assert_var(snapshot: &Snapshot, name: &str, expected: SimpleValue) {
         let actual = snapshot
             .vars

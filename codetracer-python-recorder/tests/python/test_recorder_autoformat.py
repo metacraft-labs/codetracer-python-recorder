@@ -461,3 +461,26 @@ def test_p6_2_py_recorder_no_source_view_for_normal_source(tmp_path: Path) -> No
         "no longer short-circuiting on ``looks_minified`` and is "
         "spuriously emitting views for hand-written sources."
     )
+
+
+def test_p6_2_py_recorder_reads_the_entry_script_once(tmp_path: Path) -> None:
+    """The entry script is registered once, before the trace's first
+    record, with its line table and its alternate view; its first step
+    does not register it again.  A second registration re-reads the file
+    (a table the writer refuses if the file changed in between) and
+    buffers a second, duplicate source view for the same path.
+    """
+    if not _black_on_path():
+        pytest.skip("[p6.2] black is NOT on PATH — the entry view cannot be produced.")
+
+    ct_path = _record(tmp_path, _MINIFIED_FIXTURE, name="bundle.min.py")
+    bundle = _ct_print_full(ct_path)
+
+    entry_views = [
+        sv for sv in bundle.get("source_views", [])
+        if str(sv.get("view_name", "")).endswith("bundle.min.fmt.py")
+    ]
+    assert len(entry_views) == 1, (
+        "the entry script must carry exactly one alternate source view; "
+        f"got {len(entry_views)}: {entry_views}"
+    )
