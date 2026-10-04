@@ -1007,33 +1007,40 @@ mod tests {
 
     #[test]
     fn try_autoformat_skips_when_tool_missing() {
-        // Drive ``black`` off PATH by clobbering PATH for the duration
-        // of the call.  We can't easily mock ``which`` itself, but
-        // setting PATH to an empty directory accomplishes the same
-        // thing in a portable way.
-        let saved_path = std::env::var("PATH").ok();
-        let saved_env = std::env::var(ENV_AUTOFORMAT).ok();
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_var("PATH", tmp.path());
-        std::env::remove_var(ENV_AUTOFORMAT);
-
+        const CHILD: &str = "CT_TEST_MISSING_FORMATTER_CHILD";
         let src = "a=1; b=2; c=a+b; d=c*c; print(d); ".repeat(20);
-        let outcome = try_autoformat(&src, Path::new("input.py"));
-
-        match saved_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
-        match saved_env {
-            Some(v) => std::env::set_var(ENV_AUTOFORMAT, v),
-            None => std::env::remove_var(ENV_AUTOFORMAT),
+        if std::env::var_os(CHILD).is_some() {
+            match try_autoformat(&src, Path::new("input.py")) {
+                AutoformatOutcome::Skipped(SkipReason::ToolMissing) => {}
+                other => panic!("expected ToolMissing, got {other:?}"),
+            }
+            return;
         }
 
-        match outcome {
-            AutoformatOutcome::Skipped(SkipReason::ToolMissing) => {}
-            other => panic!("expected ToolMissing, got {other:?}"),
-        }
+        // Real subprocess isolation covers both explicit bundled interpreter
+        // sources and PATH without changing other tests' process environment.
+        // No mocks: this invokes the same production resolver and formatter.
+        let empty_path = tempfile::tempdir().expect("owned empty tool search path");
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "runtime::autoformat::tests::try_autoformat_skips_when_tool_missing",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", empty_path.path())
+            .env_remove("CT_BUNDLED_PYTHON")
+            .env_remove("PYO3_PYTHON")
+            .env_remove(ENV_AUTOFORMAT)
+            .output()
+            .expect("execute genuine isolated missing-formatter test");
+        assert!(
+            output.status.success(),
+            "missing-formatter child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
     }
 
     #[test]

@@ -190,6 +190,7 @@
           pkgs = import nixpkgs { inherit system; };
           preCommit = self.checks.${system}.pre-commit-check;
           declaredPython = python.packageFor pkgs;
+          recorderBuildSdk = import ./tools/python-sdk/default.nix { inherit system; };
           pureRecorderPkg =
             (mkCodetracerPackages pkgs declaredPython).codetracer-pure-python-recorder;
           # git-hooks.nix installs `.pre-commit-config.yaml` and git hooks into
@@ -236,6 +237,7 @@
           };
 
           default = pkgs.mkShell {
+            RECORDER_TEST_BUILD_SDK = "${recorderBuildSdk}";
             packages = [
               # The declared interpreter FIRST, so a bare `python3` in this
               # shell is the one ./.python-version names. It used to be
