@@ -1,0 +1,98 @@
+# THE MCL STANDARD HOOK SET (`mcl-standard-hooks`), portable committed form --
+# PARTIAL ADOPTION, AND THE SHORTFALL IS STATED RATHER THAN HIDDEN.
+#
+# metacraft-dev-guidelines/policies/repo-requirements.md §4 requires the whole
+# set, so this file is a RECORDED SHORTFALL, not a claim of compliance. What it
+# carries is the committed-binaries tier of §4.3 -- the two mandatory refusals.
+# What it does not carry is the formatting tier, for the reason below.
+#
+# MEASURED STATE OF THIS REPOSITORY WHEN THE HOOKS WERE ADOPTED:
+# At c909b53c8 this repository tracked 302 file(s), of which 0 are `*.ct`
+# recording(s) and 0 exceed the 1024 KB ceiling. Neither count can be failed
+# by these hooks: both act only on files a commit ADDS.
+#
+# §4.1 says which adoption form is ours. This repository does not install the
+# standard set through the devops-modules flake, so the form is the portable
+# one: the block from devops-modules' `git-hooks/mcl-standard-hooks.yaml`, with
+# `rev:` pinned to a devops-modules sha. §4.1 is explicit that a repo which is
+# flake-free, or whose flake does not wire hooks, is not thereby defective --
+# "its fix is a committed config, not a new flake". Having NO hooks was the
+# defect: before this file there was neither a `.pre-commit-config.yaml` nor a
+# `.git/hooks/pre-commit` here, so §4.3 was satisfied on paper by nothing at all.
+#
+# Install:  prek install        (or: pre-commit install)
+# Run:      prek run --all-files
+#
+# ON NixOS, `uv` MUST BE ON PATH BEFORE EITHER OF THOSE. prek otherwise
+# downloads its own `uv`, which is a generic-linux dynamically linked binary and
+# cannot exec on NixOS ("Could not start dynamically linked executable"). The
+# hooks then fail to INSTALL, and the commit fails for a reason that has nothing
+# to do with its content -- a gate that refuses everything is not a gate, it is
+# an outage. See repo-requirements.md §4.x.
+#
+# WHY THESE TWO CAN LAND WITH NOTHING ELSE MOVING. Both act on ADDED files only
+# (`git diff --staged --diff-filter=A`), never on files already tracked, so they
+# cannot rewrite a byte of this repository and cannot retroactively fail
+# whatever it already carries. `--enforce-all` is deliberately not passed and
+# must not be added to "tighten" it.
+#
+# WHAT IS MISSING, AND WHY. Absent members of the set: `end-of-file-fixer`,
+# `editorconfig-checker`, `nixfmt`, `terraform-format`, `prettier`. All five are
+# FORMATTERS -- they rewrite files on first adoption -- so adding them here
+# would make this commit a corpus-wide reformat in which nobody could tell which
+# change moved which check. They are a separate, per-repo adoption with its own
+# measured cost.
+#
+# TO FINISH THE ADOPTION: add the `- repo: local` block from
+# `git-hooks/mcl-standard-hooks.yaml` verbatim plus `end-of-file-fixer`, run
+# this repository's own gates, and delete this paragraph.
+
+# ----------------------------------------------------------------------------
+# THIS REPO'S FLAKE ALSO DEFINES A HOOK SET, AND THIS FILE IS WHAT WILL RUN
+# ----------------------------------------------------------------------------
+#
+# `./flake.nix` wires a hook set through upstream git-hooks.nix. That set is
+# generated into a /nix/store symlink at devShell entry -- and from this commit
+# on it will NOT be installed, because upstream's own installationScript (which
+# is its shellHook, modules/pre-commit.nix:471) refuses when a non-symlink
+# exists at this path:
+#
+#     git-hooks.nix: WARNING: Refusing to install because of an existing
+#     config at .pre-commit-config.yaml
+#
+# NOTHING IS LOST BY THAT, AND THAT IS MEASURED RATHER THAN ASSUMED: this
+# repository had no `.git/hooks/pre-commit` at all before this commit (3 of the
+# workspace's 147 repos did), so the flake's set was never running on a commit
+# here. It still runs wherever the flake's `checks` output is evaluated. This
+# file adds the first commit-time gate; it does not replace a working one.
+#
+# Hook attributes named in that file -- read out of its `hooks = { ... }` block
+# by brace depth, a source-text heuristic -- so nobody has to guess what is not
+# being installed on commit:
+#
+#     lint
+#
+# TWO WAYS TO FINISH, EITHER IS FINE: translate those into this file as
+# `language: system` entries (the agent-harbor pattern -- the flake provides the
+# tools, the committed config provides the rules), or go the other way, delete
+# this file, re-add the path to .gitignore and adopt the committed-binaries tier
+# through `nixos-modules.modules.flake.git-hooks` instead. What is not fine is
+# leaving the repository with no gate, which is where it was.
+
+minimum_pre_commit_version: '3.0.0'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 1024 KB passed explicitly because UPSTREAM'S DEFAULT IS 500 KB; dropping
+      # the argument silently halves the ceiling.
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+
+  - repo: https://github.com/metacraft-labs/devops-modules
+    # Pinned to a sha, never to a branch: a hook set that changes under a repo
+    # without a commit in that repo is a hook set nobody can bisect.
+    rev: 6ba34072850f7348e1669a6daf8a0acb79669434
+    hooks:
+      - id: ban-added-ct-recordings
