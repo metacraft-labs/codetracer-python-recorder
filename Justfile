@@ -149,7 +149,7 @@ coverage-rust:
 
 coverage-python:
     mkdir -p codetracer-python-recorder/target/coverage/python
-    uv run --group dev --group test pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python
+    uv run --group dev --group test --group web pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python
 
 # Build the module in release mode
 build:
