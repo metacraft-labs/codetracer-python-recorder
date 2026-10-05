@@ -7,16 +7,19 @@ Standalone Windows dev environment for the Python recorder.
 ### Activate environment (auto-installs tools on first run)
 
 **Git Bash:**
+
 ```sh
 source env.sh
 ```
 
 **PowerShell:**
+
 ```powershell
 . .\env.ps1
 ```
 
 ### Build & test
+
 ```sh
 uv sync                    # create venv and install deps
 uv run maturin develop     # build Rust extension
@@ -26,11 +29,11 @@ uv run pytest              # Python tests
 
 ## Required tools
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Rust | 1.92.0 | Native extension compilation |
-| Cap'n Proto | 1.3.0 | Schema compilation |
-| uv | 0.9.28 | Python environment & package management |
+| Tool        | Version | Purpose                                 |
+| ----------- | ------- | --------------------------------------- |
+| Rust        | 1.92.0  | Native extension compilation            |
+| Cap'n Proto | 1.3.0   | Schema compilation                      |
+| uv          | 0.9.28  | Python environment & package management |
 
 ## Install location
 

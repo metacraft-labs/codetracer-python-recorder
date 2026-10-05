@@ -11,4 +11,3 @@ def ensure_trace_dir(root: Path, name: str = "trace_out") -> Path:
     target = root / name
     target.mkdir(exist_ok=True)
     return target
-

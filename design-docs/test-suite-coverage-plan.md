@@ -1,20 +1,24 @@
 # Test Suite Coverage Plan for codetracer-python-recorder
 
 ## Goals
+
 - Provide lightweight code coverage signals for both the Rust and Python layers without blocking CI on initial roll-out.
 - Enable engineers to inspect coverage reports for targeted modules (runtime activation, session bootstrap, Python facade helpers) while keeping runtimes acceptable.
 - Lay groundwork for future gating (e.g., minimum coverage thresholds) once the numbers stabilise.
 
 ## Tooling Choices
+
 - **Rust:** Use `cargo llvm-cov` to aggregate unit and integration test coverage. This tool integrates with `nextest` and produces both lcov and HTML outputs. It works with the existing `nix develop` environment once `llvm-tools-preview` is available (already pulled by rustup in Nix environment).
 - **Python:** Use `pytest --cov` with the `coverage` plugin. Restrict collection to the `codetracer_python_recorder` package to avoid noise from site-packages. Generate both terminal summaries and Cobertura XML for upload.
 
 ## Prerequisites & Dependencies
+
 - Add `cargo-llvm-cov` to the dev environment so the Just targets and CI runners share the same binary. In the Nix shell, include the package and ensure the Rust toolchain exposes `llvm-tools-preview` or equivalent `llvm` binaries. The current dev shell ships `llvmPackages_latest.llvm`, making `llvm-cov`/`llvm-profdata` available without rustup components.
 - Extend the UV `dev` dependency group with `pytest-cov` and `coverage[toml]` so Python coverage instrumentation is reproducible locally and in CI.
 - Standardise coverage outputs under `codetracer-python-recorder/target/coverage` to keep artefacts inside the Rust crate. Use `target/coverage/{rust,python}` for per-language assets and a top-level `index.txt` to note the run metadata if needed later.
 
 ## Execution Strategy
+
 1. **Local Workflow**
    - Add convenience Just targets that mirror the default test steps:
      - `just coverage-rust` → `LLVM_COV=$(command -v llvm-cov) LLVM_PROFDATA=$(command -v llvm-profdata) uv run cargo llvm-cov --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --nextest --lcov --output-path codetracer-python-recorder/target/coverage/rust/lcov.info`, followed by `cargo llvm-cov report --summary-only --json` to generate `summary.json` and a Python helper that prints a table mirroring the pytest coverage output. Document that contributors can run a second `cargo llvm-cov … --html --output-dir …` invocation when they need browsable reports because the CLI disallows combining `--lcov` and `--html` in a single run.
@@ -37,6 +41,7 @@
    - Investigate integration with Codecov or Coveralls once the raw reports stabilise; defer external upload until initial noise is assessed.
 
 ## Incremental Roll-Out
+
 1. Land Just targets and documentation so engineers can generate coverage locally.
 2. Add CI coverage steps guarded by `if: matrix.python-version == '3.12'` to avoid duplicate work across versions.
 3. Monitor runtimes and artefact sizes for a few cycles.
@@ -45,6 +50,7 @@
    - Introduce thresholds (e.g., fail if Rust line coverage < 70% or Python < 60%)—subject to discussion with the Runtime Tracing Team.
 
 ## Implementation Checklist
+
 - [x] Update development environment dependencies (`flake.nix`, `pyproject.toml`) to support coverage tooling out of the box.
 - [x] Add `just coverage-rust`, `just coverage-python`, and `just coverage` helpers with directory bootstrapping.
 - [x] Refresh documentation (`codetracer-python-recorder/tests/README.md` and top-level testing guide) with coverage instructions.
@@ -52,12 +58,14 @@
 - [x] Review initial coverage artefacts to set baseline thresholds before enforcement.
 
 ## Risks & Mitigations
+
 - **Runtime overhead:** Coverage runs are slower. Mitigate by limiting to a single matrix entry and caching `target/coverage` directories if needed.
 - **Report size:** HTML artefacts can be large. Compress before upload and prune historical runs as necessary.
 - **PyO3 instrumentation quirks:** Ensure `cargo llvm-cov` runs with `--no-default-features` similar to existing `nextest` invocation to avoid mismatched Python symbols.
 - **Coverage accuracy:** Python subprocess-heavy tests may under-report coverage. Supplement with targeted unit tests already added in Stage 4.
 
 ## Next Actions
+
 - Implement the local Just targets and update documentation.
 - Extend CI workflow with optional coverage steps (post-tests) and artefact upload.
 - Align with the developer experience team before enforcing thresholds.

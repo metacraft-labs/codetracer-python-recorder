@@ -6,9 +6,19 @@
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
   };
 
-  outputs = { self, nixpkgs, pre-commit-hooks }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      pre-commit-hooks,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
 
       # THE Python version, read from ./.python-version — see nix/python.nix
@@ -30,60 +40,68 @@
       # deliberately building for an interpreter other than the declared one:
       # it takes the version from `.python-version` so the caller cannot pick
       # one that disagrees with the extension this repo ships.
-      mkCodetracerPackages = pkgs: python: let
-        # Read versions from pyproject.toml files
-        purePythonProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-pure-python-recorder/pyproject.toml);
-        rustBackedProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-python-recorder/pyproject.toml);
-      in {
-        # Pure Python recorder package
-        codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-pure-python-recorder";
-          version = purePythonProjectToml.project.version;
-          pyproject = true;
+      mkCodetracerPackages =
+        pkgs: python:
+        let
+          # Read versions from pyproject.toml files
+          purePythonProjectToml = builtins.fromTOML (
+            builtins.readFile ./codetracer-pure-python-recorder/pyproject.toml
+          );
+          rustBackedProjectToml = builtins.fromTOML (
+            builtins.readFile ./codetracer-python-recorder/pyproject.toml
+          );
+        in
+        {
+          # Pure Python recorder package
+          codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-pure-python-recorder";
+            version = purePythonProjectToml.project.version;
+            pyproject = true;
 
-          src = ./codetracer-pure-python-recorder;
+            src = ./codetracer-pure-python-recorder;
 
-          build-system = with python.pkgs; [
-            setuptools
-          ];
+            build-system = with python.pkgs; [
+              setuptools
+            ];
 
-          pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
+            pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
 
-          meta = {
-            description = "Pure-Python prototype recorder producing CodeTracer traces";
-            license = pkgs.lib.licenses.mit;
+            meta = {
+              description = "Pure-Python prototype recorder producing CodeTracer traces";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+          # Rust-backed recorder package
+          codetracer-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-python-recorder";
+            version = rustBackedProjectToml.project.version;
+            pyproject = true;
+
+            src = ./codetracer-python-recorder;
+
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ./codetracer-python-recorder/Cargo.lock;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustPlatform.cargoSetupHook
+              rustPlatform.maturinBuildHook
+              capnproto
+              pkg-config
+            ];
+
+            pythonImportsCheck = [ "codetracer_python_recorder" ];
+
+            meta = {
+              description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
+              license = pkgs.lib.licenses.mit;
+            };
           };
         };
 
-        # Rust-backed recorder package
-        codetracer-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-python-recorder";
-          version = rustBackedProjectToml.project.version;
-          pyproject = true;
-
-          src = ./codetracer-python-recorder;
-
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./codetracer-python-recorder/Cargo.lock;
-          };
-
-          nativeBuildInputs = with pkgs; [
-            rustPlatform.cargoSetupHook
-            rustPlatform.maturinBuildHook
-            capnproto
-            pkg-config
-          ];
-
-          pythonImportsCheck = [ "codetracer_python_recorder" ];
-
-          meta = {
-            description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
-            license = pkgs.lib.licenses.mit;
-          };
-        };
-      };
-
-    in {
+    in
+    {
       # The declared interpreter, for consumers. `lib` outputs are
       # system-independent, so a downstream flake reads these without
       # instantiating a package set:
@@ -104,7 +122,8 @@
       # disagrees with the extension this repo ships.
       lib.mkCodetracerPackagesDefault = pkgs: mkCodetracerPackages pkgs (python.packageFor pkgs);
 
-      packages = forEachSystem (system:
+      packages = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
 
@@ -127,7 +146,8 @@
           python312Packages = mkCodetracerPackages pkgs pkgs.python312;
           python313Packages = mkCodetracerPackages pkgs pkgs.python313;
 
-        in {
+        in
+        {
           # Default packages (the interpreter declared in ./.python-version)
           inherit (defaultPackages) codetracer-pure-python-recorder codetracer-python-recorder;
           default = defaultPackages.codetracer-python-recorder;
@@ -137,7 +157,8 @@
           codetracer-python-recorder-python313 = python313Packages.codetracer-python-recorder;
           codetracer-pure-python-recorder-python312 = python312Packages.codetracer-pure-python-recorder;
           codetracer-pure-python-recorder-python313 = python313Packages.codetracer-pure-python-recorder;
-        });
+        }
+      );
 
       # Overlay for easy integration into other flakes.
       #
@@ -158,17 +179,20 @@
       # outside the single source. Consumers that need the ABI this repo ships
       # should use `lib.mkCodetracerPackagesDefault pkgs` instead, which cannot
       # pick a different one. codetracer does exactly that.
-      overlays.default = final: prev: let
-        packages = mkCodetracerPackages final final.python3;
-      in {
-        python3 = prev.python3.override {
-          packageOverrides = pyFinal: pyPrev: {
-            codetracer-python-recorder = packages.codetracer-python-recorder;
-            codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+      overlays.default =
+        final: prev:
+        let
+          packages = mkCodetracerPackages final final.python3;
+        in
+        {
+          python3 = prev.python3.override {
+            packageOverrides = pyFinal: pyPrev: {
+              codetracer-python-recorder = packages.codetracer-python-recorder;
+              codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+            };
           };
+          python3Packages = final.python3.pkgs;
         };
-        python3Packages = final.python3.pkgs;
-      };
 
       checks = forEachSystem (system: {
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
@@ -185,15 +209,15 @@
         };
       });
 
-      devShells = forEachSystem (system:
+      devShells = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
           preCommit = self.checks.${system}.pre-commit-check;
           declaredPython = python.packageFor pkgs;
           recorderBuildSdk = import ./tools/python-sdk/default.nix { inherit system; };
-          pureRecorderPkg =
-            (mkCodetracerPackages pkgs declaredPython).codetracer-pure-python-recorder;
-          # git-hooks.nix installs `.pre-commit-config.yaml` and git hooks into
+          pureRecorderPkg = (mkCodetracerPackages pkgs declaredPython).codetracer-pure-python-recorder;
+          # The owning canonical installer preserves the committed config and installs hooks into
           # `git rev-parse --show-toplevel` of the directory the shell is entered
           # from, so `nix develop /path/to/this-repo` run inside another checkout
           # would plant this repository's hooks there. `ownRepoOnly` runs a snippet
@@ -207,17 +231,11 @@
               && [ "$(${pkgs.coreutils}/bin/sha256sum "$_own_repo_root/flake.nix" | ${pkgs.coreutils}/bin/cut -d' ' -f1)" \
                 = "${builtins.hashFile "sha256" ./flake.nix}" ]; then
             ${script}
-            # git-hooks.nix's installer leaves core.hooksPath as the RELATIVE
-            # `.git/hooks`, in the config every worktree shares. A linked worktree
-            # cannot resolve it (there `.git` is a file), so git silently runs no
-            # hooks there. Point it at the common hooks directory instead.
-            if [ "$(${pkgs.git}/bin/git config --local --get core.hooksPath 2>/dev/null)" = .git/hooks ]; then
-              ${pkgs.git}/bin/git config --local core.hooksPath "$(${pkgs.git}/bin/git rev-parse --path-format=absolute --git-common-dir)/hooks"
-            fi
             fi
             unset _own_repo_root
           '';
-        in {
+        in
+        {
           # Minimal shell for running the pure-Python recorder in downstream
           # projects (e.g. CodeTracer flow tests on macOS without a full nix
           # dev shell). Provides the DECLARED interpreter (./.python-version)
@@ -306,7 +324,13 @@
             ])
             # `prek` replaces the legacy `pre-commit` workflow (workspace
             # prek-migration directive 2026-05).
-            ++ [ pkgs.prek ]
+            ++ [
+              pkgs.prek
+              pkgs.git
+              pkgs.editorconfig-checker
+              pkgs.opentofu
+              pkgs.nodePackages.prettier
+            ]
             # cargo-llvm-cov is a coverage-only tool that is marked broken on
             # aarch64-darwin in the pinned nixpkgs. Including it unconditionally
             # made the whole devShell fail to evaluate under `direnv`/`nix
@@ -362,9 +386,25 @@
               fi
               unset _ct_real_cargo_home _ct_cargo_home _ct_entry
 
-              ${ownRepoOnly preCommit.shellHook}
+              ${ownRepoOnly ''
+                _canonical_repro="''${REPROBUILD_REPRO:-}"
+                if [ -z "$_canonical_repro" ]; then
+                  _canonical_repro="$(command -v repro || true)"
+                fi
+                if [ -z "$_canonical_repro" ] || [ ! -x "$_canonical_repro" ]; then
+                  echo "Owning hook installation requires the matching Repro executable" >&2
+                  return 1
+                fi
+                (
+                  cd "$_own_repo_root" &&
+                  ${declaredPython}/bin/python3 tools/install-canonical-hooks.py --bootstrap-managed --repro "$_canonical_repro" &&
+                  ${declaredPython}/bin/python3 tools/install-canonical-hooks.py --repro "$_canonical_repro"
+                ) || return 1
+                unset _canonical_repro
+              ''}
             '';
           };
-        });
+        }
+      );
     };
 }

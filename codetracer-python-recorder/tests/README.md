@@ -5,10 +5,10 @@ developers can see which harness they are touching at a glance.
 
 - `python/` — Pytest and unittest suites that exercise the public Python API and
   high-level tracing flows. Invoke with `uv run --group dev --group test pytest
-  codetracer-python-recorder/tests/python`.
+codetracer-python-recorder/tests/python`.
 - `rust/` — Rust integration tests that embed CPython through PyO3. These are
   collected via the `tests/rust.rs` aggregator and run with `uv run cargo nextest
-  run --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features`.
+run --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features`.
 - Shared fixtures and helpers will live under `tests/support/` as they are
   introduced in later stages of the improvement plan.
 

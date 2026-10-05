@@ -5,17 +5,20 @@ Linked ADR: `design-docs/adr/0010-codetracer-python-recorder-benchmarking.md`
 Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 
 ## Goals
+
 - Deliver a comprehensive benchmarking suite covering hot Rust paths and Python end-to-end workflows.
 - Integrate the suite with CI to surface regression reports and maintain historical performance baselines.
 - Provide developer-friendly tooling (`just` recipes, scripts) for local reproduction and analysis.
 
 ## Non-Goals
+
 - Real-time production telemetry ingestion (future project).
 - Automated hardware provisioning for benchmark runners (assume existing CI hosts).
 
 ## Workstreams
 
 ### WS1 – Benchmark Foundations
+
 - Audit existing microbench (Criterion) and Python smoke tests; identify shared fixtures and gaps.
 - Define canonical benchmark scenarios and metadata schema (`benchconfig.toml`).
 - Introduce `codetracer-python-recorder/benchmarks/` workspace with reusable dataset builders.
@@ -30,6 +33,7 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 - Tune Criterion configuration (sample count, warm-up, flat sampling) to control noise, leveraging gnuplot for local visualisation.
 
 ### WS2 – Result Aggregation & Baselines
+
 - Implement `scripts/render_bench_report.py` to summarise results and compare against a baseline JSON.
 - Define JSON schema (`bench-schema.json`) capturing:
   - Git metadata (SHA, branch).
@@ -40,6 +44,7 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 - Document storage conventions in `docs/onboarding/benchmarking.md`.
 
 ### WS3 – CI Integration
+
 - Add GitHub Actions (or Jenkins) workflow `bench.yml` with matrix support (Linux x86_64 first, macOS optional).
 - Steps:
   1. Enter Nix dev shell (flakes).
@@ -51,6 +56,7 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 - Ensure workflow caches `~/.cargo`/`uv` to control runtime.
 
 ### WS4 – Reporting & Tooling UX
+
 - Build `scripts/bench_report_html.py` (optional) to render static HTML charts using existing JSON (for sharing).
 - Add `docs/onboarding/benchmarking.md` with:
   - Scenario catalogue and interpretation guidance.
@@ -59,12 +65,14 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 - Provide pre-commit hook (optional) reminding devs to run `just bench` before merging perf-sensitive changes.
 
 ### WS5 – Guard Rails & Maintenance
+
 - Define regression thresholds per scenario (e.g., `baseline`: 5%, `filter_glob`: 7%).
 - Implement allowlist mechanism for temporary exceptions (`benchmarks/exceptions.yaml`).
 - Integrate results into release checklist (CI gating, baseline refresh).
 - Establish ownership (`CODEOWNERS`) for benchmarking artefacts.
 
 ## Deliverables
+
 - ADR 0010 (this plan’s prerequisite) – ✅
 - Updated `Justfile` commands and benchmarking scripts.
 - JSON schema, baselines, and reporting scripts.
@@ -72,6 +80,7 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
 - Documentation: onboarding guide, contribution guidelines for benchmarks.
 
 ## Risks & Mitigations
+
 - **CI flakiness**: Variability due to shared hardware.
   - Mitigate with warm-up passes, controlled CPU governor, and trend-based thresholds (use median of multiple runs).
 - **Developer friction**: Longer local runs.
@@ -80,11 +89,13 @@ Target window: Post-configurable-trace-filter WS6 (tentatively WS7–WS8)
   - Use explicit PRs updating baselines with context + review; automate baseline capture script to reduce manual error.
 
 ## Open Questions
+
 - Storage backend for historical data (GitHub artefacts vs S3/GCS).
 - Whether to include memory allocations and binary size metrics in the first iteration.
 - Potential integration with external dashboards (e.g., Grafana, BuildBuddy).
 
 ## Timeline (tentative, assuming 2-week sprints)
+
 - WS1: 1 sprint – scaffolding and expanded harnesses.
 - WS2: 0.5 sprint – aggregation tooling.
 - WS3: 1 sprint – CI workflow & artefact management.

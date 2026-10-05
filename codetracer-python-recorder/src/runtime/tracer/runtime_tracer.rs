@@ -726,7 +726,8 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -821,7 +822,8 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -930,7 +932,8 @@ result = compute()\n"
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -1625,8 +1628,11 @@ initializer("omega")
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+            let outputs = TraceOutputPaths::new(
+                outputs_dir.path(),
+                TraceEventsFileFormat::BinaryV0,
+                "program.py",
+            );
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
@@ -1774,7 +1780,8 @@ sensitive("s3cr3t")
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let program = script_path.to_string_lossy().into_owned();
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
 
             let mut tracer = RuntimeTracer::new(
                 &program,
@@ -1862,7 +1869,8 @@ snapshot()
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let program = script_path.to_string_lossy().into_owned();
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
@@ -2000,7 +2008,8 @@ snapshot()
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
             let program = script_path.to_string_lossy().into_owned();
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
@@ -2776,8 +2785,11 @@ snapshot()
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs =
-                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+            let outputs = TraceOutputPaths::new(
+                outputs_dir.path(),
+                TraceEventsFileFormat::BinaryV0,
+                "program.py",
+            );
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
@@ -2821,7 +2833,8 @@ snapshot()
 
         let outputs_dir = tempfile::tempdir().expect("outputs dir");
         let program = program_path.to_string_lossy().into_owned();
-        let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+        let outputs =
+            TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
 
         let mut tracer = RuntimeTracer::new(
             &program,

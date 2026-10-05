@@ -101,14 +101,20 @@ bench:
 py-test:
     uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
 
-lint: lint-rust lint-errors verify-cli-convention
+lint: lint-rust lint-errors verify-cli-convention lint-python-indentation lint-rust-format
+
+lint-rust-format:
+    uv run cargo fmt --manifest-path codetracer-python-recorder/Cargo.toml --all -- --check
 
 lint-rust:
     uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic
 
+lint-python-indentation:
+    uv run python3 tools/check_python_indentation.py
+
 lint-errors:
     uv run python3 codetracer-python-recorder/scripts/lint_no_unwraps.py
-    
+
 # Run tests only on the pure recorder
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder
@@ -321,3 +327,17 @@ record-request-panel-fixture OUT FRAMEWORK="flask":
 # Runs `nix develop`, so it is not part of the in-shell test recipes.
 test-dev-shell:
     bash tests/test_dev_shell_writes_nothing_elsewhere.sh
+
+# Install canonical native checks and preserve matching Repro publication hooks.
+[positional-arguments]
+install-hooks REPRO:
+    python3 tools/install-canonical-hooks.py --bootstrap-managed --repro "$1"
+    python3 tools/install-canonical-hooks.py --repro "$1"
+
+# Execute all configured upstream checks using the owning native tools.
+check-hooks:
+    PREK_NO_FAST_PATH=1 prek run --all-files
+
+# Real independent Git/worktree ownership controls, without mocks or shared hooks.
+check-hook-ownership:
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_canonical_hook_ownership.py

@@ -1,20 +1,159 @@
-# EditorConfig helps maintain consistent coding styles for multiple developers
-# http://EditorConfig.org
-
 root = true
 
 [*]
 charset = utf-8
 end_of_line = lf
-indent_style = space
-indent_size = 4
 insert_final_newline = true
 trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
 
+# Preserve the existing Python source convention.
 [*.py]
 indent_size = 4
 
+# These owning source formats currently use two-space indentation.
+[*.{nix,nim,json}]
+indent_size = 2
+
+# Generated native lock formats retain their canonical entries.
+[{Cargo.lock,repro.lock}]
+indent_size = 1
+
+[flake.lock]
+indent_size = 2
+
+# Make recipes require tabs; Just recipes support the existing tabs or spaces.
+[Makefile]
+indent_style = tab
+
+[{Justfile,*.just}]
+indent_style = unset
+
+# Preserve the existing significant Markdown hard-line-break convention.
 [*.md]
-# Two trailing spaces yield a hard line break in Markdown.
-# https://spec.commonmark.org/0.30/#hard-line-breaks
 trim_trailing_whitespace = false
+
+# These exact files contain literal text whose physical indentation is data.
+# Required lint-python-indentation validates every tracked Python code block
+# with AST/tokenize and preserves four-space code indentation without exclusions.
+
+[/test-programs/web/serve.py]
+indent_size = unset
+
+[/test-programs/web/session_driver.py]
+indent_size = unset
+
+[/test-programs/web/fastapi/app.py]
+indent_size = unset
+
+[/codetracer-python-recorder/codetracer_python_recorder/auto_start.py]
+indent_size = unset
+
+[/codetracer-python-recorder/codetracer_python_recorder/markers.py]
+indent_size = unset
+
+[/codetracer-python-recorder/codetracer_python_recorder/cli.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_correlation_markers.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_pytest_integration.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_pure_oracle.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_recorder_autoformat.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_cli_integration.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/test_request_spans.py]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/python/support/ctfs.py]
+indent_size = unset
+
+[/codetracer-python-recorder/codetracer_python_recorder/middleware/span_recorder.py]
+indent_size = unset
+
+[/codetracer-python-recorder/codetracer_python_recorder/middleware/wsgi.py]
+indent_size = unset
+
+[/cross-repo/samples/launcher_compat_sample.py]
+indent_size = unset
+
+[/codetracer-pure-python-recorder/tests/test_installed_cli.py]
+indent_size = unset
+
+# YAML follows the owning mandatory Prettier two-space convention.
+[*.{yaml,yml}]
+indent_size = 2
+
+# The owning TOML arrays use two-space indentation.
+[/pyproject.toml]
+indent_size = 2
+
+# Exact verbatim license text is data; retain all byte/EOL/EOF checks.
+[/LICENSE]
+indent_size = unset
+
+# These two Rust files contain literal programs/continued strings.
+# Required whole-workspace cargo fmt --check validates Rust code indentation.
+[/codetracer-python-recorder/src/runtime/tracer/{runtime_tracer.rs,events.rs}]
+indent_size = unset
+
+# Finite existing Markdown documents have significant list/fence/literal
+# indentation; mandatory genuine Prettier checks their Markdown structure.
+[/{AGENTS.md,AUDIT-CTFS-2026-05.md,README.md,issues.md}]
+indent_size = unset
+
+[/.archive/issues-2025-09-09.md]
+indent_size = unset
+
+[/codetracer-pure-python-recorder/{AGENTS.md,README.md}]
+indent_size = unset
+
+[/codetracer-python-recorder/README.md]
+indent_size = unset
+
+[/codetracer-python-recorder/benchmarks/assignment_reconstructor.md]
+indent_size = unset
+
+[/codetracer-python-recorder/tests/README.md]
+indent_size = unset
+
+[/design-docs/{US0028 - Configurable Python trace filters.md,balanced-call-stack-events-implementation-plan.md,balanced-call-stack-events-implementation-plan.status.md,code-object.md,codetracer-architecture-refactor-implementation-plan.status.md,codetracer-python-benchmarking-implementation-plan.md,codetracer-python-recorder-pypi-release-checklist.md,codetracer-python-recorder-pypi-release-implementation-plan.md,codetracer-python-recorder-release-operations.md,configurable-trace-filters-implementation-plan.md,design-001.md,file-level-srp-refactor-plan.md,function-level-srp-refactor-plan.md,io-capture-line-proxy-implementation-plan.status.md,module-call-event-naming-implementation-plan.md,module-name-resolution-globals-implementation-plan.status.md,only-real-filenames.md,py-api-001.md,python-recorder-db-backend-implementation-plan.md,recorder-exit-code-policy-implementation-plan.md,reliable-module-name-derivation-implementation-plan.md,test-suite-coverage-plan.md,test-suite-improvement-plan.md,test-suite-improvement-plan.status.md,toplevel-exit-and-trace-gating-implementation-plan.md,toplevel-exit-and-trace-gating-implementation-plan.status.md,value-capture.md}]
+indent_size = unset
+
+[/design-docs/adr/{0001-file-level-single-responsibility.md,0002-function-level-srp.md,0003-test-suite-governance.md,0004-error-handling-policy.md,0006-codetracer-python-recorder-pypi-release.md,0009-configurable-trace-filters.md,0010-codetracer-python-recorder-benchmarking.md,0011-codetracer-architecture-refactor.md,0012-balanced-call-stack-events.md,0013-reliable-module-name-derivation.md,0014-module-call-event-naming.md,0015-balanced-toplevel-lifecycle-and-trace-gating.md}]
+indent_size = unset
+
+[/docs/onboarding/trace-filters.md]
+indent_size = unset
+
+[/examples/README.md]
+indent_size = unset
+
+[/nix/USAGE_EXAMPLE.md]
+indent_size = unset
+
+[/rules/{issues.md,source-code.md}]
+indent_size = unset
+
+[/test-programs/web/README.md]
+indent_size = unset
+
+
+# This exact workflow contains a canonical folded-expression scalar payload.
+# Mandatory native Prettier checks YAML structure; preserve its literal spacing.
+[/.github/workflows/publish-workspace-lock.yml]
+indent_size = unset
+
+# These two status documents contain canonical two-space list continuations.
+# Required native Prettier validates their complete Markdown structure.
+[/design-docs/{error-handling-implementation-plan.status.md,module-call-event-naming-implementation-plan.status.md}]
+indent_size = 2

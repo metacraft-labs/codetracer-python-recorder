@@ -9,6 +9,7 @@
 ## Context
 
 `codetracer-python-recorder` currently depends on three distinct harnesses: Rust unit tests inside the crate, Rust integration tests under `codetracer-python-recorder/tests/`, and Python tests under `codetracer-python-recorder/test/`. `just test` wires these together via `cargo nextest run` and `pytest`, but we do not document which behaviours belong to each layer. As a result:
+
 - Contributors duplicate coverage (e.g., API happy paths exist both in Rust integration tests and Python tests) while other areas are untested (no references to `TraceSessionBootstrap::prepare`, `ensure_trace_directory`, or `TraceOutputPaths::configure_writer`).
 - The `test/` vs `tests/` split is opaque to new maintainers and tooling; several CI linters only recurse into `tests/`, so Python-only changes can silently reduce coverage.
 - Developers add integration-style assertions to Python tests that require spawning interpreters, even when the logic could be exercised cheaply in Rust.

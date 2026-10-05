@@ -1,13 +1,16 @@
 # Codetracer Architecture Refactor – Status
 
 ## Task Summary
+
 - **Objective:** Execute ADR 0011 by modularising `codetracer-python-recorder`, starting with Milestone 1 (Trace Filter Decomposition) to restore single-responsibility boundaries and reduce coupling.
 
 ## Relevant Design Docs
+
 - `design-docs/adr/0011-codetracer-architecture-refactor.md`
 - `design-docs/codetracer-architecture-refactor-implementation-plan.md`
 
 ## Key Source Files (Milestone 1 Focus)
+
 - `codetracer-python-recorder/src/trace_filter/config.rs`
 - `codetracer-python-recorder/src/trace_filter/engine.rs`
 - `codetracer-python-recorder/src/session/bootstrap.rs`
@@ -15,6 +18,7 @@
 - Associated `trace_filter` unit tests under `codetracer-python-recorder/src/trace_filter/`
 
 ## Progress Log
+
 - ✅ Captured architectural intent in ADR 0011 and drafted the implementation plan with milestones and concept-to-file mapping.
 - ✅ Logged this status tracker to maintain continuity across milestones.
 - ✅ Milestone 1 Kickoff: catalogued existing `trace_filter` responsibilities and outlined target submodules (`model`, `loader`, `summary`, `engine` helpers).
@@ -89,14 +93,15 @@
 - ✅ Milestone 6 Step 1: realigned the Python trace filter benchmark to account for the always-prepended `builtin-default` filter when validating metadata, restoring the smoke test with `just test` (nextest + pytest) coverage.
 - ✅ Milestone 6 Step 2: finished the integration cleanup—tightened monitoring callback logging to use the new table metadata, confirmed no stale doc references or build script changes were required, and re-ran `just test` (nextest + pytest) as the final verification before ADR 0011 acceptance.
 
-
 ### Planned Extraction Order (Milestone 4)
+
 1. **Callback metadata table:** Introduce a declarative structure in `monitoring::callbacks` that captures CPython event identifiers, binding names, and tracer entrypoints so registration/unregistration can iterate instead of hand-writing each branch.
 2. **Callback relocation:** Move the `*_callback` PyO3 functions plus the `catch_callback` and `call_tracer_with_code` helpers into `monitoring::callbacks`, exposing a minimal API for registering callbacks against a tool id.
 3. **Install plumbing:** Shift `install_tracer`, `flush_installed_tracer`, and `uninstall_tracer` into `monitoring::install`, ensuring tool acquisition, event mask negotiation, and disable-sentinel handling route through the new callback table.
 4. **Tests and verification:** Update unit tests (including panic-to-pyerr coverage) to point at the new modules, add table-driven tests for registration completeness, and run `just test` to confirm the refactor preserves behaviour.
 
 ### Planned Extraction Order (Milestone 5)
+
 1. **Scaffold collaborators:** Introduce `runtime::tracer` with submodules for lifecycle, events, filtering, and IO; move `RuntimeTracer` into the new tree while keeping the public facade (`crate::runtime::RuntimeTracer`) stable.
 2. **IO coordinator migration:** Extract IO capture installation/flush/record logic into `runtime::tracer::io::IoCoordinator`, delegating from `RuntimeTracer` and covering payload metadata helpers.
 3. **Filter cache module:** Move scope resolution, ignore tracking, statistics, and metadata serialisation into `runtime::tracer::filtering`, exposing a collaborator that caches resolutions and records drops.
@@ -104,6 +109,7 @@
 5. **Event processor:** Shift `Tracer` trait implementation and per-event pipelines into `runtime::tracer::events`, wiring through the collaborators and updating unit/integration tests; run `just test` after the split.
 
 ### Planned Extraction Order (Milestone 2)
+
 1. **Policy model split:** Move data structures (`OnRecorderError`, `IoCapturePolicy`, `RecorderPolicy`, `PolicyUpdate`, `PolicyPath`) and policy cell helpers (`policy_cell`, `policy_snapshot`, `apply_policy_update`) into `policy::model`. Expose minimal APIs for environment/FFI modules.
 2. **Policy environment parsing:** Relocate `configure_policy_from_env`, env variable constants, and helper parsers (`parse_bool`, `parse_capture_io`) into `policy::env`, depending on `policy::model` for mutations.
 3. **Policy FFI layer:** Migrate PyO3 functions (`configure_policy_py`, `py_configure_policy_from_env`, `py_policy_snapshot`) into `policy::ffi`, keeping tests alongside; ensure `lib.rs` uses the new module exports.
@@ -111,6 +117,7 @@
 5. **Update tests & imports:** Adjust unit tests to target new modules, ensure re-exports keep existing public API stable, and run `just test` after each stage.
 
 ### Planned Extraction Order (Milestone 1)
+
 1. **Model types first:** Relocate shared enums/structs (`ExecDirective`, `ValueAction`, `IoStream`, `FilterMeta`, `IoConfig`, `ValuePattern`, `ScopeRule`, `FilterSource`, `FilterSummary*`, `TraceFilterConfig`) into `trace_filter::model`. Update `config.rs` to re-export or `use` the new module and adjust external call sites (`session/bootstrap.rs`, `runtime/mod.rs`, tests).
 2. **Loader utilities next:** Port `ConfigAggregator`, parsing helpers (`ingest_*`, `calculate_sha256`, `detect_project_root`, `parse_*`, `parse_rules`, `parse_value_patterns`) and serde `Raw*` structs into `trace_filter::loader`. Provide a clean API (e.g., `Loader::finish() -> TraceFilterConfig`) consumed by the facade.
 3. **Summary helpers:** Move filter summary construction into `trace_filter::summary`, ensuring metadata writers (`RuntimeTracer::append_filter_metadata`) switch to the new API.
@@ -118,5 +125,6 @@
 5. **Tests:** After each move, update unit tests in `trace_filter` modules and dependent integration tests (`session/bootstrap.rs` tests, `runtime` tests). Targeted command: `just test` (covers Rust + Python suites).
 
 ## Next Actions
+
 1. Communicate completion to stakeholders and monitor for regression reports during adoption.
 2. Archive supporting notes and update any external runbooks that referenced the pre-refactor layout.

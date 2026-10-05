@@ -8,6 +8,7 @@
 ## Context
 
 The codetracer Python recorder crate has evolved quickly and several source files now mix unrelated concerns:
+
 - [`src/lib.rs`](../../codetracer-python-recorder/src/lib.rs) hosts PyO3 module wiring, global logging setup, tracing session state, and filesystem validation in one place.
 - [`src/runtime/tracer/runtime_tracer.rs`](../../codetracer-python-recorder/src/runtime/tracer/runtime_tracer.rs) (formerly `src/runtime_tracer.rs`) interleaves activation gating, writer lifecycle control, PyFrame helpers, and Python value encoding logic, making it challenging to test or extend any portion independently.
 - [`src/tracer.rs`](../../codetracer-python-recorder/src/tracer.rs) combines sys.monitoring shim code with the `Tracer` trait, callback registration, and global caches.
@@ -18,6 +19,7 @@ This violates the Single Responsibility Principle (SRP) at the file level, obscu
 ## Decision
 
 We will reorganise both the Rust crate and supporting Python package so that each file covers a single cohesive topic and exposes a narrow interface. Concretely:
+
 1. Restrict `src/lib.rs` to PyO3 module definition and `pub use` re-exports. Move logging configuration into `src/logging.rs` and tracing session lifecycle into `src/session.rs`.
 2. Split the current runtime tracer into a `runtime` module directory with dedicated files for activation control, value encoding, and output file management. The façade in `runtime/mod.rs` will assemble these pieces and expose the existing `RuntimeTracer` API.
 3. Introduce a `monitoring` module directory that separates sys.monitoring primitive bindings (`EventId`, `ToolId`, registration helpers) from the `Tracer` trait and callback dispatch logic.

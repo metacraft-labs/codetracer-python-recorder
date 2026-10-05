@@ -7,17 +7,20 @@
 - **Informed:** Support engineers, product analytics consumers
 
 ## Context
+
 - Every Python import executes the target module object under the hood. The recorder hooks `PY_START` for those executions and emits a synthetic “function call” whose name currently comes from `code.co_qualname`.
 - For module-level code objects CPython hardcodes `co_name == co_qualname == "<module>"`, so our trace file shows dozens (or hundreds) of `<module>` activations with no indication of which package was imported.
 - Trace consumers (CLI visualisations, query tools, and data-engineering pipelines) rely on the recorded function name to surface hot paths, build flame graphs, and attribute time/cost to particular packages. Without module names, users cannot tell whether a slow import belongs to `boto3`, `_distutils_hack`, or their own modules.
 - The trace filter engine already resolves module names from filenames / `sys.modules` to power `pkg:*` selectors, but the runtime tracer never reuses that information when assigning `FunctionId`s.
 
 ## Problem
+
 - Module import events are indistinguishable in the trace log, making it impossible to attribute import costs, filter specific packages after the fact, or answer “which module executed here?” without cross-referencing filenames manually.
 - Because traces only show `<module>`, downstream tools collapse all module-level activations into a single node, hiding per-package behaviour and producing misleading metrics.
 - Purely using filenames as a proxy would leak physical layouts (e.g., `/usr/lib/python3.12/site-packages/boto3/__init__.py`) into the user-facing name and fails for zip apps or namespace packages.
 
 ## Decision
+
 1. **Introduce a shared module identity helper.**
    - Extract the existing module-derivation logic (`module_name_from_roots`, `lookup_module_name`) into a reusable service that can run independent of the filter engine.
    - Accept a `CodeObjectWrapper` + `Python<'_>` handle and return a cached module name keyed by (code id, canonical filename). The helper first consults the filter resolution (if available), then repeats the relative-path inference, and finally falls back to `sys.modules` + frame globals (`__name__`) before conceding.
@@ -32,6 +35,7 @@
    - Update the recorder docs to state that module-level call events now show `<module-name>` and call out the limited cases (synthetic filenames, frozen modules, namespace packages) where the fallback remains `<module>`.
 
 ## Consequences
+
 - **Pros**
   - Import-heavy traces become readable: users immediately know which modules executed without digging through file paths.
   - Post-processing / analytics pipelines gain a stable key (the dotted module name) to aggregate import costs or identify slow third-party packages.
@@ -45,11 +49,13 @@
   - Accessing `sys.modules` must hold the GIL and avoid long-lived Python references; the helper API enforces that discipline.
 
 ## Alternatives
+
 - **Keep `<module>` and rely on filenames elsewhere.** Rejected because the filename is not present on every trace consumer surface and is cumbersome for humans.
 - **Rewrite module names from filenames only.** Rejected due to incorrect results for namespace packages, zip imports, site-packages bytecode caches, and `.pyc` vs `.py` mismatches.
 - **Add a new event field for module name.** Rejected to avoid changing the trace file schema; reusing the existing `function_name` field keeps compat with all tooling.
 
 ## References
+
 - `codetracer-python-recorder/src/runtime/tracer/runtime_tracer.rs` (`ensure_function_id`).
 - `codetracer-python-recorder/src/runtime/tracer/events.rs` (`register_call_record`).
 - `codetracer-python-recorder/src/trace_filter/engine.rs` (current module name derivation & caching).

@@ -124,6 +124,7 @@ codetracer-record --help
 - `packages.${system}.default` - Alias for `codetracer-python-recorder`
 
 All packages are built for Python 3.12 and support these systems:
+
 - `x86_64-linux`
 - `aarch64-linux`
 - `x86_64-darwin`

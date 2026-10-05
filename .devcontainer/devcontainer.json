@@ -1,4 +1,3 @@
-
 {
   "name": "codetracer-python-recorder",
   "dockerFile": "Dockerfile",
@@ -7,15 +6,12 @@
     "args": {
       "USER_UID": "${localEnv:USER_UID}",
       "USER_GID": "${localEnv:USER_GID}"
-    },
+    }
   },
   "postCreateCommand": "direnv allow",
   "customizations": {
     "vscode": {
-      "extensions": [
-        "direnv.direnv",
-        "arrterian.nix-env-selector"
-      ]
+      "extensions": ["direnv.direnv", "arrterian.nix-env-selector"]
     }
   }
 }

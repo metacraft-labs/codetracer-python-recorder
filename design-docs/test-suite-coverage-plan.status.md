@@ -1,6 +1,7 @@
 # Test Suite Coverage Plan Status
 
 ## Current Status
+
 - ✅ Plan doc expanded with prerequisites, detailed Just targets, CI strategy, and an implementation checklist (see `design-docs/test-suite-coverage-plan.md`).
 - ✅ Implementation: coverage dependencies added to the dev shell (`flake.nix`) and UV groups (`pyproject.toml`).
 - ✅ Implementation: `just coverage-*` helpers landed with matching documentation in `codetracer-python-recorder/tests/README.md`.
@@ -8,4 +9,5 @@
 - ✅ Assessment: capture baseline coverage numbers before proposing enforcement thresholds.
 
 ## Next Steps
+
 We are Done

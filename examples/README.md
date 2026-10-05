@@ -2,11 +2,11 @@ Examples for exercising the Rust‑backed recorder during development.
 
 Run any script via the module CLI so tracing is consistently enabled:
 
-  python -m codetracer_python_recorder examples/<script>.py
+python -m codetracer_python_recorder examples/<script>.py
 
 Scripts
 
-- basic_args.py: Demonstrates positional‑only, pos‑or‑kw, kw‑only, *args, **kwargs.
+- basic_args.py: Demonstrates positional‑only, pos‑or‑kw, kw‑only, \*args, \*\*kwargs.
 - exceptions.py: Raises, catches, and prints an exception in except.
 - classes_methods.py: Instance, @classmethod, @staticmethod, and a property.
 - recursion.py: Direct recursion (factorial) and mutual recursion.

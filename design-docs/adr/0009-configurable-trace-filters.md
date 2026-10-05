@@ -7,14 +7,17 @@
 - **Informed:** Replay consumers, Support engineering
 
 ## Context
+
 - The PyO3 recorder (`src/runtime/mod.rs`) traces every code object whose filename looks "real" and captures all locals, globals, call arguments, and return values without any policy gate.
 - `RecorderPolicy` (`src/policy.rs`) only controls error behaviour, logging, and IO capture. There is no notion of user-authored trace filters or redaction rules.
-- The user story *US0028 – Configurable Python trace filters* mandates a unified selector DSL covering packages, files, and code objects plus value-level allow/deny lists processed in declaration order.
+- The user story _US0028 – Configurable Python trace filters_ mandates a unified selector DSL covering packages, files, and code objects plus value-level allow/deny lists processed in declaration order.
 - The original pure-Python tracer has no reusable filtering engine we can transplant; the Rust backend needs its own parser, matcher, and runtime integration.
 - Tracing hot paths (`on_py_start`, `on_line`, `on_py_return`) must stay cheap. We already cache `CodeObjectWrapper` attributes and blacklist synthetic filenames via `ignored_code_ids`.
 
 ## Problem
+
 We must let maintainers author deterministic filters that:
+
 - Enable or disable tracing for specific packages, files, or fully qualified code objects with glob/regex support.
 - Allow or redact captured values (locals, globals, arguments, return payloads) per scope while keeping variable names visible.
 - Compose multiple filter files (`baseline::overrides`) with predictable default inheritance.
@@ -22,6 +25,7 @@ We must let maintainers author deterministic filters that:
 The solution has to load human-authored TOML, enforce schema validation, and add minimal overhead to the monitoring callbacks. Policy errors must surface as structured `RecorderError` instances.
 
 ## Decision
+
 1. **Introduce a `trace_filter` module (Rust)** compiling filters into an immutable `TraceFilterEngine`.
    - Parse TOML using `serde` + `toml` with `deny_unknown_fields`.
    - Support the selector grammar `<kind> ":" [<match_type> ":"] <pattern>` for both scope rules (`pkg`, `file`, `obj`) and value patterns (`local`, `global`, `arg`, `ret`, `attr`).
@@ -48,22 +52,26 @@ The solution has to load human-authored TOML, enforce schema validation, and add
    - Emit structured redaction counters (e.g., `filter.redactions.locals`, `filter.skipped_scopes`) through the existing logging channel at debug level.
 
 ## Consequences
+
 - **Upsides:** Maintainers gain precise control over tracing scope and redaction without touching runtime code. Ordered evaluation keeps behaviour predictable, and caching ensures hot callbacks only pay a fast hash lookup.
 - **Costs:** Startup becomes more complex (reading and compiling TOML, glob/regex dependencies). We must carefully validate user input and provide actionable errors. RuntimeTracer grows extra state and branching, requiring new tests to guard regressions.
 - **Risks:** Incorrect module/file derivation could lead to unexpected matches; we'll derive package names from relative paths and cache results to minimise repeated filesystem work. Regex filters can be expensive; precompilation mitigates per-event cost, but we still need guardrails against runaway patterns (document best practices, potentially add a length cap).
 
 ## Alternatives
+
 - **Keep filters in Python.** Rejected because value capture happens in Rust; Python-driven filters would require round-tripping locals and arguments across the FFI, negating performance and privacy benefits.
 - **Embed YAML/JSON instead of TOML.** TOML matches the existing design doc examples, integrates well with `serde`, and offers comments—preferred for hand-authored configs.
 - **Per-event dynamic evaluation without caching.** Discarded due to hot-path overhead; caching `ScopeResolution` by code id keeps callbacks cheap while still honouring ordered overrides.
 
 ## Rollout
+
 1. Land the parser, engine, and RuntimeTracer integration behind a feature flag (e.g., `trace-filters`) defaulting on once unit + integration tests pass.
 2. Update CLI and Python APIs together so downstream consumers see a coherent interface.
 3. Ship documentation and sample filters, then flip ADR status to **Accepted** after verifying the implementation plan milestones.
 4. Monitor performance regressions via benchmarks that stress argument/local capture with filters enabled vs disabled. Adjust caching or selector matching if overhead exceeds the 10 % guardrail.
 
 ## Performance Analysis
+
 - **Baseline hot paths:** `RuntimeTracer::on_py_start`, `on_line`, and `on_py_return` currently perform bounded work—lookup cached `CodeObjectWrapper` metadata, encode locals/globals once per event, and write to `NonStreamingTraceWriter`. Filtering adds (a) a first-use compilation pass per `code.id()` and (b) per-value policy checks.
 - **First-use resolution:** When a new code object appears we compute `{package, file, qualname}` and walk the ordered scope list. With precompiled matchers the dominant cost is string comparison and glob/regex evaluation. Even with 50 rules the resolution remains under ~20 µs on a 3.4 GHz CPU (one hash lookup plus a few matcher calls). Result caching (hash map keyed by `code.id()`) ensures the cost is paid once per code object.
 - **Per-event overhead:** After resolution we only pay a pointer lookup to fetch the cached `ScopeResolution`. Value capture walks the small `value_patterns` vector (expected count <10) until a match is found. Redaction emits a constant `ValueRecord::Error` without allocating large buffers. In aggregate this adds ~200–400 ns per variable inspected; for a typical frame with 5 locals and 4 arguments we expect <4 µs extra per event.

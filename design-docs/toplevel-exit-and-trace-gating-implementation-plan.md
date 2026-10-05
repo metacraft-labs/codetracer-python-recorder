@@ -2,14 +2,16 @@
 
 Plan owners: codetracer recorder maintainers  
 Target ADR: 0015 – Balanced Toplevel Lifecycle and Unified Trace Gating  
-Impacted components:  
-- `codetracer-python-recorder/src/session.rs` and `codetracer_python_recorder/session.py`  
-- `codetracer-python-recorder/src/runtime/tracer` (events, lifecycle, filtering)  
-- `codetracer-python-recorder/src/runtime/activation.rs`  
-- `codetracer-python-recorder/src/runtime/output_paths.rs` and metadata helpers  
+Impacted components:
+
+- `codetracer-python-recorder/src/session.rs` and `codetracer_python_recorder/session.py`
+- `codetracer-python-recorder/src/runtime/tracer` (events, lifecycle, filtering)
+- `codetracer-python-recorder/src/runtime/activation.rs`
+- `codetracer-python-recorder/src/runtime/output_paths.rs` and metadata helpers
 - `codetracer-pure-python-recorder` parity shims (optional but strongly recommended)
 
 ## Goals
+
 - Always emit a `<toplevel>` return event whose payload reflects the process exit status (or a descriptive placeholder when unavailable).
 - Plumb exit codes from Python entrypoints through the PyO3 API into the Rust runtime without breaking existing integrations.
 - Replace the ad-hoc combination of activation and filter decisions with a single gate so callbacks make consistent trace/skip/disable choices.
@@ -17,12 +19,14 @@ Impacted components:
 - Extend metadata (`trace_metadata.json`) with the recorded exit status for downstream tooling.
 
 ## Non-Goals
+
 - No changes to the on-disk trace schema beyond the new return record payload; we keep the existing call/return/line structure.
 - No removal of activation support; the work only refactors it to cooperate with filters.
 - No immediate addition of exit-status reporting to the CLI JSON trailers (can be follow-up).
 - No attempt to refit the pure-Python recorder in the same PR; it may gain parity later but does not block landing the Rust changes.
 
 ## Current Gaps
+
 - `stop_tracing` (PyO3) accepts no arguments, so the runtime never learns the script exit status captured by `codetracer_python_recorder/cli.py`.
 - `RuntimeTracer::finish` only finalises writers; it does not record any return edge for the synthetic `<toplevel>` call emitted in `TraceWriter::start`.
 - Activation and filtering are checked independently inside each callback (`on_py_start`, `on_py_return`, etc.), leading to divergent cache state (`ActivationController::suspended` vs `FilterCoordinator::ignored_code_ids`).
@@ -32,14 +36,18 @@ Impacted components:
 ## Workstreams
 
 ### WS1 – Public API & Session Plumbing
+
 **Scope:** Carry exit status from Python to Rust with backwards-compatible defaults.
+
 - Update `codetracer-python-recorder/src/session.rs::stop_tracing` to expose an optional `exit_code: Option<i32>` parameter (new keyword-only arg in Python).
 - Adjust `codetracer_python_recorder/session.py` so `TraceSession.stop` and the module-level `stop()` accept an optional exit code and forward it.
 - Modify `codetracer_python_recorder/cli.py::main` to pass the captured `exit_code` when stopping the session; preserve legacy behaviour (`None`) for callers that do not provide a code.
 - Add unit tests in `codetracer_python_recorder/tests` ensuring the new keyword argument is optional and that `stop(exit_code=123)` calls into the backend with the expected value (mocking PyO3 layer).
 
 ### WS2 – Runtime Exit State & `<toplevel>` Return Emission
+
 **Scope:** Store the exit status and emit the balancing return event.
+
 - Introduce a small struct (e.g., `SessionTermination`) inside `RuntimeTracer` to hold `exit_code: Option<i32>` plus a `reason: ExitReason`.
 - Extend the `Tracer` trait implementation with a new method (e.g., `set_exit_status`) or reuse `notify_failure` paths to capture both normal exit and disable scenarios.
 - In `RuntimeTracer::finish`, before `finalise`:
@@ -50,7 +58,9 @@ Impacted components:
 - Update integration tests (Rust + Python) to assert that the final event sequence includes a `<toplevel>` call + return pair and that the return payload matches the script exit code.
 
 ### WS3 – Unified Trace Gate Abstraction
+
 **Scope:** Merge activation and filter decision paths.
+
 - Create `TraceGate` and `GateDecision` types under `runtime/tracer`.
   - API: `evaluate(py, code, event_kind) -> GateDecision`.
   - Decision carries: `process_event` (bool), `disable_location` (bool), `activation_transition` (enum).
@@ -64,14 +74,18 @@ Impacted components:
 - Unit test the gate with synthetic `CodeObjectWrapper` fixtures covering combinations: inactive activation + allow filter, active activation + skip filter, suspended activation resumed, etc.
 
 ### WS4 – Lifecycle & Metadata Updates
+
 **Scope:** Keep writer lifecycle and metadata consistent with the new behaviour.
+
 - Update `LifecycleController::finalise` (or adjacent helper) to write the exit status into `trace_metadata.json` under a new field (e.g., `"process_exit_code"`). Ensure this runs only once per session.
 - Confirm `cleanup_partial_outputs` still executes when tracing disables early and that the exit record is only written for successful sessions.
 - Add a regression test around `TraceOutputPaths::configure_writer` + `RuntimeTracer::finish` verifying the events buffer contains both call and return entries for `<toplevel>`.
 - Update documentation (`design-docs/design-001.md`, user docs) to describe the exit-status metadata and the unified gating semantics.
 
 ### WS5 – Validation & Parity Follow-Up
+
 **Scope:** Prove end-to-end correctness and plan the optional pure-Python update.
+
 - Extend Python integration tests (`tests/python`) with scenarios:
   - CLI run that exits with non-zero status; assert trace contains `<toplevel>` return with the negative path.
   - Activation path configured alongside a filter that skips the same file; ensure tracing starts/stops exactly once and stack depth ends at zero.
@@ -80,6 +94,7 @@ Impacted components:
 - Document a follow-up issue to mirror `<toplevel>` return emission in `codetracer-pure-python-recorder`, keeping trace semantics aligned across products.
 
 ## Testing & Rollout Checklist
+
 - [ ] `just test`
 - [ ] Python integration tests covering exit-code propagation and activation+filter combinations
 - [ ] Manual smoke test: run CLI against a script returning exit code 3, inspect `trace.json` for `<toplevel>` return payload `3`
@@ -87,6 +102,7 @@ Impacted components:
 - [ ] Notify downstream data pipeline owners that exit status is now available
 
 ## Risks & Mitigations
+
 - **Breaking API changes:** Ensure `stop_tracing` still works without arguments by providing a Python default (`exit_code: int | None = None`) and by releasing under a minor version bump.
 - **Gate regressions:** Add exhaustive unit tests plus targeted integration tests so we catch scenarios where activation or filters no longer fire.
 - **Performance impact:** Benchmark tracing hot paths after the refactor; the gate should add minimal overhead. Profile with `just bench` / existing benchmarks, and roll back micro-optimisations if regressions exceed 5%.

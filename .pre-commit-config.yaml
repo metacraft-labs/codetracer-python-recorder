@@ -1,0 +1,78 @@
+default_language_version:
+  python: system
+
+# Owning Python recorder adoption of the mandatory standard seven hooks.
+# The native SDK provides tools; this tracked configuration provides the rules.
+# Install with: just install-hooks /path/to/matching/repro
+# Use the owning native SDK and matching protocol-2 managed-hook engine.
+# Raw prek installation must be reconciled by the declared installer, which
+# preserves canonical upstream execution and the local-to-managed hook chain.
+# Native Windows tool provisioning remains a required qualification gap.
+# Both committed-binary guards inspect staged additions only. Keep upstream
+# check-added-large-files at 1024 KiB without --enforce-all.
+
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  # --- The committed-binaries tier. Mandatory, strict by default. ---------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 1024 KB, passed explicitly because UPSTREAM'S DEFAULT IS 500 KB. This
+      # is a deliberate loosening to the 1 MB the requirements document asks
+      # for, not a restatement of the tool's own default — dropping the
+      # argument silently halves the ceiling.
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/metacraft-labs/devops-modules
+    # Immutable owning standard-hooks source revision.
+    rev: a7245933b53dc2ade27400f1580333bda58609de
+    hooks:
+      - id: ban-added-ct-recordings
+
+  # --- Formatting and style. `language: system`, so the tool comes from the
+  # --- dev env (Nix devShell on Linux/macOS, winget/scoop/choco on Windows)
+  # --- rather than from a hook environment this file would have to pin per OS.
+  # --- This is the agent-harbor pattern: the flake provides the TOOLS, the
+  # --- committed config provides the RULES.
+  #
+  # MEMBERSHIP HERE MUST MATCH `git-hooks/standard-hooks.nix` EXACTLY. Two
+  # expressions of one list that disagree are worse than one expression that is
+  # awkward for half the fleet, because neither reader can tell which is the
+  # rule. If you add a hook to one, add it to the other in the same commit.
+  - repo: local
+    hooks:
+      - id: editorconfig-checker
+        name: editorconfig-checker
+        entry: editorconfig-checker
+        language: system
+        types: [file]
+
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt
+        language: system
+        files: \.nix$
+
+      - id: terraform-format
+        name: terraform-format
+        description: Format Terraform/OpenTofu HCL files
+        entry: tofu fmt
+        language: system
+        types: [file]
+        files: \.(tf|tftest\.hcl)$
+
+      - id: prettier
+        name: prettier
+        entry: prettier --check --list-different=false --log-level=warn --ignore-unknown --write
+        language: system
+        types: [text]
+
+      - id: owning-lint
+        name: owning unfiltered lint
+        entry: just lint
+        language: system
+        pass_filenames: false
+        always_run: true

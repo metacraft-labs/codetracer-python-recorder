@@ -31,7 +31,7 @@ just bench
 
 This is a monorepo containing **two separate recorder implementations, by design**:
 
-* `codetracer-python-recorder/` — The production recorder. Rust-backed
+- `codetracer-python-recorder/` — The production recorder. Rust-backed
   (PyO3 + maturin), emits CTFS v3 binary trace bundles per
   `codetracer-specs/Recorder-CLI-Conventions.md` §4.
   - `src/` — Rust source.
@@ -40,7 +40,7 @@ This is a monorepo containing **two separate recorder implementations, by design
     filters, etc.).
   - `tests/python/` — Python integration and unit tests.
   - `Cargo.toml` — Rust workspace member.
-* `codetracer-pure-python-recorder/` — **a test oracle, not a production
+- `codetracer-pure-python-recorder/` — **a test oracle, not a production
   recorder.** A small pure-Python recorder that writes JSON (`trace.json`
   and sidecars). **CodeTracer cannot open its output** — it is not a
   recording — and must not be taught to. Its only purpose is the testing
@@ -52,7 +52,7 @@ This is a monorepo containing **two separate recorder implementations, by design
   never become vacuous (it asserts both sides recorded calls, steps and
   values). **Do not migrate it to CTFS**, and do not add a JSON output to
   the production recorder. See `codetracer-pure-python-recorder/AGENTS.md`.
-* `scripts/` — Helper scripts (version bumping, coverage rendering, etc.).
+- `scripts/` — Helper scripts (version bumping, coverage rendering, etc.).
 
 # You don't have access to the internet
 

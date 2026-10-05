@@ -3,70 +3,85 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
 
       # Helper function to build the recorder packages for a given Python interpreter
-      mkCodetracerPackages = pkgs: python: let
-        # Read versions from pyproject.toml files
-        purePythonProjectToml = builtins.fromTOML (builtins.readFile ../codetracer-pure-python-recorder/pyproject.toml);
-        rustBackedProjectToml = builtins.fromTOML (builtins.readFile ../codetracer-python-recorder/pyproject.toml);
-      in {
-        # Pure Python recorder package
-        codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-pure-python-recorder";
-          version = purePythonProjectToml.project.version;
-          pyproject = true;
+      mkCodetracerPackages =
+        pkgs: python:
+        let
+          # Read versions from pyproject.toml files
+          purePythonProjectToml = builtins.fromTOML (
+            builtins.readFile ../codetracer-pure-python-recorder/pyproject.toml
+          );
+          rustBackedProjectToml = builtins.fromTOML (
+            builtins.readFile ../codetracer-python-recorder/pyproject.toml
+          );
+        in
+        {
+          # Pure Python recorder package
+          codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-pure-python-recorder";
+            version = purePythonProjectToml.project.version;
+            pyproject = true;
 
-          src = ../codetracer-pure-python-recorder;
+            src = ../codetracer-pure-python-recorder;
 
-          build-system = with python.pkgs; [
-            setuptools
-          ];
+            build-system = with python.pkgs; [
+              setuptools
+            ];
 
-          pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
+            pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
 
-          meta = {
-            description = "Pure-Python prototype recorder producing CodeTracer traces";
-            license = pkgs.lib.licenses.mit;
+            meta = {
+              description = "Pure-Python prototype recorder producing CodeTracer traces";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+          # Rust-backed recorder package
+          codetracer-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-python-recorder";
+            version = rustBackedProjectToml.project.version;
+            pyproject = true;
+
+            src = ../codetracer-python-recorder;
+
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ../codetracer-python-recorder/Cargo.lock;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustPlatform.cargoSetupHook
+              rustPlatform.maturinBuildHook
+              capnproto
+              pkg-config
+            ];
+
+            pythonImportsCheck = [ "codetracer_python_recorder" ];
+
+            meta = {
+              description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
+              license = pkgs.lib.licenses.mit;
+            };
           };
         };
 
-        # Rust-backed recorder package
-        codetracer-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-python-recorder";
-          version = rustBackedProjectToml.project.version;
-          pyproject = true;
-
-          src = ../codetracer-python-recorder;
-
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = ../codetracer-python-recorder/Cargo.lock;
-          };
-
-          nativeBuildInputs = with pkgs; [
-            rustPlatform.cargoSetupHook
-            rustPlatform.maturinBuildHook
-            capnproto
-            pkg-config
-          ];
-
-          pythonImportsCheck = [ "codetracer_python_recorder" ];
-
-          meta = {
-            description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
-            license = pkgs.lib.licenses.mit;
-          };
-        };
-      };
-
-    in {
+    in
+    {
       # Expose the helper function for advanced users who want to build for custom Python versions
       lib.mkCodetracerPackages = mkCodetracerPackages;
 
-      packages = forEachSystem (system:
+      packages = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
 
@@ -77,7 +92,8 @@
           python312Packages = mkCodetracerPackages pkgs pkgs.python312;
           python313Packages = mkCodetracerPackages pkgs pkgs.python313;
 
-        in {
+        in
+        {
           # Default packages (use nixpkgs default Python)
           inherit (defaultPackages) codetracer-pure-python-recorder codetracer-python-recorder;
           default = defaultPackages.codetracer-python-recorder;
@@ -87,64 +103,73 @@
           codetracer-python-recorder-python313 = python313Packages.codetracer-python-recorder;
           codetracer-pure-python-recorder-python312 = python312Packages.codetracer-pure-python-recorder;
           codetracer-pure-python-recorder-python313 = python313Packages.codetracer-pure-python-recorder;
-        });
+        }
+      );
 
       # Overlay for easy integration into other flakes
-      overlays.default = final: prev: let
-        packages = mkCodetracerPackages final final.python3;
-      in {
-        python3 = prev.python3.override {
-          packageOverrides = pyFinal: pyPrev: {
-            codetracer-python-recorder = packages.codetracer-python-recorder;
-            codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+      overlays.default =
+        final: prev:
+        let
+          packages = mkCodetracerPackages final final.python3;
+        in
+        {
+          python3 = prev.python3.override {
+            packageOverrides = pyFinal: pyPrev: {
+              codetracer-python-recorder = packages.codetracer-python-recorder;
+              codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+            };
           };
+          python3Packages = final.python3.pkgs;
         };
-        python3Packages = final.python3.pkgs;
-      };
 
-      devShells = forEachSystem (system:
-        let pkgs = import nixpkgs { inherit system; };
-        in {
+      devShells = forEachSystem (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              bashInteractive
-              python310
-              python311
-              python312
-              python313
-              just
-              git-lfs
+            packages =
+              with pkgs;
+              [
+                bashInteractive
+                python310
+                python311
+                python312
+                python313
+                just
+                git-lfs
 
-              # Linters and type checkers for Python code
-              ruff
-              black
-              mypy
+                # Linters and type checkers for Python code
+                ruff
+                black
+                mypy
 
-              # Rust toolchain for the Rust-backed Python module
-              cargo
-              rustc
-              rustfmt
-              clippy
-              rust-analyzer
-              cargo-nextest
-              llvmPackages_latest.llvm
+                # Rust toolchain for the Rust-backed Python module
+                cargo
+                rustc
+                rustfmt
+                clippy
+                rust-analyzer
+                cargo-nextest
+                llvmPackages_latest.llvm
 
-              # Build tooling for Python extensions
-              maturin
-              uv
-              pkg-config
+                # Build tooling for Python extensions
+                maturin
+                uv
+                pkg-config
 
-              # CapNProto
-              capnproto
+                # CapNProto
+                capnproto
 
-              # Benchmark visualisation
-              gnuplot
-            ]
-            # cargo-llvm-cov (coverage-only) is marked broken on aarch64-darwin
-            # in the pinned nixpkgs; including it unconditionally makes this
-            # devShell fail to evaluate on macOS. Gate to non-darwin so `nix
-            # develop ./nix` works on macOS too (Linux CI keeps coverage).
-            ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [ pkgs.cargo-llvm-cov ];
+                # Benchmark visualisation
+                gnuplot
+              ]
+              # cargo-llvm-cov (coverage-only) is marked broken on aarch64-darwin
+              # in the pinned nixpkgs; including it unconditionally makes this
+              # devShell fail to evaluate on macOS. Gate to non-darwin so `nix
+              # develop ./nix` works on macOS too (Linux CI keeps coverage).
+              ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [ pkgs.cargo-llvm-cov ];
 
             shellHook = ''
               # When having more than one python version in the shell this variable breaks `maturin build`
@@ -152,6 +177,7 @@
               unset PYTHONPATH
             '';
           };
-        });
+        }
+      );
     };
 }
