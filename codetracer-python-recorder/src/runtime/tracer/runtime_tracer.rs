@@ -1656,13 +1656,11 @@ initializer("omega")
         });
     }
 
-    /// Decode the trace-filter provenance block of a `meta.dat` buffer
+    /// The trace-filter provenance block of a `meta.dat` buffer
     /// (`internal-files.md` §"Flag bit 3 -- Trace filter provenance"):
     /// `None` when flag bit 3 is clear, else the `(path, sha256 hex)`
-    /// entries in composition order. The recorder sets none of flag bits
-    /// 0-2, so the block is the first thing after `recorder_id`.
+    /// entries in composition order.
     fn decode_filter_provenance(meta_dat: &[u8]) -> Option<Vec<(String, String)>> {
-        const FLAG_HAS_TRACE_FILTER_PROVENANCE: u16 = 0x08;
         let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(meta_dat)
             .unwrap_or_else(|err| panic!("meta.dat does not decode: {err}"));
         assert_eq!(
@@ -1670,38 +1668,20 @@ initializer("omega")
             0,
             "unexpected meta.dat blocks before provenance"
         );
-        if meta.flags & FLAG_HAS_TRACE_FILTER_PROVENANCE == 0 {
-            return None;
-        }
-        fn varint(data: &[u8], pos: &mut usize) -> u64 {
-            let mut value = 0u64;
-            let mut shift = 0;
-            loop {
-                let byte = data[*pos];
-                *pos += 1;
-                value |= u64::from(byte & 0x7f) << shift;
-                if byte & 0x80 == 0 {
-                    return value;
-                }
-                shift += 7;
-            }
-        }
-        let data = &meta.trailing;
-        let mut pos = 0usize;
-        let count = varint(data, &mut pos);
-        let mut entries = Vec::new();
-        for _ in 0..count {
-            let len = varint(data, &mut pos) as usize;
-            let path = String::from_utf8(data[pos..pos + len].to_vec()).expect("utf-8 path");
-            pos += len;
-            let sha: String = data[pos..pos + 32]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            pos += 32;
-            entries.push((path, sha));
-        }
-        Some(entries)
+        assert!(
+            meta.trailing.is_empty(),
+            "meta.dat carries {} bytes after its blocks",
+            meta.trailing.len()
+        );
+        meta.blocks.filter_provenance.map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| {
+                    let sha: String = entry.sha256.iter().map(|b| format!("{b:02x}")).collect();
+                    (entry.path, sha)
+                })
+                .collect()
+        })
     }
 
     #[test]
