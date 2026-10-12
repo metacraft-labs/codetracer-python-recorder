@@ -20,7 +20,8 @@
 # defect: before this file there was neither a `.pre-commit-config.yaml` nor a
 # `.git/hooks/pre-commit` here, so §4.3 was satisfied on paper by nothing at all.
 #
-# Install:  prek install        (or: pre-commit install)
+# Install:  automatic on dev-shell entry (scripts/install-git-hooks.sh);
+#           elsewhere `prek install` (or: pre-commit install)
 # Run:      prek run --all-files
 #
 # ON NixOS, `uv` MUST BE ON PATH BEFORE EITHER OF THOSE. prek otherwise
@@ -48,36 +49,27 @@
 # this repository's own gates, and delete this paragraph.
 
 # ----------------------------------------------------------------------------
-# THIS REPO'S FLAKE ALSO DEFINES A HOOK SET, AND THIS FILE IS WHAT WILL RUN
+# THIS FILE IS WHAT RUNS ON COMMIT; THE FLAKE'S HOOK SET RUNS IN `checks`
 # ----------------------------------------------------------------------------
 #
-# `./flake.nix` wires a hook set through upstream git-hooks.nix. That set is
-# generated into a /nix/store symlink at devShell entry -- and from this commit
-# on it will NOT be installed, because upstream's own installationScript (which
-# is its shellHook, modules/pre-commit.nix:471) refuses when a non-symlink
-# exists at this path:
+# Entering the dev shell (`nix develop`, direnv) installs THIS file as the
+# pre-commit hook: scripts/install-git-hooks.sh, called from the shellHook in
+# flake.nix, points `.git/hooks/pre-commit` (or its `.repro-local`
+# chain under a Reprobuild dispatcher) at this committed config, run by the
+# flake's pre-commit. The flake provides the tool; this file provides the rules.
 #
-#     git-hooks.nix: WARNING: Refusing to install because of an existing
-#     config at .pre-commit-config.yaml
-#
-# NOTHING IS LOST BY THAT, AND THAT IS MEASURED RATHER THAN ASSUMED: this
-# repository had no `.git/hooks/pre-commit` at all before this commit (3 of the
-# workspace's 147 repos did), so the flake's set was never running on a commit
-# here. It still runs wherever the flake's `checks` output is evaluated. This
-# file adds the first commit-time gate; it does not replace a working one.
-#
-# Hook attributes named in that file -- read out of its `hooks = { ... }` block
-# by brace depth, a source-text heuristic -- so nobody has to guess what is not
-# being installed on commit:
+# `./flake.nix` also wires a hook set through git-hooks.nix. That set is NOT
+# installed on commit; it runs wherever the flake's `checks` output is
+# evaluated (`nix flake check`). Its hook attributes:
 #
 #     lint
 #
 # TWO WAYS TO FINISH, EITHER IS FINE: translate those into this file as
-# `language: system` entries (the agent-harbor pattern -- the flake provides the
-# tools, the committed config provides the rules), or go the other way, delete
-# this file, re-add the path to .gitignore and adopt the committed-binaries tier
-# through `nixos-modules.modules.flake.git-hooks` instead. What is not fine is
-# leaving the repository with no gate, which is where it was.
+# `language: system` entries (the agent-harbor pattern), or go the other way,
+# delete this file, re-add the path to .gitignore and adopt the committed-binaries
+# tier through `nixos-modules.modules.flake.git-hooks` instead (and have the
+# installer link the generated config again). What is not fine is leaving the
+# repository with no gate, which is where it was.
 
 minimum_pre_commit_version: '3.0.0'
 
