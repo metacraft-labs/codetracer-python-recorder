@@ -142,7 +142,7 @@ impl IoCoordinator {
 
         let kind = match chunk.stream {
             IoStream::Stdout => EventLogKind::Write,
-            IoStream::Stderr => EventLogKind::WriteOther,
+            IoStream::Stderr => EventLogKind::WriteStderr,
             IoStream::Stdin => EventLogKind::Read,
         };
 
@@ -154,7 +154,7 @@ impl IoCoordinator {
         // see `codetracer-trace-format/codetracer_trace_writer_nim/
         // src/lib.rs` line ~976) because the Nim writer streams events
         // directly to disk via dedicated FFI procs.  For event-log
-        // entries (Write/WriteOther/Read), the dedicated proc is
+        // entries (Write/WriteStderr/Read), the dedicated proc is
         // `register_special_event(kind, metadata, content)` which
         // forwards to `trace_writer_register_special_event`.  Without
         // this routing, Python `print(...)` calls reached the recorder

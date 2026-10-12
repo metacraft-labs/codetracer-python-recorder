@@ -949,6 +949,31 @@ def _record_full(tmp_path: Path, body: str) -> tuple[Path, dict]:
     return script, json.loads(proc.stdout)
 
 
+def test_each_output_stream_is_recorded_under_its_exact_event_kind(tmp_path: Path) -> None:
+    """stdout is ``Write`` and stderr is ``WriteStderr``: every captured
+    stream carries the exact ``EventLogKind``, never the ``WriteOther``
+    catch-all, and the metadata still names the stream."""
+    _script, bundle = _record_full(
+        tmp_path,
+        """\
+        import sys
+        print("to stdout")
+        print("to stderr", file=sys.stderr)
+        sys.stderr.write("raw stderr\\n")
+        """,
+    )
+    kinds = {
+        e["text"]: e["io_kind"]
+        for e in bundle["events"]
+        if e["kind"] == "io" and e.get("text") in ("to stdout\n", "to stderr\n", "raw stderr\n")
+    }
+    assert kinds == {
+        "to stdout\n": "Write",
+        "to stderr\n": "WriteStderr",
+        "raw stderr\n": "WriteStderr",
+    }, kinds
+
+
 def test_output_from_exec_code_lands_on_the_calling_step(tmp_path: Path) -> None:
     """Output written by ``exec``'d code (filename ``<string>``) belongs to
     the traced step that ran the ``exec``. Synthetic code names are not
