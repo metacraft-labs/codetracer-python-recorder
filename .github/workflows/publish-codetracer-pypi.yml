@@ -8,8 +8,9 @@ name: publish-codetracer-pypi
 # recorder package fetched at install time.
 #
 # The build reproduces launcher-integration.yml in this repo exactly
-# (clone codetracer-launcher, build the launcher with nim + zig from
-# nixpkgs, run the launcher's packaging/pypi build with CT_RECORDER_SRC
+# (clone codetracer-launcher at the revision repro.lock pins, build the
+# launcher with nim + zig from nixpkgs, run the launcher's packaging/pypi
+# build with CT_RECORDER_SRC
 # pointed at this repo's recorder source) and then, unlike that smoke-test,
 # PUBLISHES the resulting wheels. The publish/gating is modeled on
 # codetracer-launcher's publish-pypi.yml.
@@ -50,9 +51,12 @@ on:
         required: false
         default: ''
       launcher_ref:
-        description: 'codetracer-launcher ref to build the launcher from'
+        description: >-
+          codetracer-launcher ref to build the launcher from. Empty (the
+          default, and always on a tag push) builds the revision this
+          commit's repro.lock pins.
         required: false
-        default: main
+        default: ''
       dry_run:
         description: 'Build only; skip the PyPI upload'
         required: false
@@ -93,15 +97,19 @@ jobs:
           owner: metacraft-labs
 
       - uses: actions/checkout@v4
-        with:
-          path: codetracer-python-recorder
 
-      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      # The launcher is taken at the revision this commit's repro.lock pins,
+      # so a release bundles the launcher this commit was locked against
+      # rather than whatever a branch points at when the tag is pushed.
+      # clone-siblings clones it to ../codetracer-launcher, reading repro.lock
+      # from $GITHUB_WORKSPACE (hence the default checkout path). A manual
+      # dispatch may still name a ref: `!=` marks that as a deliberate
+      # replacement of the pin, and an empty one means the lock.
+      - name: Clone lock-pinned codetracer-launcher
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-launcher
-          ref: ${{ inputs.launcher_ref || 'dev' }}
-          path: codetracer-launcher
           gh-token: ${{ steps.app-token.outputs.token }}
+          siblings: codetracer-launcher!=${{ inputs.launcher_ref }}
 
       - name: Resolve version
         id: ver
@@ -120,18 +128,18 @@ jobs:
         # build.sh cross-compiles via `zig cc`, so nim + zig from nixpkgs
         # replace setup-nim / apt musl-tools; llvm provides `llvm-strip`
         # for the Mach-O / PE strip pass that keeps binaries under the cap.
-        working-directory: codetracer-launcher
+        working-directory: ../codetracer-launcher
         run: nix shell nixpkgs#nim nixpkgs#zig nixpkgs#llvm -c bash ./build.sh --target ${{ matrix.target }} --out ${{ matrix.bin }}
 
       - name: Build bundled wheel
-        working-directory: codetracer-launcher/packaging/pypi
+        working-directory: ../codetracer-launcher/packaging/pypi
         env:
           CT_LAUNCHER_VERSION: ${{ steps.ver.outputs.version }}
-          CT_LAUNCHER_BIN: ${{ github.workspace }}/codetracer-launcher/out/${{ matrix.bin }}
+          CT_LAUNCHER_BIN: ${{ github.workspace }}/../codetracer-launcher/out/${{ matrix.bin }}
           CT_LAUNCHER_TARGET: ${{ matrix.target }}
           # This repo's Python recorder source — vendored under
           # codetracer/recorder/ in the wheel (bundling model, spec §5.1).
-          CT_RECORDER_SRC: ${{ github.workspace }}/codetracer-python-recorder/codetracer-python-recorder/codetracer_python_recorder
+          CT_RECORDER_SRC: ${{ github.workspace }}/codetracer-python-recorder/codetracer_python_recorder
         # A venv sidesteps NixOS' externally-managed (PEP 668) python; the
         # --no-isolation build then uses the venv's build/setuptools/wheel.
         run: |
@@ -143,7 +151,7 @@ jobs:
           '
 
       - name: Verify wheel bundles launcher + recorder
-        working-directory: codetracer-launcher/packaging/pypi
+        working-directory: ../codetracer-launcher/packaging/pypi
         run: |
           nix shell nixpkgs#python312 -c python - <<'PY'
           import pathlib, zipfile
@@ -163,7 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.target }}
-          path: codetracer-launcher/packaging/pypi/dist/*.whl
+          path: ${{ github.workspace }}/../codetracer-launcher/packaging/pypi/dist/*.whl
           if-no-files-found: error
 
   publish-pypi:

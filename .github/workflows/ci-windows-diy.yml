@@ -40,50 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Sibling repos the recorder depends on — same set as the
-      # `ci-reprobuild.yml` job so the two paths see an identical
-      # workspace shape.
-      - name: Clone codetracer-trace-format sibling
-        shell: bash
-        run: |
-          PINS=".github/sibling-pins"
-          # The trace-format mainline is `dev`; the repo has no `main` branch.
-          TF_REF="dev"
-          if [ -f "${PINS}" ]; then
-            PIN="$(grep '^codetracer-trace-format ' "${PINS}" | cut -d' ' -f2)" || true
-            [ -n "${PIN}" ] && TF_REF="${PIN}"
-          fi
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          if ! git clone --depth 1 --branch "${TF_REF}" --single-branch \
-            "https://github.com/metacraft-labs/codetracer-trace-format.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format" 2>/dev/null; then
-            rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-            git clone --no-checkout "https://github.com/metacraft-labs/codetracer-trace-format.git" \
-              "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-            git -C "${GITHUB_WORKSPACE}/../codetracer-trace-format" checkout "${TF_REF}"
-          fi
-
-      - name: Clone codetracer-trace-format-nim sibling
-        shell: bash
-        run: |
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-
-      - name: Clone codetracer sibling (env.ps1 dependency)
-        # Cairo's env.ps1 dot-sources `../codetracer/env.ps1` for the
-        # shared CodeTracer toolchain (Rust + Nim + MSVC bootstrap).
-        # Skip the heavy FPC/LLVM/nargo/dotnet steps the recorder
-        # doesn't need — env.ps1 already sets those WINDOWS_DIY_SKIP_*
-        # flags before sourcing.
-        shell: bash
-        run: |
-          rm -rf "${GITHUB_WORKSPACE}/../codetracer"
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer.git" \
-            "${GITHUB_WORKSPACE}/../codetracer"
-
       - name: Mint installation token for workspace manifests
         id: ci_token
         uses: actions/create-github-app-token@v2
@@ -93,6 +49,12 @@ jobs:
           owner: metacraft-labs
 
       - name: Setup dev env (windows-diy flavor)
+        # Clones the siblings in .github/sibling-repos
+        # (codetracer-trace-format, codetracer-trace-format-nim) to ../<name>
+        # at the revisions this commit's repro.lock pins -- the same set, at
+        # the same revisions, as every other workflow here. env.ps1 provisions
+        # its own toolchain and does not read ../codetracer, so that checkout
+        # is not needed.
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: windows-diy

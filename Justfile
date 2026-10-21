@@ -99,9 +99,15 @@ bench:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py -q
 
 py-test:
-    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
+    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder tests/test_ci_sibling_provisioning.py
 
-lint: lint-rust lint-errors verify-cli-convention
+lint: lint-rust lint-errors verify-cli-convention verify-ci-siblings
+
+# Every CI job takes the trace-format siblings at the revision repro.lock pins,
+# through setup-dev-env / clone-siblings and nothing else. Also part of
+# `just test` through `py-test`.
+verify-ci-siblings:
+    uv run --group dev pytest tests/test_ci_sibling_provisioning.py
 
 lint-rust:
     uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic

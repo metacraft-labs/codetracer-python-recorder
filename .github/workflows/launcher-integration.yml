@@ -70,31 +70,33 @@ jobs:
           owner: metacraft-labs
 
       - uses: actions/checkout@v4
-        with:
-          path: codetracer-python-recorder
 
-      - uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      # The launcher is taken at the revision this commit's repro.lock pins,
+      # like every other sibling, so a re-run of the same commit bundles the
+      # same launcher. clone-siblings clones it to ../codetracer-launcher; it
+      # reads repro.lock from $GITHUB_WORKSPACE, which is why this repo is
+      # checked out there rather than into a subdirectory.
+      - name: Clone lock-pinned codetracer-launcher
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-launcher
-          ref: dev
-          path: codetracer-launcher
           gh-token: ${{ steps.app-token.outputs.token }}
+          siblings: codetracer-launcher
 
       - name: Build launcher
         # build.sh cross-compiles via `zig cc -target x86_64-linux-musl`, so
         # nim + zig from nixpkgs replace the setup-nim action and apt musl-tools.
-        working-directory: codetracer-launcher
+        working-directory: ../codetracer-launcher
         run: nix shell nixpkgs#nim nixpkgs#zig -c bash ./build.sh --target linux-musl-x86_64 --out launcher
 
       - name: Build bundled wheel
-        working-directory: codetracer-launcher/packaging/pypi
+        working-directory: ../codetracer-launcher/packaging/pypi
         env:
           CT_LAUNCHER_VERSION: 0.1.0
-          CT_LAUNCHER_BIN: ${{ github.workspace }}/codetracer-launcher/out/launcher
+          CT_LAUNCHER_BIN: ${{ github.workspace }}/../codetracer-launcher/out/launcher
           CT_LAUNCHER_TARGET: linux-musl-x86_64
           # The recorder's Python package source — this is what gets
           # vendored under codetracer/recorder/ in the wheel.
-          CT_RECORDER_SRC: ${{ github.workspace }}/codetracer-python-recorder/codetracer-python-recorder/codetracer_python_recorder
+          CT_RECORDER_SRC: ${{ github.workspace }}/codetracer-python-recorder/codetracer_python_recorder
         # A venv sidesteps NixOS' externally-managed (PEP 668) python; the
         # --no-isolation build then uses the venv's build/setuptools/wheel.
         run: |
@@ -108,7 +110,7 @@ jobs:
         run: |
           nix shell nixpkgs#python312 -c bash -c '
             python -m venv /tmp/m9-venv
-            /tmp/m9-venv/bin/pip install codetracer-launcher/packaging/pypi/dist/*.whl
+            /tmp/m9-venv/bin/pip install ../codetracer-launcher/packaging/pypi/dist/*.whl
             out=$(/tmp/m9-venv/bin/ct --version)
             echo "$out"
             echo "$out" | grep -qE "^ct [0-9]+\.[0-9]+"
