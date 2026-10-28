@@ -30,7 +30,7 @@ classifiers = [
 # tools that CodeTracer uses should be provisioned by the recorder
 # package for the particular language."
 dependencies = [
-    "black>=25.0,<26.0",
+    "black>=26.10.1,<27.0",
 ]
 
 [project.scripts]
