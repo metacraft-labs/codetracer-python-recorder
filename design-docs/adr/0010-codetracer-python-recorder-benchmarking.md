@@ -56,5 +56,5 @@ Mitigations:
 ## References
 - `codetracer-python-recorder/benches/trace_filter.rs` (current microbench harness).
 - `codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py` (Python smoke benchmark).
-- `Justfile` (`bench` recipe) and `nix/flake.nix` (dev shell dependencies, now including gnuplot).
+- `Justfile` (`bench` recipe) and `flake.nix` (dev shell dependencies, now including gnuplot).
 - Storage backend for historical data (settled: GitHub Actions artefacts).
