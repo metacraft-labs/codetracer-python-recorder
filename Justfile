@@ -49,6 +49,7 @@ nix-test:
     nix flake check
     nix build .#codetracer-pure-python-recorder --no-link
     nix build .#codetracer-python-recorder --no-link
+    just test-nix-package
 
 # Create a clean local virtualenv for Python tooling (without editable packages
 # installed).
@@ -327,3 +328,9 @@ record-request-panel-fixture OUT FRAMEWORK="flask":
 # Runs `nix develop`, so it is not part of the in-shell test recipes.
 test-dev-shell:
     bash tests/test_dev_shell_writes_nothing_elsewhere.sh
+
+# The flake's recorder package builds without sibling checkouts, and the
+# store-built package records a program. Runs `nix build`, so like test-dev-shell
+# it is not part of the in-shell test recipes.
+test-nix-package:
+    bash tests/test_nix_package_builds.sh

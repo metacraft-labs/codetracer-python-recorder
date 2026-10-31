@@ -200,10 +200,13 @@ jobs:
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
-      # NOTE: .#default (rust-backed recorder) is skipped because
-      # importCargoLock cannot resolve Cargo path dependencies that
-      # reference the external codetracer-trace-format repo.
-      # The nix-tests job already verifies the Rust build via maturin.
+      # The flake supplies the trace-format crates and the Nim writer as inputs,
+      # so this build uses none of the siblings setup-dev-env clones.
+      - name: Build rust-backed recorder
+        run: nix build .#default
 
       - name: Build pure-python recorder
         run: nix build .#codetracer-pure-python-recorder
+
+      - name: Record with the store-built recorder
+        run: bash tests/test_nix_package_builds.sh

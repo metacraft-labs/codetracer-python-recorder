@@ -4,9 +4,25 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
+
+    # The crate names these crates by Cargo path
+    # (`../../codetracer-trace-format/...`), so in a Nix sandbox they have to
+    # arrive as an input. Source only: the package places it at that relative
+    # path itself (see `recorderSrc` below) and nothing here uses its flake
+    # outputs, so its toolchain inputs stay out of this lock.
+    codetracer-trace-format = {
+      url = "github:metacraft-labs/codetracer-trace-format/agents";
+      flake = false;
+    };
+
+    # The CTFS trace writer's static archive (`packages.trace-writer-ffi`),
+    # which `codetracer_trace_writer_nim` links. Deliberately does NOT follow
+    # our nixpkgs: its Nim comes from its own toolchains input, and that
+    # repository's archive is built and tested against that package set.
+    codetracer-trace-format-nim.url = "github:metacraft-labs/codetracer-trace-format-nim/agents";
   };
 
-  outputs = { self, nixpkgs, pre-commit-hooks }:
+  outputs = { self, nixpkgs, pre-commit-hooks, codetracer-trace-format, codetracer-trace-format-nim }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
@@ -34,6 +50,20 @@
         # Read versions from pyproject.toml files
         purePythonProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-pure-python-recorder/pyproject.toml);
         rustBackedProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-python-recorder/pyproject.toml);
+
+        # The layout the crate's Cargo.toml assumes, reproduced as one source
+        # tree: the crate two levels down, and the trace-format workspace at
+        # `../../codetracer-trace-format` from it. `importCargoLock` vendors
+        # registry crates only, so path dependencies must really be on disk.
+        # The whole trace-format tree is needed, not only the crates the
+        # recorder uses, because Cargo loads that workspace's root manifest for
+        # its path dependencies and that manifest requires every member.
+        recorderSrcName = "codetracer-python-recorder-src";
+        recorderSrc = pkgs.runCommandLocal recorderSrcName { } ''
+          mkdir -p $out/codetracer-python-recorder
+          cp -r ${./codetracer-python-recorder} $out/codetracer-python-recorder/codetracer-python-recorder
+          cp -r ${codetracer-trace-format} $out/codetracer-trace-format
+        '';
       in {
         # Pure Python recorder package
         codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
@@ -61,7 +91,23 @@
           version = rustBackedProjectToml.project.version;
           pyproject = true;
 
-          src = ./codetracer-python-recorder;
+          src = recorderSrc;
+          sourceRoot = "${recorderSrcName}/codetracer-python-recorder/codetracer-python-recorder";
+
+          # Link the writer the Nim repository's own package built, so no Nim
+          # toolchain or nimble network access is needed in the sandbox
+          # (codetracer_trace_writer_nim/build.rs). Resolved from the HOST
+          # platform of `pkgs` because `lib.mkCodetracerPackages` and the
+          # overlay receive the consumer's package set, not one this flake
+          # instantiated. Lazily: a consumer that takes only the pure-Python
+          # recorder never forces this attribute.
+          CODETRACER_TRACE_WRITER_NIM_PREBUILT =
+            codetracer-trace-format-nim.packages.${pkgs.stdenv.hostPlatform.system}.trace-writer-ffi;
+
+          # pyproject.toml declares black as a runtime dependency (the
+          # recorder's autoformat pass), and nixpkgs' pythonRuntimeDepsCheck
+          # refuses a package that does not provide what it declares.
+          dependencies = [ python.pkgs.black ];
 
           cargoDeps = pkgs.rustPlatform.importCargoLock {
             lockFile = ./codetracer-python-recorder/Cargo.lock;
