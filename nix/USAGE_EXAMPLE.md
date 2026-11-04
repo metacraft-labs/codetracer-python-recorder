@@ -157,6 +157,7 @@ Of `codetracer.packages.${system}`, built with this flake's nixpkgs, for
 version that is, which may not be the declared one.
 
 These systems are supported:
+
 - `x86_64-linux`
 - `aarch64-linux`
 - `x86_64-darwin`

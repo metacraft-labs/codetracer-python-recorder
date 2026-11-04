@@ -5,7 +5,7 @@ access to this object. This is not a good interface because the type is too gene
 so we cannot use that one.
 
 We need to create our own type CodeObjectWrapper which can simplify access to the underlying code object type. Then we should use this type in the signature of the methods in the Tracer trait.
-The type should allow easy access to that functionality of the underlying code object which we will need to implement a recorder for a time-travel debugger. 
+The type should allow easy access to that functionality of the underlying code object which we will need to implement a recorder for a time-travel debugger.
 On the other hand it is important not to introduce any performance problems. Some ideas to think about:
 - Minimize the copying of values
 - Repeated computations on each event call could be memoized

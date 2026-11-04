@@ -35,15 +35,15 @@ OUTER_REPO_ROOT="$(cd "${INNER_REPO_ROOT}/.." && pwd)"
 # interpreter) can set `PYTHON_RECORDER_PYTHON`.
 PYTHON_BIN="${PYTHON_RECORDER_PYTHON:-}"
 if [[ -z "${PYTHON_BIN}" ]]; then
-  if [[ -x "${OUTER_REPO_ROOT}/.venv/bin/python" ]]; then
-    PYTHON_BIN="${OUTER_REPO_ROOT}/.venv/bin/python"
-  else
-    PYTHON_BIN="$(command -v python3 || command -v python || true)"
-  fi
+    if [[ -x "${OUTER_REPO_ROOT}/.venv/bin/python" ]]; then
+        PYTHON_BIN="${OUTER_REPO_ROOT}/.venv/bin/python"
+    else
+        PYTHON_BIN="$(command -v python3 || command -v python || true)"
+    fi
 fi
 if [[ -z "${PYTHON_BIN}" ]] || [[ ! -x "${PYTHON_BIN}" ]]; then
-  echo "ERROR: python interpreter not found (set PYTHON_RECORDER_PYTHON)" >&2
-  exit 1
+    echo "ERROR: python interpreter not found (set PYTHON_RECORDER_PYTHON)" >&2
+    exit 1
 fi
 
 # Ensure the editable package is importable.  When run from the venv
@@ -52,7 +52,7 @@ fi
 export PYTHONPATH="${INNER_REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 run_cli() {
-  "${PYTHON_BIN}" -m codetracer_python_recorder "$@"
+    "${PYTHON_BIN}" -m codetracer_python_recorder "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -60,33 +60,33 @@ run_cli() {
 # ---------------------------------------------------------------------------
 
 assert_absent() {
-  # assert_absent <needle> <haystack-description> <haystack>
-  local needle="$1"
-  local desc="$2"
-  local haystack="$3"
-  if grep -qF -- "${needle}" <<< "${haystack}"; then
-    echo "FAIL: ${desc} must NOT contain '${needle}'" >&2
-    echo "----- ${desc} -----" >&2
-    echo "${haystack}" >&2
-    echo "-------------------" >&2
-    exit 1
-  fi
-  echo "ok: '${needle}' absent from ${desc}"
+    # assert_absent <needle> <haystack-description> <haystack>
+    local needle="$1"
+    local desc="$2"
+    local haystack="$3"
+    if grep -qF -- "${needle}" <<<"${haystack}"; then
+        echo "FAIL: ${desc} must NOT contain '${needle}'" >&2
+        echo "----- ${desc} -----" >&2
+        echo "${haystack}" >&2
+        echo "-------------------" >&2
+        exit 1
+    fi
+    echo "ok: '${needle}' absent from ${desc}"
 }
 
 assert_present() {
-  # assert_present <needle> <haystack-description> <haystack>
-  local needle="$1"
-  local desc="$2"
-  local haystack="$3"
-  if ! grep -qF -- "${needle}" <<< "${haystack}"; then
-    echo "FAIL: ${desc} must contain '${needle}'" >&2
-    echo "----- ${desc} -----" >&2
-    echo "${haystack}" >&2
-    echo "-------------------" >&2
-    exit 1
-  fi
-  echo "ok: '${needle}' present in ${desc}"
+    # assert_present <needle> <haystack-description> <haystack>
+    local needle="$1"
+    local desc="$2"
+    local haystack="$3"
+    if ! grep -qF -- "${needle}" <<<"${haystack}"; then
+        echo "FAIL: ${desc} must contain '${needle}'" >&2
+        echo "----- ${desc} -----" >&2
+        echo "${haystack}" >&2
+        echo "-------------------" >&2
+        exit 1
+    fi
+    echo "ok: '${needle}' present in ${desc}"
 }
 
 # ---------------------------------------------------------------------------
@@ -120,18 +120,18 @@ assert_present "codetracer-python-recorder" "--version" "${VERSION_OUT}"
 # (otherwise the env-var fallback either doesn't exist or has been
 # silently removed).  We grep across the Python wrapper and Rust crate.
 if ! grep -rqF "CODETRACER_PYTHON_RECORDER_OUT_DIR" \
-       "${INNER_REPO_ROOT}/codetracer_python_recorder" \
-       "${INNER_REPO_ROOT}/src"; then
-  echo "FAIL: CODETRACER_PYTHON_RECORDER_OUT_DIR must be referenced in codetracer_python_recorder/ or src/" >&2
-  exit 1
+    "${INNER_REPO_ROOT}/codetracer_python_recorder" \
+    "${INNER_REPO_ROOT}/src"; then
+    echo "FAIL: CODETRACER_PYTHON_RECORDER_OUT_DIR must be referenced in codetracer_python_recorder/ or src/" >&2
+    exit 1
 fi
 echo "ok: CODETRACER_PYTHON_RECORDER_OUT_DIR referenced in source"
 
 if ! grep -rqF "CODETRACER_PYTHON_RECORDER_DISABLED" \
-       "${INNER_REPO_ROOT}/codetracer_python_recorder" \
-       "${INNER_REPO_ROOT}/src"; then
-  echo "FAIL: CODETRACER_PYTHON_RECORDER_DISABLED must be referenced in codetracer_python_recorder/ or src/" >&2
-  exit 1
+    "${INNER_REPO_ROOT}/codetracer_python_recorder" \
+    "${INNER_REPO_ROOT}/src"; then
+    echo "FAIL: CODETRACER_PYTHON_RECORDER_DISABLED must be referenced in codetracer_python_recorder/ or src/" >&2
+    exit 1
 fi
 echo "ok: CODETRACER_PYTHON_RECORDER_DISABLED referenced in source"
 
@@ -147,9 +147,9 @@ echo "ok: CODETRACER_PYTHON_RECORDER_DISABLED referenced in source"
 # i.e. an `os.getenv("CODETRACER_FORMAT", ...)` call or a module-level
 # constant binding the name.
 if grep -nE '(os\.(getenv|environ).*CODETRACER_FORMAT|^[A-Z_]+\s*=\s*"CODETRACER_FORMAT")' \
-   "${INNER_REPO_ROOT}/codetracer_python_recorder/auto_start.py"; then
-  echo "FAIL: auto_start.py must not read or bind CODETRACER_FORMAT (CTFS-only)" >&2
-  exit 1
+    "${INNER_REPO_ROOT}/codetracer_python_recorder/auto_start.py"; then
+    echo "FAIL: auto_start.py must not read or bind CODETRACER_FORMAT (CTFS-only)" >&2
+    exit 1
 fi
 echo "ok: auto_start.py has no executable CODETRACER_FORMAT reference"
 
@@ -162,9 +162,9 @@ echo "ok: auto_start.py has no executable CODETRACER_FORMAT reference"
 # but the argparse `add_argument("--format", ...)` registration must be
 # absent.
 if grep -nE 'add_argument\(\s*"--format"' \
-   "${INNER_REPO_ROOT}/codetracer_python_recorder/cli.py"; then
-  echo "FAIL: cli.py must not declare --format (CTFS-only)" >&2
-  exit 1
+    "${INNER_REPO_ROOT}/codetracer_python_recorder/cli.py"; then
+    echo "FAIL: cli.py must not declare --format (CTFS-only)" >&2
+    exit 1
 fi
 echo "ok: cli.py has no --format argparse registration"
 

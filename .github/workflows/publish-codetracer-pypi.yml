@@ -43,22 +43,22 @@ name: publish-codetracer-pypi
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: 'codetracer semver to release (defaults to the v* tag, else 0.1.0)'
+        description: "codetracer semver to release (defaults to the v* tag, else 0.1.0)"
         required: false
-        default: ''
+        default: ""
       launcher_ref:
         description: >-
           codetracer-launcher ref to build the launcher from. Empty (the
           default, and always on a tag push) builds the revision this
           commit's repro.lock pins.
         required: false
-        default: ''
+        default: ""
       dry_run:
-        description: 'Build only; skip the PyPI upload'
+        description: "Build only; skip the PyPI upload"
         required: false
         type: boolean
         default: false
@@ -77,15 +77,15 @@ jobs:
       matrix:
         include:
           - target: linux-musl-x86_64
-            bin:    launcher
+            bin: launcher
           - target: linux-musl-aarch64
-            bin:    launcher-linux-aarch64
+            bin: launcher-linux-aarch64
           - target: darwin-x86_64
-            bin:    launcher-darwin-x86_64
+            bin: launcher-darwin-x86_64
           - target: darwin-aarch64
-            bin:    launcher-darwin-aarch64
+            bin: launcher-darwin-aarch64
           - target: windows-x86_64
-            bin:    launcher.exe
+            bin: launcher.exe
     name: wheel / ${{ matrix.target }}
     steps:
       - name: Generate CI token

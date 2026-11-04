@@ -22,7 +22,10 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
 
 git -C "$SCRATCH" init -q
 git -C "$SCRATCH" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
@@ -30,28 +33,28 @@ mkdir -p "$SCRATCH/sub"
 hooks_before="$(ls "$SCRATCH/.git/hooks")"
 
 for dir in "$SCRATCH" "$SCRATCH/sub"; do
-  ( cd "$dir" && nix develop "$REPO" --no-write-lock-file -c true ) >/dev/null 2>&1 \
-    || fail "the dev shell did not start from $dir"
-  [ -z "$(git -C "$SCRATCH" status --porcelain --ignored)" ] \
-    || fail "entered from $dir: files were written into the other repository: $(git -C "$SCRATCH" status --porcelain --ignored | tr '\n' ' ')"
-  # git status does not list empty directories.
-  extra="$(cd "$SCRATCH" && find . -mindepth 1 -path ./.git -prune -o ! -path ./sub -print)"
-  [ -z "$extra" ] || fail "entered from $dir: entries were created in the other repository: $(echo $extra)"
-  [ "$(ls "$SCRATCH/.git/hooks")" = "$hooks_before" ] \
-    || fail "entered from $dir: git hooks were installed into the other repository"
-  [ -z "$(git -C "$SCRATCH" config --local --get core.hooksPath || true)" ] \
-    || fail "entered from $dir: the other repository's core.hooksPath was changed"
+    (cd "$dir" && nix develop "$REPO" --no-write-lock-file -c true) >/dev/null 2>&1 \
+        || fail "the dev shell did not start from $dir"
+    [ -z "$(git -C "$SCRATCH" status --porcelain --ignored)" ] \
+        || fail "entered from $dir: files were written into the other repository: $(git -C "$SCRATCH" status --porcelain --ignored | tr '\n' ' ')"
+    # git status does not list empty directories.
+    extra="$(cd "$SCRATCH" && find . -mindepth 1 -path ./.git -prune -o ! -path ./sub -print)"
+    [ -z "$extra" ] || fail "entered from $dir: entries were created in the other repository: $(echo $extra)"
+    [ "$(ls "$SCRATCH/.git/hooks")" = "$hooks_before" ] \
+        || fail "entered from $dir: git hooks were installed into the other repository"
+    [ -z "$(git -C "$SCRATCH" config --local --get core.hooksPath || true)" ] \
+        || fail "entered from $dir: the other repository's core.hooksPath was changed"
 done
 
 # Positive control: the guard must not stop the hook in this repository.
 config_before="$(git -C "$REPO" hash-object .pre-commit-config.yaml)"
 hooks_dir="$(git -C "$REPO" rev-parse --path-format=absolute --git-path hooks)"
-( cd "$REPO" && nix develop "$REPO" --no-write-lock-file -c true ) >/dev/null 2>&1 \
-  || fail "the dev shell did not start from this repository"
+(cd "$REPO" && nix develop "$REPO" --no-write-lock-file -c true) >/dev/null 2>&1 \
+    || fail "the dev shell did not start from this repository"
 [ -f "$REPO/.pre-commit-config.yaml" ] && [ ! -L "$REPO/.pre-commit-config.yaml" ] \
-  && [ "$(git -C "$REPO" hash-object .pre-commit-config.yaml)" = "$config_before" ] \
-  || fail "control: the committed .pre-commit-config.yaml was replaced or changed"
+    && [ "$(git -C "$REPO" hash-object .pre-commit-config.yaml)" = "$config_before" ] \
+    || fail "control: the committed .pre-commit-config.yaml was replaced or changed"
 grep -qs -- '--config .pre-commit-config.yaml' "$hooks_dir/pre-commit" "$hooks_dir/pre-commit.repro-local" \
-  || fail "control: entered from this repository, no pre-commit hook runs the committed config"
+    || fail "control: entered from this repository, no pre-commit hook runs the committed config"
 
 echo "PASS: entered from another repository the dev shell writes nothing there; from this one it installs its hooks"

@@ -329,8 +329,11 @@ mod tests {
 
         let outputs = TraceOutputPaths::new(&out, TraceEventsFileFormat::Ctfs, &program);
         let mut controller = LifecycleController::new(&program, None);
-        let mut writer =
-            codetracer_trace_writer_nim::create_trace_writer(&program, &[], TraceEventsFileFormat::Ctfs);
+        let mut writer = codetracer_trace_writer_nim::create_trace_writer(
+            &program,
+            &[],
+            TraceEventsFileFormat::Ctfs,
+        );
 
         controller
             .begin(
@@ -342,7 +345,11 @@ mod tests {
             )
             .expect("begin lifecycle");
         let container = out.join("program.ct");
-        assert!(container.exists(), "the writer must have created {}", container.display());
+        assert!(
+            container.exists(),
+            "the writer must have created {}",
+            container.display()
+        );
 
         controller
             .cleanup_partial_outputs()

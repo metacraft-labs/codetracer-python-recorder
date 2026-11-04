@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         #python-version: ["3.10","3.11","3.12","3.13"]
-        python-version: ["3.12","3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +50,11 @@ jobs:
           attic-token: ${{ secrets.ATTIC_TOKEN }}
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
+
+      - name: Run the committed hooks
+        # The dev shell supplies the tools for every hook in .pre-commit-config.yaml,
+        # including `just lint`. The native and Python tests are separate steps below.
+        run: dev-exec just check-hooks
 
       - name: Prepare dev environment
         run: dev-exec just venv ${{matrix.python-version}} dev

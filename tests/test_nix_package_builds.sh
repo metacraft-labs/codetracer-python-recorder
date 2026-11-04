@@ -58,37 +58,37 @@ CTFS_MAGIC_HEX="c0de72ace2"
 # this test exists to show.
 CT_PRINT=""
 ensure_ct_print() {
-  [ -z "$CT_PRINT" ] || return 0
-  local root="$SCRATCH/ct-print.result"
-  nix build --out-link "$root" --no-update-lock-file --inputs-from "$REPO" \
-    codetracer-trace-format-nim#default \
-    || fail "could not build ct-print from the pinned codetracer-trace-format-nim"
-  CT_PRINT="$root/bin/ct-print"
+    [ -z "$CT_PRINT" ] || return 0
+    local root="$SCRATCH/ct-print.result"
+    nix build --out-link "$root" --no-update-lock-file --inputs-from "$REPO" \
+        codetracer-trace-format-nim#default \
+        || fail "could not build ct-print from the pinned codetracer-trace-format-nim"
+    CT_PRINT="$root/bin/ct-print"
 }
 
 check_package() {
-  local attr="$1" out build_log py_version work trace report stdout decoded
-  build_log="$SCRATCH/$attr.build.log"
+    local attr="$1" out build_log py_version work trace report stdout decoded
+    build_log="$SCRATCH/$attr.build.log"
 
-  if ! out="$(nix build --out-link "$SCRATCH/$attr.result" --no-update-lock-file \
-    --print-out-paths "$REPO#$attr" 2>"$build_log")"; then
-    tail -n 40 "$build_log" >&2
-    fail "nix build .#$attr did not build"
-  fi
-  [ -n "$out" ] || fail "nix build .#$attr printed no store path"
+    if ! out="$(nix build --out-link "$SCRATCH/$attr.result" --no-update-lock-file \
+        --print-out-paths "$REPO#$attr" 2>"$build_log")"; then
+        tail -n 40 "$build_log" >&2
+        fail "nix build .#$attr did not build"
+    fi
+    [ -n "$out" ] || fail "nix build .#$attr printed no store path"
 
-  # The package names its interpreter, so this needs no version stated here.
-  py_version="$(nix eval --raw --no-update-lock-file \
-    "$REPO#$attr.pythonModule.pythonVersion")"
+    # The package names its interpreter, so this needs no version stated here.
+    py_version="$(nix eval --raw --no-update-lock-file \
+        "$REPO#$attr.pythonModule.pythonVersion")"
 
-  work="$SCRATCH/$attr"
-  mkdir -p "$work"
-  trace="$work/trace"
-  report="$work/report"
+    work="$SCRATCH/$attr"
+    mkdir -p "$work"
+    trace="$work/trace"
+    report="$work/report"
 
-  # The program reports on its own process: the recorder runs it in-process, so
-  # these are the interpreter and modules the recorder itself is using.
-  cat >"$work/program.py" <<'PY'
+    # The program reports on its own process: the recorder runs it in-process, so
+    # these are the interpreter and modules the recorder itself is using.
+    cat >"$work/program.py" <<'PY'
 import importlib.util
 import os
 import sys
@@ -130,63 +130,63 @@ with open(os.environ["REPORT"], "w") as report:
 print("product:", nix_package_probe(1000003, 7))
 PY
 
-  # `env -i`: the wrapper must find everything through its own store paths. The
-  # PATH is deliberately useless, so a bare `python3` lookup fails here instead
-  # of quietly finding some other interpreter.
-  if ! stdout="$(cd "$work" && env -i HOME="$work" PATH=/nonexistent REPORT="$report" \
-    "$out/bin/codetracer-python-recorder" --out-dir "$trace" program.py 2>&1)"; then
-    echo "$stdout" >&2
-    fail ".#$attr: the store-built recorder failed to record a program"
-  fi
+    # `env -i`: the wrapper must find everything through its own store paths. The
+    # PATH is deliberately useless, so a bare `python3` lookup fails here instead
+    # of quietly finding some other interpreter.
+    if ! stdout="$(cd "$work" && env -i HOME="$work" PATH=/nonexistent REPORT="$report" \
+        "$out/bin/codetracer-python-recorder" --out-dir "$trace" program.py 2>&1)"; then
+        echo "$stdout" >&2
+        fail ".#$attr: the store-built recorder failed to record a program"
+    fi
 
-  grep -q '^product: 7000021$' <<<"$stdout" \
-    || fail ".#$attr: the recorded program did not run to completion: $stdout"
-  [ -f "$report" ] || fail ".#$attr: the recorded program wrote no report"
+    grep -q '^product: 7000021$' <<<"$stdout" \
+        || fail ".#$attr: the recorded program did not run to completion: $stdout"
+    [ -f "$report" ] || fail ".#$attr: the recorded program wrote no report"
 
-  grep -qxF "python=$py_version" "$report" \
-    || fail ".#$attr: expected the package's Python $py_version: $(cat "$report")"
-  grep -q "^package=$out/" "$report" \
-    || fail ".#$attr: the recorder did not come from $out: $(cat "$report")"
-  grep -q "^native=$out/" "$report" \
-    || fail ".#$attr: the native extension did not come from $out: $(cat "$report")"
-  grep -q '^black=/nix/store/' "$report" \
-    || fail ".#$attr: black was not provided by the package: $(cat "$report")"
+    grep -qxF "python=$py_version" "$report" \
+        || fail ".#$attr: expected the package's Python $py_version: $(cat "$report")"
+    grep -q "^package=$out/" "$report" \
+        || fail ".#$attr: the recorder did not come from $out: $(cat "$report")"
+    grep -q "^native=$out/" "$report" \
+        || fail ".#$attr: the native extension did not come from $out: $(cat "$report")"
+    grep -q '^black=/nix/store/' "$report" \
+        || fail ".#$attr: black was not provided by the package: $(cat "$report")"
 
-  local containers=() magic
-  mapfile -t containers < <(find "$trace" -maxdepth 1 -name '*.ct' 2>/dev/null)
-  [ "${#containers[@]}" -eq 1 ] \
-    || fail ".#$attr: expected one .ct container in $trace, found ${#containers[@]}: $(ls -la "$trace" 2>&1)"
-  magic="$(od -An -tx1 -N5 "${containers[0]}" | tr -d ' \n')"
-  [ "$magic" = "$CTFS_MAGIC_HEX" ] \
-    || fail ".#$attr: ${containers[0]} is not a CTFS container (magic=$magic)"
+    local containers=() magic
+    mapfile -t containers < <(find "$trace" -maxdepth 1 -name '*.ct' 2>/dev/null)
+    [ "${#containers[@]}" -eq 1 ] \
+        || fail ".#$attr: expected one .ct container in $trace, found ${#containers[@]}: $(ls -la "$trace" 2>&1)"
+    magic="$(od -An -tx1 -N5 "${containers[0]}" | tr -d ' \n')"
+    [ "$magic" = "$CTFS_MAGIC_HEX" ] \
+        || fail ".#$attr: ${containers[0]} is not a CTFS container (magic=$magic)"
 
-  # The magic only says the header was written. Decoding proves the Nim writer
-  # the package linked produced a trace the reader understands, and that it
-  # holds this program's execution.
-  #
-  # Decoded to a file and searched afterwards, not piped: under `pipefail`, a
-  # pipe would report a search that found nothing as a failed decode.
-  decoded="$work/decoded.json"
-  ensure_ct_print
-  if ! "$CT_PRINT" --full "${containers[0]}" >"$decoded" 2>"$work/decode.err"; then
-    tail -n 20 "$work/decode.err" >&2
-    fail ".#$attr: ct-print could not decode ${containers[0]}"
-  fi
-  grep -q '"nix_package_probe"' "$decoded" \
-    || fail ".#$attr: the trace does not name the recorded function nix_package_probe()"
-  # As a recorded integer value, `"i": N`. The bare number is not enough: the
-  # program's printed line reaches the trace as text too.
-  grep -Eq '"i": *7000021([^0-9]|$)' "$decoded" \
-    || fail ".#$attr: the trace does not hold nix_package_probe()'s return value 7000021"
+    # The magic only says the header was written. Decoding proves the Nim writer
+    # the package linked produced a trace the reader understands, and that it
+    # holds this program's execution.
+    #
+    # Decoded to a file and searched afterwards, not piped: under `pipefail`, a
+    # pipe would report a search that found nothing as a failed decode.
+    decoded="$work/decoded.json"
+    ensure_ct_print
+    if ! "$CT_PRINT" --full "${containers[0]}" >"$decoded" 2>"$work/decode.err"; then
+        tail -n 20 "$work/decode.err" >&2
+        fail ".#$attr: ct-print could not decode ${containers[0]}"
+    fi
+    grep -q '"nix_package_probe"' "$decoded" \
+        || fail ".#$attr: the trace does not name the recorded function nix_package_probe()"
+    # As a recorded integer value, `"i": N`. The bare number is not enough: the
+    # program's printed line reaches the trace as text too.
+    grep -Eq '"i": *7000021([^0-9]|$)' "$decoded" \
+        || fail ".#$attr: the trace does not hold nix_package_probe()'s return value 7000021"
 
-  echo "PASS: .#$attr ($out) recorded under Python $py_version: $(basename "${containers[0]}"), $(wc -c <"${containers[0]}" | tr -d ' ') bytes"
+    echo "PASS: .#$attr ($out) recorded under Python $py_version: $(basename "${containers[0]}"), $(wc -c <"${containers[0]}" | tr -d ' ') bytes"
 }
 
 # `default` is the declared interpreter. The other is the rest of the support
 # matrix, which compiles the extension again against a different ABI.
 if [ "$#" -eq 0 ]; then
-  set -- default codetracer-python-recorder-python313
+    set -- default codetracer-python-recorder-python313
 fi
 for attr in "$@"; do
-  check_package "$attr"
+    check_package "$attr"
 done

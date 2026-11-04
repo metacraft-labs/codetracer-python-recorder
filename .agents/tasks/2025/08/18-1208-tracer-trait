@@ -56,15 +56,15 @@ impl Dispatcher {
         if self.mask.contains(EventMask::CALL) {
             self.tracer.on_call(...);
         }
-        
+
     }
     // CODEX: ... same for other events
 }
 ``
 
-2. Create code which takes a trait implementation and hooks it to the global tracing. Follow the design-docs for the specific API that needs to be implemented. 
+2. Create code which takes a trait implementation and hooks it to the global tracing. Follow the design-docs for the specific API that needs to be implemented.
 
-3. Create a test implementation of the trait which prints text to stdout. Run the test implementation. Note that the test implementation should not be included in the final build 
+3. Create a test implementation of the trait which prints text to stdout. Run the test implementation. Note that the test implementation should not be included in the final build
 artefact, it will be used only for testing.
 
 4. Update the testing framework to be able to use `just test` also for Rust tests. Specifically we want to run our test implementation from point 2. using `just test`

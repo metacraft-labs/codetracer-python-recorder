@@ -42,15 +42,18 @@ The pure-Python recorder does not perform advanced module-name derivation; all r
 ## 5. How the Algorithm Works End to End
 
 ### 5.1 Capturing module hints
+
 1. `RuntimeTracer::on_py_start` grabs `frame.f_globals['__name__']` for `<module>` code objects and stores that value in `FilterCoordinator` before any gating decisions run.
 2. The hint is retained for the lifetime of the code object (and cleared once non-module frames arrive) so both the filter engine and the tracer can reuse it.
 
 ### 5.2 Filter resolution
+
 1. `TraceFilterEngine::resolve` begins with configuration metadata: project-relative paths, activation roots, and module names supplied by filters.
 2. If no valid module name is present, the engine consults the incoming hint. Failing that, it walks up the filesystem looking for `__init__.py` packages (`module_name_from_packages`) and uses the file stem as a last resort.
 3. The resulting `ScopeResolution` records the derived module name, relative and absolute paths, and the execution decision; the resolution is cached per code object.
 
 ### 5.3 Runtime naming
+
 1. When emitting events, `RuntimeTracer::function_name` first checks the stored module hint. If the globals-derived name exists, it wins; this keeps the default behaviour aligned with Python logging while still permitting explicit opt-outs.
 2. Absent a hint, the tracer falls back to the cached `ScopeResolution` module name, then to package detection via `module_name_from_packages`, and finally leaves `<module>` unchanged.
 3. The tracer no longer keeps a resolver cache, so the hot path is reduced to string comparisons and light filesystem checks.

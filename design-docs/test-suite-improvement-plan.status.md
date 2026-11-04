@@ -1,6 +1,7 @@
 # Test Suite Improvement Plan Status
 
 ## Stage Summary
+
 - ✅ Stage 0 – Baseline captured by ADR 0003 and the initial improvement plan.
 - ✅ Stage 1 – Layout Consolidation: directory moves completed, test commands
   updated, README added, and `just test` now runs the Rust and Python harnesses
@@ -22,5 +23,6 @@
   the CI coverage comment for contributors.
 
 ## Next Actions
+
 Plan complete; monitor coverage baselines and propose enforcement thresholds in
 a follow-up task.

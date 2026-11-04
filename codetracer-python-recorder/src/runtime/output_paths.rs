@@ -197,14 +197,16 @@ mod tests {
     #[test]
     fn ctfs_paths_name_the_container_after_the_program() {
         let tmp = tempdir().expect("tempdir");
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs, "/src/app/main.py");
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs, "/src/app/main.py");
         assert_eq!(paths.events(), tmp.path().join("main.ct").as_path());
     }
 
     #[test]
     fn binary_paths_use_bin_extension() {
         let tmp = tempdir().expect("tempdir");
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
         assert_eq!(paths.events(), tmp.path().join("trace.bin").as_path());
     }
 
@@ -214,7 +216,8 @@ mod tests {
         let start_path = tmp.path().join("program.py");
         std::fs::write(&start_path, "print('hi')\n").expect("write script");
 
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
         let mut writer = NonStreamingTraceWriter::new("program.py", &[]);
 
         paths

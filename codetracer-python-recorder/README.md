@@ -59,12 +59,12 @@ or activated virtual environments behave identically to `python script.py`.
 
 ### Environment variables
 
-| Variable                                 | CLI equivalent | Description                                                          |
-| ---------------------------------------- | -------------- | -------------------------------------------------------------------- |
-| `CODETRACER_PYTHON_RECORDER_OUT_DIR`     | `--out-dir`    | Default output directory; overridden by the CLI flag when both are set. |
-| `CODETRACER_PYTHON_RECORDER_DISABLED`    | —              | Set to `1` or `true` to skip recording entirely while still running the target. |
-| `CODETRACER_TRACE_FILTER`                | `--trace-filter` | Filter spec for env auto-start (`::`-separated paths).             |
-| `CODETRACER_TRACE`                       | —              | Auto-start path: when set, importing the recorder triggers tracing into this directory (library mode). |
+| Variable                              | CLI equivalent   | Description                                                                                            |
+| ------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `CODETRACER_PYTHON_RECORDER_OUT_DIR`  | `--out-dir`      | Default output directory; overridden by the CLI flag when both are set.                                |
+| `CODETRACER_PYTHON_RECORDER_DISABLED` | —                | Set to `1` or `true` to skip recording entirely while still running the target.                        |
+| `CODETRACER_TRACE_FILTER`             | `--trace-filter` | Filter spec for env auto-start (`::`-separated paths).                                                 |
+| `CODETRACER_TRACE`                    | —                | Auto-start path: when set, importing the recorder triggers tracing into this directory (library mode). |
 
 The recorder does **not** consult `CODETRACER_FORMAT`; the format is always
 CTFS.
@@ -134,6 +134,7 @@ python -m codetracer_python_recorder \
 ```
 
 ## Trace filter configuration
+
 - Filter files are TOML with `[meta]`, `[scope]`, and `[[scope.rules]]` tables. Rules evaluate in declaration order and can tweak both execution (`exec`) and value decisions (`value_default`).
 - Supported selector domains: `pkg`, `file`, `obj` for scopes; `local`, `global`, `arg`, `ret`, `attr` for value policies. Match types default to `glob` and also accept `regex` or `literal` (e.g. `local:regex:^(metric|masked)_\w+$`).
 - Default discovery: `.codetracer/trace-filter.toml` next to the traced script. Chain additional files via CLI (`--trace-filter path_a --trace-filter path_b`), environment variable (`CODETRACER_TRACE_FILTER=path_a::path_b`), or Python helpers (`trace(..., trace_filter=[path_a, path_b])`). Later entries override earlier ones when selectors overlap.
@@ -141,6 +142,7 @@ python -m codetracer_python_recorder \
 - Runtime metadata captures the active chain under `trace_metadata.json -> trace_filter`, including per-kind redaction and drop counters. See `docs/onboarding/trace-filters.md` for the full DSL reference and examples.
 
 Example snippet:
+
 ```toml
 [meta]
 name = "local-redaction"
@@ -183,6 +185,7 @@ version, target script, and diff preference so downstream tooling can make
 decisions without re-running the trace.
 
 ## Development benchmarks
+
 - Rust microbench: `cargo bench --bench trace_filter --no-default-features` exercises baseline, glob-heavy, and regex-heavy selector chains.
 - Python smoke benchmark: `pytest codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py -q` when the environment variable `CODETRACER_TRACE_FILTER_PERF=1` is set.
 - Run both together with `just bench`. The helper seeds a virtualenv, runs Criterion, then executes the Python smoke test while writing `target/perf/trace_filter_py.json` (per-scenario durations plus redaction/drop statistics).

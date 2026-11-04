@@ -57,10 +57,10 @@ public tracer API.
 - During `install_tracer`, after we obtain `monitoring_events`, load
   `sys.monitoring.DISABLE` once and store it in the global tracer state
   (`Global` struct) as a `Py<PyAny>`. Because `Py<PyAny>` is `Send`
-  + `Sync`, it can be safely cached behind the global mutex and reused
-  inside callbacks without re-importing modules.
+  - `Sync`, it can be safely cached behind the global mutex and reused
+    inside callbacks without re-importing modules.
 - Provide a helper on `Global` (e.g., `fn disable_sentinel<'py>(&self,
-  py: Python<'py>) -> Bound<'py, PyAny>`) that returns the bound object
+py: Python<'py>) -> Bound<'py, PyAny>`) that returns the bound object
   when we need to hand the sentinel back to Python.
 - Make sure `uninstall_tracer` drops the sentinel alongside other
   state so a new install can reload it cleanly.
@@ -68,7 +68,7 @@ public tracer API.
 ## `RuntimeTracer` filename filtering
 
 - Add a dedicated method `fn should_trace_code(&mut self,
-  py: Python<'_>, code: &CodeObjectWrapper) -> ShouldTrace` returning a
+py: Python<'_>, code: &CodeObjectWrapper) -> ShouldTrace` returning a
   new internal enum `{ Trace, SkipAndDisable }`.
   - A file is considered “real” when `co_filename` does not match the
     `<...>` pattern. For now we treat any filename that begins with `<`

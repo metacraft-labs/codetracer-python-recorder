@@ -48,10 +48,10 @@ guide ([maturin.rs](https://www.maturin.rs/distribution.html)). Key takeaways in
    - manylinux2014 `x86_64` and `aarch64`,
    - macOS universal2 (`x86_64` + `arm64`),
    - Windows `amd64`.
-   Produce a source distribution via `maturin sdist`, ensuring `Cargo.lock`, Rust sources, and Python
-   shim modules are included while excluding wheel artefacts (`target/`, compiled `.so` files).
-   Evaluate enabling the `pyo3/abi3-py312` feature after the first release to collapse per-version
-   wheels.
+     Produce a source distribution via `maturin sdist`, ensuring `Cargo.lock`, Rust sources, and Python
+     shim modules are included while excluding wheel artefacts (`target/`, compiled `.so` files).
+     Evaluate enabling the `pyo3/abi3-py312` feature after the first release to collapse per-version
+     wheels.
 3. **Pre-release verification:** Extend the release pipeline to run unit tests against the built
    artefacts, execute smoke installs (`pip install` from the local wheel and sdist), and run the CLI
    (`python -m codetracer_python_recorder --help`) before any upload step.
@@ -61,8 +61,8 @@ guide ([maturin.rs](https://www.maturin.rs/distribution.html)). Key takeaways in
    - Upload artefacts to a staging job that performs TestPyPI publishing via maturin.
    - Require a manual approval (environment protection) before promoting the same artefacts to the
      production PyPI repository.
-   Configure the PyPI project as a Trusted Publisher for the repository so uploads rely on OIDC
-   tokens instead of stored secrets.
+     Configure the PyPI project as a Trusted Publisher for the repository so uploads rely on OIDC
+     tokens instead of stored secrets.
 5. **Versioning & change management:** Adopt a documented version-bump process that updates both
    `pyproject.toml` and `Cargo.toml`, updates the changelog/release notes, and tags releases using
    `recorder-vMAJOR.MINOR.PATCH`. Enforce semantic-versioning semantics via review, and block

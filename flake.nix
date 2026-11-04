@@ -22,9 +22,21 @@
     codetracer-trace-format-nim.url = "github:metacraft-labs/codetracer-trace-format-nim/agents";
   };
 
-  outputs = { self, nixpkgs, pre-commit-hooks, codetracer-trace-format, codetracer-trace-format-nim }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      pre-commit-hooks,
+      codetracer-trace-format,
+      codetracer-trace-format-nim,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
 
       # THE Python version, read from ./.python-version — see nix/python.nix
@@ -46,90 +58,98 @@
       # deliberately building for an interpreter other than the declared one:
       # it takes the version from `.python-version` so the caller cannot pick
       # one that disagrees with the extension this repo ships.
-      mkCodetracerPackages = pkgs: python: let
-        # Read versions from pyproject.toml files
-        purePythonProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-pure-python-recorder/pyproject.toml);
-        rustBackedProjectToml = builtins.fromTOML (builtins.readFile ./codetracer-python-recorder/pyproject.toml);
+      mkCodetracerPackages =
+        pkgs: python:
+        let
+          # Read versions from pyproject.toml files
+          purePythonProjectToml = builtins.fromTOML (
+            builtins.readFile ./codetracer-pure-python-recorder/pyproject.toml
+          );
+          rustBackedProjectToml = builtins.fromTOML (
+            builtins.readFile ./codetracer-python-recorder/pyproject.toml
+          );
 
-        # The layout the crate's Cargo.toml assumes, reproduced as one source
-        # tree: the crate two levels down, and the trace-format workspace at
-        # `../../codetracer-trace-format` from it. `importCargoLock` vendors
-        # registry crates only, so path dependencies must really be on disk.
-        # The whole trace-format tree is needed, not only the crates the
-        # recorder uses, because Cargo loads that workspace's root manifest for
-        # its path dependencies and that manifest requires every member.
-        recorderSrcName = "codetracer-python-recorder-src";
-        recorderSrc = pkgs.runCommandLocal recorderSrcName { } ''
-          mkdir -p $out/codetracer-python-recorder
-          cp -r ${./codetracer-python-recorder} $out/codetracer-python-recorder/codetracer-python-recorder
-          cp -r ${codetracer-trace-format} $out/codetracer-trace-format
-        '';
-      in {
-        # Pure Python recorder package
-        codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-pure-python-recorder";
-          version = purePythonProjectToml.project.version;
-          pyproject = true;
+          # The layout the crate's Cargo.toml assumes, reproduced as one source
+          # tree: the crate two levels down, and the trace-format workspace at
+          # `../../codetracer-trace-format` from it. `importCargoLock` vendors
+          # registry crates only, so path dependencies must really be on disk.
+          # The whole trace-format tree is needed, not only the crates the
+          # recorder uses, because Cargo loads that workspace's root manifest for
+          # its path dependencies and that manifest requires every member.
+          recorderSrcName = "codetracer-python-recorder-src";
+          recorderSrc = pkgs.runCommandLocal recorderSrcName { } ''
+            mkdir -p $out/codetracer-python-recorder
+            cp -r ${./codetracer-python-recorder} $out/codetracer-python-recorder/codetracer-python-recorder
+            cp -r ${codetracer-trace-format} $out/codetracer-trace-format
+          '';
+        in
+        {
+          # Pure Python recorder package
+          codetracer-pure-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-pure-python-recorder";
+            version = purePythonProjectToml.project.version;
+            pyproject = true;
 
-          src = ./codetracer-pure-python-recorder;
+            src = ./codetracer-pure-python-recorder;
 
-          build-system = with python.pkgs; [
-            setuptools
-          ];
+            build-system = with python.pkgs; [
+              setuptools
+            ];
 
-          pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
+            pythonImportsCheck = [ "codetracer_pure_python_recorder" ];
 
-          meta = {
-            description = "Pure-Python prototype recorder producing CodeTracer traces";
-            license = pkgs.lib.licenses.mit;
+            meta = {
+              description = "Pure-Python prototype recorder producing CodeTracer traces";
+              license = pkgs.lib.licenses.mit;
+            };
+          };
+
+          # Rust-backed recorder package
+          codetracer-python-recorder = python.pkgs.buildPythonPackage {
+            pname = "codetracer-python-recorder";
+            version = rustBackedProjectToml.project.version;
+            pyproject = true;
+
+            src = recorderSrc;
+            sourceRoot = "${recorderSrcName}/codetracer-python-recorder/codetracer-python-recorder";
+
+            # Link the writer the Nim repository's own package built, so no Nim
+            # toolchain or nimble network access is needed in the sandbox
+            # (codetracer_trace_writer_nim/build.rs). Resolved from the HOST
+            # platform of `pkgs` because `lib.mkCodetracerPackages` and the
+            # overlay receive the consumer's package set, not one this flake
+            # instantiated. Lazily: a consumer that takes only the pure-Python
+            # recorder never forces this attribute.
+            CODETRACER_TRACE_WRITER_NIM_PREBUILT =
+              codetracer-trace-format-nim.packages.${pkgs.stdenv.hostPlatform.system}.trace-writer-ffi;
+
+            # pyproject.toml declares black as a runtime dependency (the
+            # recorder's autoformat pass), and nixpkgs' pythonRuntimeDepsCheck
+            # refuses a package that does not provide what it declares.
+            dependencies = [ python.pkgs.black ];
+
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ./codetracer-python-recorder/Cargo.lock;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              rustPlatform.cargoSetupHook
+              rustPlatform.maturinBuildHook
+              capnproto
+              pkg-config
+            ];
+
+            pythonImportsCheck = [ "codetracer_python_recorder" ];
+
+            meta = {
+              description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
+              license = pkgs.lib.licenses.mit;
+            };
           };
         };
 
-        # Rust-backed recorder package
-        codetracer-python-recorder = python.pkgs.buildPythonPackage {
-          pname = "codetracer-python-recorder";
-          version = rustBackedProjectToml.project.version;
-          pyproject = true;
-
-          src = recorderSrc;
-          sourceRoot = "${recorderSrcName}/codetracer-python-recorder/codetracer-python-recorder";
-
-          # Link the writer the Nim repository's own package built, so no Nim
-          # toolchain or nimble network access is needed in the sandbox
-          # (codetracer_trace_writer_nim/build.rs). Resolved from the HOST
-          # platform of `pkgs` because `lib.mkCodetracerPackages` and the
-          # overlay receive the consumer's package set, not one this flake
-          # instantiated. Lazily: a consumer that takes only the pure-Python
-          # recorder never forces this attribute.
-          CODETRACER_TRACE_WRITER_NIM_PREBUILT =
-            codetracer-trace-format-nim.packages.${pkgs.stdenv.hostPlatform.system}.trace-writer-ffi;
-
-          # pyproject.toml declares black as a runtime dependency (the
-          # recorder's autoformat pass), and nixpkgs' pythonRuntimeDepsCheck
-          # refuses a package that does not provide what it declares.
-          dependencies = [ python.pkgs.black ];
-
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./codetracer-python-recorder/Cargo.lock;
-          };
-
-          nativeBuildInputs = with pkgs; [
-            rustPlatform.cargoSetupHook
-            rustPlatform.maturinBuildHook
-            capnproto
-            pkg-config
-          ];
-
-          pythonImportsCheck = [ "codetracer_python_recorder" ];
-
-          meta = {
-            description = "Low-level Rust-backed Python module for CodeTracer recording (PyO3)";
-            license = pkgs.lib.licenses.mit;
-          };
-        };
-      };
-
-    in {
+    in
+    {
       # The declared interpreter, for consumers. `lib` outputs are
       # system-independent, so a downstream flake reads these without
       # instantiating a package set:
@@ -150,7 +170,8 @@
       # disagrees with the extension this repo ships.
       lib.mkCodetracerPackagesDefault = pkgs: mkCodetracerPackages pkgs (python.packageFor pkgs);
 
-      packages = forEachSystem (system:
+      packages = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
 
@@ -173,7 +194,8 @@
           python312Packages = mkCodetracerPackages pkgs pkgs.python312;
           python313Packages = mkCodetracerPackages pkgs pkgs.python313;
 
-        in {
+        in
+        {
           # Default packages (the interpreter declared in ./.python-version)
           inherit (defaultPackages) codetracer-pure-python-recorder codetracer-python-recorder;
           default = defaultPackages.codetracer-python-recorder;
@@ -183,7 +205,8 @@
           codetracer-python-recorder-python313 = python313Packages.codetracer-python-recorder;
           codetracer-pure-python-recorder-python312 = python312Packages.codetracer-pure-python-recorder;
           codetracer-pure-python-recorder-python313 = python313Packages.codetracer-pure-python-recorder;
-        });
+        }
+      );
 
       # Overlay for easy integration into other flakes.
       #
@@ -204,17 +227,20 @@
       # outside the single source. Consumers that need the ABI this repo ships
       # should use `lib.mkCodetracerPackagesDefault pkgs` instead, which cannot
       # pick a different one. codetracer does exactly that.
-      overlays.default = final: prev: let
-        packages = mkCodetracerPackages final final.python3;
-      in {
-        python3 = prev.python3.override {
-          packageOverrides = pyFinal: pyPrev: {
-            codetracer-python-recorder = packages.codetracer-python-recorder;
-            codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+      overlays.default =
+        final: prev:
+        let
+          packages = mkCodetracerPackages final final.python3;
+        in
+        {
+          python3 = prev.python3.override {
+            packageOverrides = pyFinal: pyPrev: {
+              codetracer-python-recorder = packages.codetracer-python-recorder;
+              codetracer-pure-python-recorder = packages.codetracer-pure-python-recorder;
+            };
           };
+          python3Packages = final.python3.pkgs;
         };
-        python3Packages = final.python3.pkgs;
-      };
 
       checks = forEachSystem (system: {
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
@@ -231,13 +257,16 @@
         };
       });
 
-      devShells = forEachSystem (system:
+      devShells = forEachSystem (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
           preCommit = self.checks.${system}.pre-commit-check;
           declaredPython = python.packageFor pkgs;
-          pureRecorderPkg =
-            (mkCodetracerPackages pkgs declaredPython).codetracer-pure-python-recorder;
+          # The locked build SDK (tools/python-sdk) whose identity the Repro graph
+          # (python_sdk_tools.nim) records; tests read it from RECORDER_TEST_BUILD_SDK.
+          recorderBuildSdk = import ./tools/python-sdk/default.nix { inherit system; };
+          pureRecorderPkg = (mkCodetracerPackages pkgs declaredPython).codetracer-pure-python-recorder;
           # The committed `.pre-commit-config.yaml` is what the pre-commit hook
           # runs, with the flake's pre-commit: the flake provides the tools, the
           # committed config provides the rules. git-hooks.nix's own installer
@@ -293,7 +322,8 @@
             fi
             unset _own_repo_root
           '';
-        in {
+        in
+        {
           # Minimal shell for running the pure-Python recorder in downstream
           # projects (e.g. CodeTracer flow tests on macOS without a full nix
           # dev shell). Provides the DECLARED interpreter (./.python-version)
@@ -313,6 +343,7 @@
           };
 
           default = pkgs.mkShell {
+            RECORDER_TEST_BUILD_SDK = "${recorderBuildSdk}";
             packages = [
               # The declared interpreter FIRST, so a bare `python3` in this
               # shell is the one ./.python-version names. It used to be
@@ -381,7 +412,15 @@
             ])
             # `prek` replaces the legacy `pre-commit` workflow (workspace
             # prek-migration directive 2026-05).
-            ++ [ pkgs.prek ]
+            # The tools the committed .pre-commit-config.yaml runs as `language: system`
+            # hooks: the flake provides the tools, the committed config the rules.
+            ++ [
+              pkgs.prek
+              pkgs.git
+              pkgs.editorconfig-checker
+              pkgs.opentofu
+              pkgs.nodePackages.prettier
+            ]
             # cargo-llvm-cov is a coverage-only tool that is marked broken on
             # aarch64-darwin in the pinned nixpkgs. Including it unconditionally
             # made the whole devShell fail to evaluate under `direnv`/`nix
@@ -440,6 +479,7 @@
               ${ownRepoOnly installGitHooks}
             '';
           };
-        });
+        }
+      );
     };
 }

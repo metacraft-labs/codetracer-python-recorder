@@ -179,11 +179,11 @@ Currently it's very similar to our [Ruby tracer](https://github.com/metacraft-la
 #### Current approach: sys.settrace API
 
 Currently we're using the sys.settrace API: https://docs.python.org/3/library/sys.html#sys.settrace .
-This is very flexible and can function with probably multiple Python versions out of the box. 
+This is very flexible and can function with probably multiple Python versions out of the box.
 However, this is limited:
 
-* it's not optimal
-* it can't track more detailed info/state, needed for some CodeTracer features(or for more optimal replays).
+- it's not optimal
+- it can't track more detailed info/state, needed for some CodeTracer features(or for more optimal replays).
 
 For other languages, we've used a more deeply integrated approach: patching the interpreter or VM itself (e.g. Noir).
 
@@ -197,7 +197,7 @@ tracking assignments can be a great addition, but it really depends on the inter
 
 #### Filtering
 
-It would be useful to have a way to record in detail only certain periods of the program, or certain functions or modules: 
+It would be useful to have a way to record in detail only certain periods of the program, or certain functions or modules:
 we plan on expanding the [trace format](https://github.com/metacraft-labs/runtime_tracing/) and CodeTracer' support, so that this is possible. It would let one be able to record interesting
 parts of even long-running or more heavy programs.
 
@@ -205,10 +205,10 @@ parts of even long-running or more heavy programs.
 
 We'd be very happy if the community finds this useful, and if anyone wants to:
 
-* Use and test the Python support or CodeTracer.
-* Provide feedback and discuss alternative implementation ideas: in the issue tracker, or in our [discord](https://discord.gg/qSDCAFMP).
-* Contribute code to enhance the Python support of CodeTracer.
-* Provide [sponsorship](https://opencollective.com/codetracer), so we can hire dedicated full-time maintainers for this project.
+- Use and test the Python support or CodeTracer.
+- Provide feedback and discuss alternative implementation ideas: in the issue tracker, or in our [discord](https://discord.gg/qSDCAFMP).
+- Contribute code to enhance the Python support of CodeTracer.
+- Provide [sponsorship](https://opencollective.com/codetracer), so we can hire dedicated full-time maintainers for this project.
 
 ### Direct-storage upload (Enterprise on-prem)
 
@@ -255,3 +255,23 @@ End-to-end coverage:
 LICENSE: MIT
 
 Copyright (c) 2025 Metacraft Labs Ltd
+
+### Git hook installation
+
+The committed `.pre-commit-config.yaml` supplies the standard hook set and the
+repository's unfiltered `just lint`. The Nix dev shell supplies the tools those
+hooks run (pre-commit, prek, uv, the declared Python and the formatters).
+Entering the dev shell from this repository installs the committed config as
+the pre-commit hook (`scripts/install-git-hooks.sh`). Where a Reprobuild hook
+dispatcher holds the slot, the hook is chained as `pre-commit.repro-local` so
+the managed hooks, including the pre-push publication gate, stay in place.
+Outside the dev shell, run `prek install`.
+
+`just check-hooks` runs every configured hook over the whole tree. It sets
+`PREK_NO_FAST_PATH=1`, so prek runs the upstream `check-added-large-files`
+rather than its built-in reimplementation, and the 1024 KiB ceiling is the one
+upstream enforces.
+
+Windows provisioning of the hook tools is not done yet. The Windows workflows
+and recorder assertions are unchanged, and a hook run on Linux or macOS does
+not qualify Windows.
