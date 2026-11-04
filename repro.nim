@@ -24,6 +24,10 @@ package codetracer_python_recorder:
     "git"
     "capnp"
     "zstd"
+    # zstd.h + libzstd for the sibling ct-print edge (buildCtPrint compiles
+    # and links against them; ``zstd`` is the CLI only).
+    when not defined(windows):
+      "zstd-dev"
     "bash"
     "dirname"
     "grep"
