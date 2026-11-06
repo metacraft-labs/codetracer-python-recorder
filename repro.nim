@@ -41,10 +41,18 @@ package codetracer_python_recorder:
       "gcc"
       "pkg-config"
       "openssl"
+      # `zstd` above is the CLI only. `buildCtPrint` compiles and links
+      # ct-print against `zstd.h`/libzstd and names `zstd-dev` on its edge on
+      # POSIX; a constructor called from `build:` cannot provision a tool, so
+      # this package must declare every selector in
+      # build_writer_artifacts.CtPrintToolSelectors (the C compiler is
+      # declared here too), or buildCtPrint refuses the package.
+      "zstd-dev"
     elif defined(macosx):
       "clang"
       "pkg-config"
       "openssl"
+      "zstd-dev"
   library codetracerPythonRecorder
   build:
     let base = ".repro/build/python-complete-graph"
