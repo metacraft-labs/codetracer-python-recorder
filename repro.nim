@@ -12,6 +12,16 @@ import python_sdk_tools
 import "../codetracer-trace-format-nim/build_writer_artifacts"
 
 package codetracer_python_recorder:
+  # Tool provisioning is declared here, not left to the caller. Reprobuild
+  # refuses a recipe with `uses:` and no provisioning mode ("typed tool
+  # provisioning is required ... refusing implicit PATH fallback"), and CI's
+  # `dev-exec repro build|test` no longer appends `--tool-provisioning=path`
+  # (metacraft-github-actions ecbf182, "honor the project's provisioning
+  # mode"). "path" is the mode every CI leg already ran in through that flag,
+  # so declaring it leaves CI's tool resolution unchanged. No Windows
+  # `tarball` arm: the python-recorder-*-sdk packages (python_sdk_tools.nim)
+  # declare only `nixPackage` provisioning, so there is no tarball to select.
+  defaultToolProvisioning "path"
   uses:
     "python-recorder-python-sdk"
     "python-recorder-uv-sdk"
