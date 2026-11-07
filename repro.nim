@@ -12,6 +12,16 @@ import python_sdk_tools
 import "../codetracer-trace-format-nim/build_writer_artifacts"
 
 package codetracer_python_recorder:
+  # Tool provisioning is declared here, not left to the caller. Reprobuild
+  # refuses a recipe with `uses:` and no provisioning mode ("typed tool
+  # provisioning is required ... refusing implicit PATH fallback"), and CI's
+  # `dev-exec repro build|test` no longer appends `--tool-provisioning=path`
+  # (metacraft-github-actions ecbf182, "honor the project's provisioning
+  # mode"). "path" is the mode every CI leg already ran in through that flag,
+  # so declaring it leaves CI's tool resolution unchanged. No Windows
+  # `tarball` arm: the python-recorder-*-sdk packages (python_sdk_tools.nim)
+  # declare only `nixPackage` provisioning, so there is no tarball to select.
+  defaultToolProvisioning "path"
   uses:
     "python-recorder-python-sdk"
     "python-recorder-uv-sdk"
@@ -24,10 +34,6 @@ package codetracer_python_recorder:
     "git"
     "capnp"
     "zstd"
-    # zstd.h + libzstd for the sibling ct-print edge (buildCtPrint compiles
-    # and links against them; ``zstd`` is the CLI only).
-    when not defined(windows):
-      "zstd-dev"
     "bash"
     "dirname"
     "grep"
@@ -35,10 +41,18 @@ package codetracer_python_recorder:
       "gcc"
       "pkg-config"
       "openssl"
+      # `zstd` above is the CLI only. `buildCtPrint` compiles and links
+      # ct-print against `zstd.h`/libzstd and names `zstd-dev` on its edge on
+      # POSIX; a constructor called from `build:` cannot provision a tool, so
+      # this package must declare every selector in
+      # build_writer_artifacts.CtPrintToolSelectors (the C compiler is
+      # declared here too), or buildCtPrint refuses the package.
+      "zstd-dev"
     elif defined(macosx):
       "clang"
       "pkg-config"
       "openssl"
+      "zstd-dev"
   library codetracerPythonRecorder
   build:
     let base = ".repro/build/python-complete-graph"

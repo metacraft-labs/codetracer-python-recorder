@@ -65,6 +65,19 @@ venv version="":
 dev:
     uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
 
+# Build the `ct-print` decoder the Python tests shell out to, at the fixed
+# sibling path ../codetracer-trace-format-nim/ct-print where
+# tests/python/support/ctfs.py and test_cli_integration.py look for it (unless
+# CT_PRINT points elsewhere). `py-test` and `coverage-python` need it: their
+# CTFS round-trip tests fail with "ct-print binary missing" without it. Every
+# CI job that runs those recipes calls this one first, so the compile command
+# lives here once rather than in each job. `repro build` / `repro test` do not
+# use it: repro.nim constructs the same binary through the sibling's own
+# `buildCtPrint` edge.
+ct-print:
+    cd "{{ justfile_directory() }}/../codetracer-trace-format-nim" && \
+        nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
+
 # Run unit tests of dev build (dev ensures integration-test feature is built)
 test: dev cargo-test py-test verify-cli-convention
 

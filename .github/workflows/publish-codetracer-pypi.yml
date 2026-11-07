@@ -111,6 +111,14 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           siblings: codetracer-launcher!=${{ inputs.launcher_ref }}
 
+      # Nix first: `[self-hosted, linux, x64]` can land on an ephemeral GARM
+      # runner whose PATH does not carry `nix` until this action provisions
+      # it, and the build and verify steps below run through `nix shell`.
+      - uses: metacraft-labs/devops-modules/.github/setup-nix@dev
+        with:
+          trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
+          substituters: ${{ vars.ATTIC_SUBSTITUTER }}
+
       - name: Resolve version
         id: ver
         run: |
@@ -186,6 +194,13 @@ jobs:
       contents: read
       id-token: write # mint a GitHub OIDC token to exchange for a PyPI upload token
     steps:
+      # Nix first, as in build-wheels: this job runs on its own runner, and
+      # the upload step below runs through `nix shell`.
+      - uses: metacraft-labs/devops-modules/.github/setup-nix@dev
+        with:
+          trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
+          substituters: ${{ vars.ATTIC_SUBSTITUTER }}
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
