@@ -1,16 +1,19 @@
 # Python sys.monitoring Tracer API
 
 ## Overview
-This document describes the user-facing Python API for the `codetracer` module built on top of `runtime_tracing` and `sys.monitoring`.  The API exposes a minimal surface for starting and stopping traces, managing trace sessions, and integrating tracing into scripts or test suites.
+
+This document describes the user-facing Python API for the `codetracer` module built on top of `runtime_tracing` and `sys.monitoring`. The API exposes a minimal surface for starting and stopping traces, managing trace sessions, and integrating tracing into scripts or test suites.
 
 ## Module `codetracer`
 
 ### Constants
+
 - `DEFAULT_FORMAT: str = "binary"`
 - `TRACE_BINARY: str = "binary"`
 - `TRACE_JSON: str = "json"`
 
 ### Session Management
+
 - Start a global trace; returns a `TraceSession`.
   ```py
   def start(path: str | os.PathLike, *, format: str = DEFAULT_FORMAT,
@@ -36,6 +39,7 @@ This document describes the user-facing Python API for the `codetracer` module b
   ```
 
 ## Class `TraceSession`
+
 Represents a live tracing session returned by `start()` and used by the context manager.
 
 ```py
@@ -50,15 +54,18 @@ class TraceSession:
 ```
 
 ### Start Behavior
+
 - `start_on_enter`: Optional path; when provided, tracing starts only after execution first enters this file (useful to avoid interpreter/import noise when launching via CLI).
 
 ### Output Location
+
 - `path` is a directory. The tracer writes three files inside it:
   - `trace.json` when `format == "json"` or `trace.bin` when `format == "binary"`
   - `trace_metadata.json`
   - `trace_paths.json`
 
 ## Environment Integration
+
 - Auto-start tracing when `CODETRACER_TRACE` is set; the value is interpreted as the output directory.
 - When `CODETRACER_FORMAT` is provided, it overrides the default output format.
 - Accept `CODETRACER_TRACE_FILTER` with either `::`-separated paths or multiple
@@ -69,6 +76,7 @@ class TraceSession:
   filter so a baseline redaction/stdlib skip policy always applies.
 
 ## Usage Example
+
 ```py
 import codetracer
 from pathlib import Path

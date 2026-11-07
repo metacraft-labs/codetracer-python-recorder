@@ -1,7 +1,8 @@
 //! sys.monitoring callback metadata and helpers.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use crate::code_object::{CodeObjectRegistry, CodeObjectWrapper};
 use crate::ffi;
@@ -28,6 +29,76 @@ pub(super) struct Global {
 }
 
 pub(super) static GLOBAL: Mutex<Option<Global>> = Mutex::new(None);
+
+/// How long a thread waits for [`GLOBAL`] before it starts complaining.
+///
+/// Not a timeout: the lock is held for one monitoring callback or one writer
+/// call, so exceeding this means something else is wrong and the operator
+/// should hear about it.
+const GLOBAL_LOCK_WARN_AFTER: Duration = Duration::from_secs(1);
+
+/// [`GLOBAL`] was poisoned by a panic while it was held.
+#[derive(Debug)]
+pub(super) struct GlobalPoisoned;
+
+/// Acquire [`GLOBAL`] from a thread that holds the GIL, without deadlocking
+/// against another thread that holds `GLOBAL`.
+///
+/// **Every acquisition of `GLOBAL` goes through here.**  A thread holding
+/// `GLOBAL` may give the GIL away before it releases `GLOBAL`: a monitoring
+/// callback runs Python code while it holds the lock (capturing a value of an
+/// unknown type calls its `__str__`), and Python code drops the GIL on a
+/// blocking call or at the interpreter's switch interval.  Two lock orders
+/// therefore exist, and each one deadlocks on its own:
+///
+/// * *GIL then `GLOBAL`* — if the waiting thread blocks on `GLOBAL` **while
+///   holding the GIL**, the holder can never take the GIL back to finish and
+///   release `GLOBAL`.
+/// * *`GLOBAL` then GIL* — releasing the GIL around a blocking `GLOBAL.lock()`
+///   produces the mirror image: the waiter wakes up holding `GLOBAL` and waits
+///   for the GIL, while the GIL's holder waits for `GLOBAL`.
+///
+/// So the wait is a `try_lock` loop that holds NEITHER lock while it waits:
+/// the GIL is released between attempts so the holder can make progress, and
+/// `GLOBAL` is only ever taken while the GIL is held.  Uncontended, this is a
+/// single `try_lock`.
+pub(super) fn try_lock_global(
+    py: Python<'_>,
+) -> Result<MutexGuard<'static, Option<Global>>, GlobalPoisoned> {
+    let mut start: Option<Instant> = None;
+    let mut warned = false;
+    let mut attempt: u32 = 0;
+    loop {
+        match GLOBAL.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(_)) => return Err(GlobalPoisoned),
+            Err(TryLockError::WouldBlock) => {}
+        }
+        let waited = start.get_or_insert_with(Instant::now).elapsed();
+        if !warned && waited > GLOBAL_LOCK_WARN_AFTER {
+            warned = true;
+            warn!(
+                "waited {:?} for the tracer lock; the thread holding it appears to be stuck",
+                waited
+            );
+        }
+        // The GIL MUST be released here — that is the whole point of the loop.
+        // The holder usually needs only a GIL hand-off to finish, so yield
+        // first and back off to short sleeps only if it takes longer.
+        if attempt < 16 {
+            py.allow_threads(std::thread::yield_now);
+        } else {
+            let backoff = Duration::from_micros(20 << (attempt - 16).min(6));
+            py.allow_threads(|| std::thread::sleep(backoff));
+        }
+        attempt = attempt.saturating_add(1);
+    }
+}
+
+/// [`try_lock_global`] for callers that treat a poisoned lock as fatal.
+pub(super) fn lock_global(py: Python<'_>) -> MutexGuard<'static, Option<Global>> {
+    try_lock_global(py).expect("GLOBAL mutex poisoned")
+}
 
 fn catch_callback<F>(label: &'static str, callback: F) -> CallbackResult
 where
@@ -113,7 +184,7 @@ pub(super) fn callback_call(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_call", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -132,7 +203,7 @@ pub(super) fn callback_line(
     lineno: u32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_line", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -151,7 +222,7 @@ pub(super) fn callback_instruction(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_instruction", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -174,7 +245,7 @@ pub(super) fn callback_jump(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_jump", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -194,7 +265,7 @@ pub(super) fn callback_branch(
     destination_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_branch", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -216,7 +287,7 @@ pub(super) fn callback_py_start(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_start", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -238,7 +309,7 @@ pub(super) fn callback_py_resume(
     instruction_offset: i32,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_resume", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -261,7 +332,7 @@ pub(super) fn callback_py_return(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_return", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -284,7 +355,7 @@ pub(super) fn callback_py_yield(
     retval: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_yield", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -307,7 +378,7 @@ pub(super) fn callback_py_throw(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_throw", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -330,7 +401,7 @@ pub(super) fn callback_py_unwind(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_py_unwind", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -353,7 +424,7 @@ pub(super) fn callback_raise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_raise", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -376,7 +447,7 @@ pub(super) fn callback_reraise(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_reraise", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -399,7 +470,7 @@ pub(super) fn callback_exception_handled(
     exception: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_exception_handled", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -441,7 +512,7 @@ pub(super) fn callback_c_return(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_return", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }
@@ -465,7 +536,7 @@ pub(super) fn callback_c_raise(
     arg0: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     ffi::wrap_pyfunction("callback_c_raise", || {
-        let mut guard = GLOBAL.lock().expect("GLOBAL mutex poisoned");
+        let mut guard = lock_global(py);
         if guard.is_none() {
             return Ok(py.None());
         }

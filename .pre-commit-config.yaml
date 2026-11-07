@@ -1,0 +1,111 @@
+# THE MCL STANDARD HOOK SET (`mcl-standard-hooks`), portable committed form.
+#
+# metacraft-dev-guidelines/policies/repo-requirements.md §4 requires the whole
+# set. §4.1 says which adoption form is ours: this repository does not install
+# the standard set through the devops-modules flake, so the form is the
+# portable one -- the block from devops-modules' `git-hooks/mcl-standard-hooks.yaml`,
+# with `rev:` pinned to a devops-modules sha. The committed-binaries tier
+# (§4.3) was adopted first (c4c2cbb); the formatting tier and the repository's
+# own `just lint` followed (26fdc40), which reformatted the corpus to pass them.
+#
+# Install:  automatic on dev-shell entry (scripts/install-git-hooks.sh);
+#           elsewhere `prek install` (or: pre-commit install)
+# Run:      prek run --all-files   (or: just check-hooks)
+#
+# ON NixOS, `uv` MUST BE ON PATH BEFORE EITHER OF THOSE. prek otherwise
+# downloads its own `uv`, which is a generic-linux dynamically linked binary and
+# cannot exec on NixOS ("Could not start dynamically linked executable"). The
+# hooks then fail to INSTALL, and the commit fails for a reason that has nothing
+# to do with its content -- a gate that refuses everything is not a gate, it is
+# an outage. See repo-requirements.md §4.x.
+#
+# Both committed-binary guards act on ADDED files only
+# (`git diff --staged --diff-filter=A`), never on files already tracked, so they
+# cannot retroactively fail whatever the repository already carries.
+# `--enforce-all` is deliberately not passed and must not be added to
+# "tighten" it.
+
+# ----------------------------------------------------------------------------
+# THIS FILE IS WHAT RUNS ON COMMIT; THE FLAKE'S HOOK SET RUNS IN `checks`
+# ----------------------------------------------------------------------------
+#
+# Entering the dev shell (`nix develop`, direnv) installs THIS file as the
+# pre-commit hook: scripts/install-git-hooks.sh, called from the shellHook in
+# flake.nix, points `.git/hooks/pre-commit` (or its `.repro-local`
+# chain under a Reprobuild dispatcher) at this committed config, run by the
+# flake's pre-commit. The flake provides the tools; this file provides the rules.
+#
+# `./flake.nix` also wires a hook set through git-hooks.nix. That set is NOT
+# installed on commit; it runs wherever the flake's `checks` output is
+# evaluated (`nix flake check`). Its hook attributes:
+#
+#     lint
+#
+# and `lint` is carried here too, as `owning-lint` below.
+
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  # --- The committed-binaries tier. Mandatory, strict by default. ---------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 1024 KB, passed explicitly because UPSTREAM'S DEFAULT IS 500 KB. This
+      # is a deliberate loosening to the 1 MB the requirements document asks
+      # for, not a restatement of the tool's own default — dropping the
+      # argument silently halves the ceiling.
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/metacraft-labs/devops-modules
+    # Pinned to a sha, never to a branch: a hook set that changes under a repo
+    # without a commit in that repo is a hook set nobody can bisect.
+    rev: a7245933b53dc2ade27400f1580333bda58609de
+    hooks:
+      - id: ban-added-ct-recordings
+
+  # --- Formatting and style. `language: system`, so the tool comes from the
+  # --- dev env (Nix devShell on Linux/macOS, winget/scoop/choco on Windows)
+  # --- rather than from a hook environment this file would have to pin per OS.
+  # --- This is the agent-harbor pattern: the flake provides the TOOLS, the
+  # --- committed config provides the RULES.
+  #
+  # MEMBERSHIP HERE MUST MATCH `git-hooks/standard-hooks.nix` EXACTLY. Two
+  # expressions of one list that disagree are worse than one expression that is
+  # awkward for half the fleet, because neither reader can tell which is the
+  # rule. If you add a hook to one, add it to the other in the same commit.
+  - repo: local
+    hooks:
+      - id: editorconfig-checker
+        name: editorconfig-checker
+        entry: editorconfig-checker
+        language: system
+        types: [file]
+
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt
+        language: system
+        files: \.nix$
+
+      - id: terraform-format
+        name: terraform-format
+        description: Format Terraform/OpenTofu HCL files
+        entry: tofu fmt
+        language: system
+        types: [file]
+        files: \.(tf|tftest\.hcl)$
+
+      - id: prettier
+        name: prettier
+        entry: prettier --check --list-different=false --log-level=warn --ignore-unknown --write
+        language: system
+        types: [text]
+
+      - id: owning-lint
+        name: owning unfiltered lint
+        entry: just lint
+        language: system
+        pass_filenames: false
+        always_run: true

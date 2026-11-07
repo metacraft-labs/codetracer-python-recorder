@@ -9,6 +9,7 @@ The tracer collects `sys.monitoring` events, converts them to `runtime_tracing` 
 ## Architecture
 
 ### Tracer Abstraction
+
 Rust code exposes a `Tracer` trait representing callbacks for Python
 `sys.monitoring` events. Implementations advertise their desired events via an
 `EventMask` bit flag returned from `interest`. A `Dispatcher` wraps a trait
@@ -16,6 +17,7 @@ object and forwards events only when the mask contains the corresponding flag,
 allowing tracers to implement just the methods they care about.
 
 ### Tool Initialization
+
 - Acquire a tool identifier via `sys.monitoring.use_tool_id`; store it for the lifetime of the tracer.
   ```rs
   pub const MONITORING_TOOL_NAME: &str = "codetracer";
@@ -23,6 +25,7 @@ allowing tracers to implement just the methods they care about.
   pub fn acquire_tool_id() -> PyResult<ToolId>;
   ```
 - Register one callback per event using `sys.monitoring.register_callback`.
+
   ```rs
   #[repr(transparent)]
   pub struct EventId(pub u64); // Exact value loaded from sys.monitoring.events.*
@@ -53,7 +56,9 @@ allowing tracers to implement just the methods they care about.
   pub type CallbackFn = PyObject;
   pub fn register_callback(tool: &ToolId, event: &EventId, cb: &CallbackFn) -> PyResult<()>;
   ```
+
 - Enable all desired events by bitmask with `sys.monitoring.set_events`.
+
   ```rs
   #[derive(Clone, Copy)]
   pub struct EventSet(pub u64);
@@ -63,6 +68,7 @@ allowing tracers to implement just the methods they care about.
   ```
 
 ### Writer Management
+
 - Open a `runtime_tracing` writer (`trace.json` or `trace.bin`) during `start_tracing`.
   ```rs
   pub enum OutputFormat { Json, Binary }
@@ -80,6 +86,7 @@ allowing tracers to implement just the methods they care about.
   ```
 
 ### Frame and Thread Tracking
+
 - Maintain a per-thread stack of activation identifiers to correlate `CALL`, `PY_START`, yields, and returns. Since `sys.monitoring` callbacks provide `CodeType` and offsets (not frames), we rely on the nesting order of events to track activations.
   ```rs
   pub type ActivationId = u64;
@@ -102,7 +109,9 @@ allowing tracers to implement just the methods they care about.
   ```
 
 ### Code Object Access Strategy (no reliance on PyCodeObject internals)
+
 - Rationale: PyO3 exposes `ffi::PyCodeObject` as an opaque type. Instead of touching its unstable layout, treat code objects as generic Python objects and access only stable Python-level attributes via PyO3's `getattr` on `&PyAny`.
+
   ```rs
   use pyo3::{prelude::*, types::PyAny};
 
@@ -150,6 +159,7 @@ allowing tracers to implement just the methods they care about.
       }
   }
   ```
+
 - Event handler inputs use `PyObject` for the `code` parameter. Borrow to `&PyAny` with `let code = code.bind(py);` when needed, then consult `CodeRegistry`.
 - For line numbers: rely on the `LINE` event’s provided `line_number`. If instruction offsets need mapping, call `code.getattr("co_lines")()?.call0()?` and iterate lazily; avoid caching unless necessary.
 
@@ -160,6 +170,7 @@ Each bullet below represents a low-level operation translating a single `sys.mon
 To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RETURN`, `PY_YIELD`, `PY_UNWIND`, `PY_THROW`, and `LINE`. `PY_START`/`PY_RESUME`/`PY_THROW` map to `TraceWriter::register_call`, while `PY_RETURN`/`PY_YIELD`/`PY_UNWIND` map to `TraceWriter::register_return`.
 
 ### Control Flow
+
 - **PY_START** – Create a `Function` event for the code object and push a new activation ID onto the thread's stack.
   ```rs
   pub fn on_py_start(code: PyObject, instruction_offset: i32);
@@ -195,6 +206,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ### Call and Line Tracking
+
 - **CALL** – Record a `Call` event, capturing the `callable` and the first argument if available (`arg0` as provided by `sys.monitoring`), and associate a new activation.
   ```rs
   pub fn on_call(code: PyObject, instruction_offset: i32, callable: *mut PyObject, arg0: Option<*mut PyObject>) -> ActivationId;
@@ -218,6 +230,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   _Note_: Current runtime_tracing doesn't support branching events, but instead relies on AST tree-sitter analysis. So for the initial version we will ignore them and can add support after modifications to the tracing format.
 
 ### Exception Lifecycle
+
 - **RAISE** – Emit an `Event` containing exception type and message when raised.
   ```rs
   pub fn on_raise(code: PyObject, instruction_offset: i32, exception: *mut PyObject);
@@ -228,6 +241,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ### C API Boundary
+
 - **C_RETURN** – On returning from a C function, emit a `Return` event tagged as foreign. Note: `sys.monitoring` does not provide the result object for `C_RETURN`.
   ```rs
   pub fn on_c_return(code: PyObject, instruction_offset: i32, callable: *mut PyObject, arg0: Option<*mut PyObject>);
@@ -238,12 +252,14 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ### No Events
+
 - **NO_EVENTS** – Special constant; used only to disable monitoring. No runtime event is produced.
   ```rs
   pub const NO_EVENTS: EventSet = EventSet(0);
   ```
 
 ## Metadata and File Capture
+
 - Collect the working directory, program name, and arguments and store them in `trace_metadata.json`.
   ```rs
   pub struct TraceMetadata { pub cwd: PathBuf, pub program: String, pub args: Vec<String> }
@@ -260,6 +276,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ## Value Translation and Recording
+
 - Maintain a type registry that maps Python `type` objects to `runtime_tracing` `Type` entries and assigns new `type_id` values on first encounter.
   ```rs
   pub type TypeId = u32;
@@ -296,6 +313,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ## Shutdown
+
 - On `stop_tracing`, call `sys.monitoring.set_events` with `NO_EVENTS` for the tool ID.
   ```rs
   pub fn disable_events(tool: &ToolId);
@@ -311,6 +329,7 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   ```
 
 ## Current Limitations
+
 - **No structured support for threads or async tasks** – the trace format lacks explicit identifiers for concurrent execution.
   Distinguishing events emitted by different Python threads or `asyncio` tasks requires ad hoc `Event` entries, complicating
   analysis and preventing downstream tools from reasoning about scheduling.
@@ -326,5 +345,6 @@ To keep the trace stack balanced we subscribe to `PY_START`, `PY_RESUME`, `PY_RE
   size and cannot be streamed to remote consumers without additional tooling.
 
 ## Future Extensions
+
 - Add filtering to enable subsets of events for performance-sensitive scenarios.
 - Support streaming traces over a socket for live debugging.

@@ -1,34 +1,45 @@
 # codetracer-pure-python-recorder
 
-Pure-Python reference implementation of the CodeTracer Python recorder.
-**Legacy JSON trace output by design.**
+**This is a test oracle, not a production recorder.**
 
-## Why a pure-Python version exists
+It is a small pure-Python implementation of the CodeTracer Python
+recorder that writes its trace as plain JSON (`trace.json`,
+`trace_paths.json`, `trace_metadata.json`). Its only job is to give the
+test suite an independent second opinion on what the production
+recorder should have recorded.
 
-The production recorder lives in the sibling project
-[`codetracer-python-recorder/`](../codetracer-python-recorder/) — a
-Rust extension built with PyO3 + maturin. It emits CTFS v3 binary
-trace bundles per `codetracer-specs/Recorder-CLI-Conventions.md` §4.
+> **CodeTracer cannot open this recorder's output.** The JSON files are
+> not a recording. CodeTracer only opens CTFS `.ct` recordings, which
+> are written by the production recorder in
+> [`../codetracer-python-recorder/`](../codetracer-python-recorder/).
+> If you want to debug a Python program in CodeTracer, use that one.
 
-This package deliberately stays on the older JSON shape and is the
-cross-validation oracle that keeps the native recorder honest.
+## The testing protocol
 
-The repository's test suite runs the same test programs through
-**both** recorders:
+1. Run a program through this recorder. It writes `trace.json`.
+2. Run the **same** program through the production recorder. It writes
+   a CTFS `.ct` recording.
+3. Convert the `.ct` recording to JSON with `ct print` (the
+   `ct-print --full` decoder from `codetracer-trace-format-nim`, which
+   is what `ct print` runs).
+4. Project both JSON documents onto the facts both recorders are meant
+   to agree on (which functions were called, which lines ran, what the
+   local variables and return values were) and assert that the two
+   projections are equal.
 
-1. The pure-Python recorder writes its JSON trace files directly.
-2. The native recorder writes `<prog>.ct`. The integration tests
-   (see
-   [`codetracer-python-recorder/tests/python/test_cli_integration.py`](../codetracer-python-recorder/tests/python/test_cli_integration.py))
-   shell out to `ct print --json-events` (from
-   [`codetracer-trace-format-nim`](https://github.com/metacraft-labs/codetracer-trace-format-nim))
-   to convert the CTFS bundle into a JSON event stream, then compare
-   against assertions and shared fixtures.
+The test that does this is
+[`../codetracer-python-recorder/tests/python/test_pure_oracle.py`](../codetracer-python-recorder/tests/python/test_pure_oracle.py),
+run by `just py-test` and `just test`. It refuses to pass on an empty
+comparison: both sides must record calls, steps and values before the
+streams are compared.
 
-That symmetry is the whole point: any behaviour change in the native
-recorder is caught by structural divergence from the pure reference.
-If both recorders quietly drifted in lockstep, the test suite would
-lose its independent oracle.
+The tests in [`tests/`](tests/) only check this recorder against its
+own golden fixtures; they say nothing about the production recorder.
+
+That symmetry is the whole point: a behaviour change in the production
+recorder shows up as a divergence from this independent
+implementation. If both recorders drifted in lockstep, the test suite
+would lose its oracle.
 
 ## When to modify this recorder
 
@@ -41,9 +52,8 @@ lose its independent oracle.
   fixtures if needed, and — critically — verify the native recorder
   did not silently rely on the same buggy shape.
 - **Fixture regeneration**: whenever the JSON output changes, the
-  test-side conversion path (`ct print --json-events` plus any
-  normalisation done in
-  [`codetracer-python-recorder/tests/python/test_cli_integration.py`](../codetracer-python-recorder/tests/python/test_cli_integration.py))
+  projection in
+  [`codetracer-python-recorder/tests/python/test_pure_oracle.py`](../codetracer-python-recorder/tests/python/test_pure_oracle.py)
   must move in lockstep.
 
 ## What NOT to do
@@ -53,7 +63,7 @@ lose its independent oracle.
   need CTFS output from Python, use the native recorder at
   [`../codetracer-python-recorder/`](../codetracer-python-recorder/).
 - **Do not rename or reshape JSON fields without updating fixtures
-  and the test-side ct-print path together.** They are coupled on
+  and the oracle comparison test together.** They are coupled on
   purpose; the coupling is what gives the test suite its independent
   oracle.
 - **Do not optimise this recorder for production throughput.** It is
@@ -65,14 +75,17 @@ lose its independent oracle.
 Reading this six months from now and wondering why this package
 still exists in the CTFS era? It exists so the test suite has two
 independent implementations to compare. That redundancy is the
-design.
+design. It is not a fallback recorder, it is not a way to record
+programs for debugging, and CodeTracer will refuse to open what it
+writes.
 
 ## CLI
 
 ```bash
 codetracer-record <path to python file>
-# Produces several trace JSON files in the current directory, or in
-# $CODETRACER_DB_TRACE_PATH when that env var is set.
+# Writes trace.json, trace_paths.json and trace_metadata.json into the
+# current directory. These are test-oracle output, not a recording:
+# CodeTracer cannot open them.
 ```
 
 During development you can also run the entry script directly:
@@ -85,10 +98,9 @@ python src/trace.py <path to python file>
 
 - [`../codetracer-python-recorder/`](../codetracer-python-recorder/) —
   production native recorder (CTFS v3, PyO3 + maturin).
-- [`../codetracer-python-recorder/tests/python/test_cli_integration.py`](../codetracer-python-recorder/tests/python/test_cli_integration.py)
-  — cross-recorder integration tests; the `ct print --json-events`
-  invocation there documents how the native recorder's CTFS output
-  is brought back into a JSON shape that can be compared against the
-  pure recorder.
-- [`../CLAUDE.md`](../CLAUDE.md) — repo-level notes including the
+- [`../codetracer-python-recorder/tests/python/test_pure_oracle.py`](../codetracer-python-recorder/tests/python/test_pure_oracle.py)
+  — the oracle comparison: records each program with both recorders,
+  converts the `.ct` recording with `ct print`, and compares.
+- [`AGENTS.md`](AGENTS.md) — the rules for agents working here.
+- [`../AGENTS.md`](../AGENTS.md) — repo-level notes including the
   rationale for keeping both recorders side by side.

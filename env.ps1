@@ -17,7 +17,7 @@ Get-Content $toolchainFile | ForEach-Object {
 }
 
 $installRoot = if ($env:WINDOWS_DIY_INSTALL_ROOT) { $env:WINDOWS_DIY_INSTALL_ROOT }
-               else { Join-Path $env:LOCALAPPDATA "codetracer/windows-diy" }
+                else { Join-Path $env:LOCALAPPDATA "codetracer/windows-diy" }
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
 
 $arch = if ((Get-CimInstance Win32_ComputerSystem).SystemType -match "ARM") { "arm64" } else { "x64" }

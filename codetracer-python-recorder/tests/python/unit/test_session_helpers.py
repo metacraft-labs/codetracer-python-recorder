@@ -10,9 +10,21 @@ from codetracer_python_recorder import session
 
 
 def test_coerce_format_accepts_supported_aliases() -> None:
-    assert session._coerce_format("json") == "json"
-    assert session._coerce_format("JSON") == "json"
+    assert session._coerce_format("ctfs") == "ctfs"
+    assert session._coerce_format("CTFS") == "ctfs"
     assert session._coerce_format("binary") == "binary"
+
+
+@pytest.mark.parametrize("value", ["json", "JSON"])
+def test_coerce_format_rejects_json(value: str) -> None:
+    """The production recorder writes no JSON trace.
+
+    JSON traces come only from the pure-Python test oracle, and CodeTracer
+    cannot open them.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        session._coerce_format(value)
+    assert "unsupported trace format" in str(excinfo.value)
 
 
 def test_coerce_format_rejects_unknown_value() -> None:
@@ -92,7 +104,7 @@ def test_trace_session_stop_clears_global(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(session, "_stop_backend", fake_stop)
     monkeypatch.setattr(session, "_is_tracing_backend", lambda: session._active_session is not None)
 
-    session._active_session = session.TraceSession(path=Path("/tmp"), format="json")
+    session._active_session = session.TraceSession(path=Path("/tmp"), format="ctfs")
     session.stop()
     assert session._active_session is None
     assert called["stop_exit_codes"] == [None]
@@ -151,7 +163,7 @@ def test_stop_forwards_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session, "_is_tracing_backend", lambda: True)
     monkeypatch.setattr(session, "_stop_backend", lambda code=None: captured.append(code))
 
-    session._active_session = session.TraceSession(path=Path("/tmp"), format="json")
+    session._active_session = session.TraceSession(path=Path("/tmp"), format="ctfs")
     session.stop(exit_code=123)
     assert captured == [123]
     assert session._active_session is None

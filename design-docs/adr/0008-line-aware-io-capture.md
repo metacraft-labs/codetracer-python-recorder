@@ -8,17 +8,20 @@
 - **Informed:** DX crew, Release crew
 
 ## Context
+
 - We must attribute every visible chunk of IO to the Python line that triggered it.
 - Pipe-based capture lags behind the interpreter and breaks the ordering with our line events.
 - The refactored recorder already tracks thread snapshots for line events and ships a policy system plus lifecycle hooks.
 - Patching `sys.stdout` and friends is the only way to synchronise output with the active frame without changing how users launch their code.
 
 ## Problem
+
 - We need an in-process IO capture layer that keeps pass-through behaviour, works across CPython versions we support, and does not swallow our own logs.
 - We must cover writes coming from Python code and from C extensions that call the CPython stream APIs.
 - The solution must restore the original streams even if tracing crashes or the user stops tracing inside a `finally` block.
 
 ## Decision
+
 1. Introduce `runtime::io_capture` with one public type, `IoStreamProxies`. It owns the original `{stdout, stderr, stdin}` objects and exposes `install(py)` / `uninstall(py)` helpers.
 2. Provide three PyO3 classes: `LineAwareStdout`, `LineAwareStderr`, and `LineAwareStdin`. They proxy every method we rely on (`write`, `writelines`, `flush`, `read`, `readline`, `readinto`, iteration).
 3. Each proxy calls back into Rust. The callback grabs the per-thread `LineSnapshot` maintained by the monitoring layer. When the snapshot is missing we record `None` and mark the IO chunk as "detached".
@@ -31,16 +34,19 @@
 10. Encode captured payloads as raw UTF-8 strings when forwarding to `runtime_tracing`. We trim the old manual base64 layer so downstream tooling, including the Codetracer UI, can consume the bytes without a second decode pass. Non UTF-8 input falls back to lossless bytes from the mirror or replacement characters when proxies surface decoded text.
 
 ## Consequences
+
 - **Pros:** We align IO chunks with the current Python frame, match C extensions that honour `sys.stdout`, and keep console behaviour untouched. The design lives inside the existing lifecycle code.
 - **Cons:** The proxies add overhead to every write call and must stay in sync with CPython `TextIOBase`. We have to maintain batching logic and reentrancy guards.
 - **Risks:** Misbehaving third-party code that replaces `sys.stdout` mid-run may bypass us. If the user hands a binary stream to `sys.stdout` we must fall back to passthrough mode. The FD mirror ledger can fall behind if proxies skip `record_proxy_bytes`. We detect the mismatch, reset the ledger, and keep the bytes via the mirror so capture stays lossless even when dedupe fails.
 
 ## Rollout
+
 - Ship behind the new policy flags and an environment override `CODETRACER_CAPTURE_IO=proxies[,fd]`.
 - Keep telemetry for dropped chunks and proxy failures. Emit a single warning when the proxy install fails and we fall back to plain pass-through.
 - Promote this ADR to **Accepted** once the implementation plan ships on Linux and Windows and soak tests confirm line attribution accuracy.
 
 ## Alternatives
+
 - Keep the old pipe-based capture: rejected because it can never align output timing with the interpreter.
 - Subclass Python `io.TextIOWrapper` in pure Python: rejected because the Rust-backed recorder needs control over batching and logging guards inside the GIL.
 - Patch `libc::write` through LD_PRELOAD: rejected as too invasive and brittle across platforms. It also cannot recover the active Python frame.

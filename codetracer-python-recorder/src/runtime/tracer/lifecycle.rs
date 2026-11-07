@@ -6,6 +6,7 @@ use crate::runtime::activation::ActivationController;
 use crate::runtime::io_capture::ScopedMuteIoCapture;
 use crate::runtime::output_paths::TraceOutputPaths;
 use crate::runtime::tracer::filtering::FilterCoordinator;
+use crate::runtime::tracer::path_tables::{absolute_program_path, PathTables};
 use crate::runtime::tracer::runtime_tracer::ExitSummary;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use log::debug;
@@ -51,13 +52,22 @@ impl LifecycleController {
         writer: &mut dyn TraceWriter,
         outputs: &TraceOutputPaths,
         start_line: u32,
+        filter: &FilterCoordinator,
+        tables: &mut PathTables,
     ) -> RecorderResult<()> {
-        let start_path = self.activation.start_path(&self.program_path);
+        let start_path = absolute_program_path(self.activation.start_path(&self.program_path));
+        let start_path = start_path.as_path();
         {
             let _mute = ScopedMuteIoCapture::new();
             log::debug!("{}", start_path.display());
         }
-        outputs.configure_writer(writer, start_path, start_line)?;
+        // TF-M7: the composed filter chain (builtin → auto-discovered →
+        // env-var → CLI `--trace-filter:`) goes into `meta.dat`, which the
+        // CTFS writer commits at the trace's first record — so it is
+        // published here, before `start`, and never later.
+        outputs.configure_writer(writer, start_path, start_line, tables, |writer| {
+            Self::publish_filter_provenance(writer, filter)
+        })?;
         self.output_paths = Some(outputs.clone());
         self.events_recorded = false;
         self.encountered_failure = false;
@@ -108,12 +118,6 @@ impl LifecycleController {
         filter: &FilterCoordinator,
         exit_summary: &ExitSummary,
     ) -> RecorderResult<()> {
-        // TF-M7: thread the composed filter chain (builtin → auto-discovered
-        // → env-var → CLI `--trace-filter:`) into the CTFS meta.dat block
-        // BEFORE finish/close.  The Nim writer accumulates entries on the
-        // handle and emits them in `close()`, so we must populate before
-        // finish_*.
-        Self::publish_filter_provenance(writer, filter)?;
         TraceWriter::finish_writing_trace_events(writer).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to finalise trace events")
                 .with_context("source", err.to_string())
@@ -202,15 +206,16 @@ impl LifecycleController {
     fn append_exit_metadata(&self, _exit_summary: &ExitSummary) -> RecorderResult<()> {
         // The legacy `trace_metadata.json` operational sidecar was retired
         // with the v3 CTFS rollout (follow-up #254 phase 2).  Process exit
-        // status is no longer surfaced via a sidecar mutation — when a
-        // future CTFS spec entry adds it to `meta.dat`, plumb it in here.
+        // status is no longer surfaced via a sidecar mutation.  It cannot
+        // go into `meta.dat` from here: the CTFS writer commits `meta.dat`
+        // at the first record, long before the exit status is known.
         Ok(())
     }
 
     fn append_filter_metadata(&self, _filter: &FilterCoordinator) -> RecorderResult<()> {
         // TF-M7: the trace-filter chain is now written into the CTFS
-        // `meta.dat` block by `publish_filter_provenance` (called
-        // earlier in `finalise`).  The pre-CTFS-migration sidecar
+        // `meta.dat` block by `publish_filter_provenance` (called from
+        // `begin`, before the first record).  The pre-CTFS-migration sidecar
         // approach this function used to take is no longer reachable —
         // `outputs.metadata()` does not exist as a separate file under
         // the CTFS-only contract.  Per-event filter *stats* (counts of
@@ -290,13 +295,8 @@ mod tests {
     use crate::logging::{init_rust_logging_with_default, snapshot_run_and_trace};
     use crate::policy::RecorderPolicy;
     use crate::runtime::output_paths::TraceOutputPaths;
-    use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
     use codetracer_trace_writer_nim::TraceEventsFileFormat;
     use recorder_errors::ErrorCode;
-
-    fn writer() -> NonStreamingTraceWriter {
-        NonStreamingTraceWriter::new("program.py", &[])
-    }
 
     #[test]
     fn policy_requiring_trace_fails_without_events() {
@@ -319,25 +319,46 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_removes_partial_outputs() {
+    fn cleanup_removes_the_container_the_writer_created() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
-        let mut controller = LifecycleController::new("program.py", None);
-        let mut writer = writer();
+        let program = tmp.path().join("program.py");
+        std::fs::write(&program, "print('hi')\n").expect("write program");
+        let program = program.to_string_lossy().into_owned();
+        let out = tmp.path().join("out");
+        std::fs::create_dir(&out).expect("create out dir");
+
+        let outputs = TraceOutputPaths::new(&out, TraceEventsFileFormat::Ctfs, &program);
+        let mut controller = LifecycleController::new(&program, None);
+        let mut writer = codetracer_trace_writer_nim::create_trace_writer(
+            &program,
+            &[],
+            TraceEventsFileFormat::Ctfs,
+        );
 
         controller
-            .begin(&mut writer, &outputs, 1)
+            .begin(
+                &mut *writer,
+                &outputs,
+                1,
+                &FilterCoordinator::new(None),
+                &mut PathTables::new(true),
+            )
             .expect("begin lifecycle");
-
-        std::fs::write(outputs.events(), "events").expect("write events");
+        let container = out.join("program.ct");
+        assert!(
+            container.exists(),
+            "the writer must have created {}",
+            container.display()
+        );
 
         controller
             .cleanup_partial_outputs()
             .expect("cleanup outputs");
 
         assert!(
-            !outputs.events().exists(),
-            "expected events file removed after cleanup"
+            !container.exists(),
+            "cleanup must remove the container the writer created, {}",
+            container.display()
         );
     }
 

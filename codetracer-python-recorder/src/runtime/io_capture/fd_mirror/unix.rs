@@ -287,10 +287,18 @@ impl StreamMirror {
     }
 
     fn shutdown(&mut self) {
-        self.shutdown_trigger.request_shutdown();
+        // Restore the target fd BEFORE signalling the reader. `dup2` closes
+        // the target's reference to the pipe's write end, so once it returns
+        // every byte written through the target fd is already in the pipe
+        // buffer and no new byte can enter it through that fd. The reader
+        // drains the pipe when it sees the signal (see `mirror_loop`), so the
+        // drain is guaranteed to cover everything written before shutdown.
+        // Signalling first would let the reader drain and exit while writes
+        // through the target fd could still land in a pipe nobody reads.
         if unsafe { libc::dup2(self.preserved_fd.as_raw_fd(), self.target_fd) } < 0 {
             warn!("failed to restore fd {} after mirroring", self.target_fd);
         }
+        self.shutdown_trigger.request_shutdown();
         if let Some(join) = self.join.take() {
             if wait_for_join(&join, Self::SHUTDOWN_TIMEOUT, Self::SHUTDOWN_POLL_INTERVAL) {
                 if let Err(err) = join.join() {
@@ -340,6 +348,103 @@ fn wait_for_join(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records every chunk the mirror delivers. A real consumer (the
+    /// pipeline's `IoChunkBuffer`) would do the same; this one lets the test
+    /// read the chunks back without building a pipeline.
+    #[derive(Default)]
+    struct CollectingConsumer {
+        chunks: Mutex<Vec<IoChunk>>,
+    }
+
+    impl IoChunkConsumer for CollectingConsumer {
+        fn consume(&self, chunk: IoChunk) {
+            self.chunks.lock().expect("collector lock").push(chunk);
+        }
+    }
+
+    /// A pipe whose read end goes to `mirror_loop`; the write end is returned
+    /// so a test decides when (or whether) it closes. The loop forwards to
+    /// /dev/null, which stands in for the real stream the target fd pointed at.
+    fn pipe_with_payload(payload: &[u8]) -> (OwnedFd, OwnedFd, OwnedFd) {
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
+        let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        write_all(write_fd.as_raw_fd(), payload).expect("fill pipe");
+        let forward = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("open /dev/null");
+        (read_fd, write_fd, OwnedFd::from(forward))
+    }
+
+    fn delivered(consumer: &CollectingConsumer) -> Vec<u8> {
+        consumer
+            .chunks
+            .lock()
+            .expect("collector lock")
+            .iter()
+            .flat_map(|chunk| chunk.payload.clone())
+            .collect()
+    }
+
+    /// Shutdown requested before the reader ever ran: the case a loaded host
+    /// produces when the reader thread is scheduled late. Bytes already in
+    /// the pipe must still be delivered (the loop used to return at once).
+    #[test]
+    fn mirror_loop_delivers_data_written_before_shutdown_was_observed() {
+        let (read_fd, write_fd, forward) = pipe_with_payload(b"written before shutdown\n");
+        drop(write_fd); // as `StreamMirror::shutdown` does by restoring the fd
+        let shutdown = Arc::new(ShutdownSignal::default());
+        shutdown.request_shutdown();
+        let consumer = Arc::new(CollectingConsumer::default());
+
+        mirror_loop(
+            IoStream::Stdout,
+            Arc::new(Ledger::new()),
+            consumer.clone(),
+            read_fd,
+            forward,
+            shutdown,
+        );
+
+        assert_eq!(delivered(&consumer), b"written before shutdown\n");
+    }
+
+    /// A write end still open after shutdown (a child process inherited it)
+    /// keeps end-of-file from arriving. The loop must deliver what is in the
+    /// pipe and return rather than block on the next read.
+    #[test]
+    fn mirror_loop_drains_and_returns_while_an_inherited_writer_is_open() {
+        let (read_fd, write_fd, forward) = pipe_with_payload(b"pending\n");
+        let shutdown = Arc::new(ShutdownSignal::default());
+        shutdown.request_shutdown();
+        let consumer = Arc::new(CollectingConsumer::default());
+        let worker_consumer = consumer.clone();
+
+        let handle = thread::spawn(move || {
+            mirror_loop(
+                IoStream::Stderr,
+                Arc::new(Ledger::new()),
+                worker_consumer,
+                read_fd,
+                forward,
+                shutdown,
+            );
+        });
+        // Generous bound: this only distinguishes "returns" from "blocks
+        // forever on a pipe that never reaches end-of-file".
+        let returned = wait_for_join(&handle, Duration::from_secs(10), Duration::from_millis(5));
+        drop(write_fd); // unblocks a reader that did block, so the join below ends
+        handle.join().expect("mirror loop thread");
+
+        assert!(
+            returned,
+            "mirror_loop blocked instead of draining and returning"
+        );
+        assert_eq!(delivered(&consumer), b"pending\n");
+    }
 
     #[test]
     fn wait_for_join_succeeds_for_completed_thread() {
@@ -425,15 +530,34 @@ struct ShutdownSignal {
 }
 
 impl ShutdownSignal {
+    /// Release pairs with the Acquire in `should_exit`: a reader that observes
+    /// the signal also observes that `StreamMirror::shutdown` already restored
+    /// the target fd, which is what makes its drain complete.
     fn request_shutdown(&self) {
-        self.triggered.store(true, Ordering::Relaxed);
+        self.triggered.store(true, Ordering::Release);
     }
 
     fn should_exit(&self) -> bool {
-        self.triggered.load(Ordering::Relaxed)
+        self.triggered.load(Ordering::Acquire)
     }
 }
 
+/// Reader side of one mirrored stream.
+///
+/// Every byte written to the pipe before shutdown must reach the consumer:
+/// shutdown is not a reason to discard data. The loop therefore never exits
+/// on the shutdown signal alone. It reads (blocking) until end-of-file, which
+/// arrives deterministically once `StreamMirror::shutdown` has restored the
+/// target fd and so closed the last write end this process holds. When it
+/// does observe the signal, it switches the pipe to non-blocking mode and
+/// keeps reading until the pipe is empty, so that a write end inherited by a
+/// child process (which keeps end-of-file from ever arriving) cannot keep it
+/// blocked after the data written before shutdown has been delivered.
+///
+/// An earlier version checked the signal before each read and returned at
+/// once. A reader that had not yet been scheduled, or was between two reads,
+/// when shutdown was requested then dropped everything still in the pipe:
+/// the bytes reached neither the trace nor the real stream.
 fn mirror_loop(
     stream: IoStream,
     ledger: Arc<Ledger>,
@@ -443,7 +567,19 @@ fn mirror_loop(
     shutdown: Arc<ShutdownSignal>,
 ) {
     let mut buffer = vec![0u8; 8192];
-    while !shutdown.should_exit() {
+    let mut draining = false;
+    loop {
+        if !draining && shutdown.should_exit() {
+            if let Err(err) = set_nonblocking(read_fd.as_raw_fd()) {
+                // Without non-blocking mode the drain still completes on
+                // end-of-file; it can only stay blocked behind an inherited
+                // write end, which `StreamMirror::shutdown` bounds with its
+                // join timeout.
+                warn!("fd mirror could not switch {stream} to non-blocking drain: {err}");
+            }
+            draining = true;
+        }
+
         let read = unsafe {
             libc::read(
                 read_fd.as_raw_fd(),
@@ -455,6 +591,11 @@ fn mirror_loop(
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::Interrupted {
                 continue;
+            }
+            if draining && err.kind() == io::ErrorKind::WouldBlock {
+                // The pipe is empty and shutdown has restored the target fd:
+                // everything written before shutdown has been delivered.
+                break;
             }
             warn!("fd mirror read error on {stream}: {err}");
             break;
@@ -487,6 +628,20 @@ fn mirror_loop(
         };
         consumer.consume(chunk);
     }
+}
+
+/// Put `fd` into non-blocking mode (`fcntl(2)` `F_SETFL` with `O_NONBLOCK`,
+/// https://man7.org/linux/man-pages/man2/fcntl.2.html), keeping its other
+/// status flags.
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn write_all(fd: RawFd, mut data: &[u8]) -> io::Result<()> {

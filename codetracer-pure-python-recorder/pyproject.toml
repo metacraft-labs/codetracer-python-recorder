@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codetracer-pure-python-recorder"
 version = "0.1.0"
-description = "Pure-Python reference implementation of the CodeTracer Python recorder (legacy JSON output; cross-validation oracle for the production native recorder)"
+description = "Test oracle for the CodeTracer Python recorder: writes JSON that the test suite compares with `ct print` of a production .ct recording. Not a production recorder; CodeTracer cannot open its output."
 authors = [{name = "Metacraft Labs Ltd"}]
 license = {text = "MIT"}
 readme = "README.md"
@@ -34,7 +34,11 @@ readme = "README.md"
 # non-functional. >=3.10 is the floor that is actually true. There is no upper
 # bound because there is no compiled artifact to bound.
 requires-python = ">=3.10"
+# A test oracle, used only from this checkout. PyPI refuses any upload that
+# carries the "Private :: Do Not Upload" classifier, so this package cannot
+# be published by accident. Versions published earlier stay on PyPI.
 classifiers = [
+    "Private :: Do Not Upload",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",

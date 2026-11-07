@@ -271,12 +271,14 @@ def test_black_availability_diagnostic(capsys: pytest.CaptureFixture[str]) -> No
 # which runs ``try_autoformat`` once per source path and, on a
 # successful outcome, calls the writer's ``register_source_view`` FFI
 # entry point.  The CTFS writer buffers the view in memory and emits
-# it into ``source_views.dat`` / ``source_views.off`` on close, setting
-# ``FLAG_HAS_ALTERNATE_SOURCE_VIEWS`` (bit 5) on ``meta.dat``.
+# it into ``srcviews.dat`` / ``srcviews.off``.  A reader finds those
+# members by their presence: ``meta.dat`` is written at the first
+# record, before any view is known, so from ``meta.dat`` version 6 on
+# ``FLAG_HAS_ALTERNATE_SOURCE_VIEWS`` (bit 5) is never set
+# (``internal-files.md`` §"Alternate Source Views").
 #
 # The tests below record real Python scripts and decode the resulting
 # ``.ct`` container via ``ct-print --full`` to assert on the
-# ``metadata.flags.has_alternate_source_views`` bit + the
 # ``source_views[]`` array surfaced by the canonical Nim reader.
 # ---------------------------------------------------------------------------
 
@@ -356,14 +358,11 @@ def test_p6_2_py_recorder_emits_source_view_for_minified_input(tmp_path: Path) -
     ``try_autoformat`` and on a successful outcome forwards the
     formatted source + V3 sourcemap to the writer's
     ``register_source_view`` FFI entry point.  The CTFS writer emits
-    ``source_views.dat`` / ``source_views.off`` on close and flips
-    ``FLAG_HAS_ALTERNATE_SOURCE_VIEWS`` (bit 5) on ``meta.dat``.
+    ``srcviews.dat`` / ``srcviews.off``, which a reader finds by
+    presence (``meta.dat`` bit 5 is not set from version 6 on).
 
     Strict assertions:
 
-    * ``metadata.flags.has_alternate_source_views`` is ``True`` — the
-      reader surfaces the meta.dat flag bit, and it MUST be set on a
-      trace that successfully buffered at least one view.
     * ``counts.source_views >= 1`` — the source_views interning table
       carries at least one entry.
     * At least one ``source_views[i]`` entry has ``view_kind == 2``
@@ -385,24 +384,15 @@ def test_p6_2_py_recorder_emits_source_view_for_minified_input(tmp_path: Path) -
     ct_path = _record(tmp_path, _MINIFIED_FIXTURE, name="bundle.min.py")
     bundle = _ct_print_full(ct_path)
 
-    metadata = bundle.get("metadata", {})
-    flags = metadata.get("flags", {})
-    assert flags.get("has_alternate_source_views") is True, (
-        "meta.dat must carry FLAG_HAS_ALTERNATE_SOURCE_VIEWS (bit 5) when "
-        "the recorder successfully buffered at least one alternate source "
-        f"view; got flags={flags}.  Likely regression: the "
-        "`maybe_register_autoformat_view` hook in events.rs / "
-        "output_paths.rs is no longer forwarding the formatted view to "
-        "`TraceWriter::register_source_view`, or the writer's on-close "
-        "path is no longer flipping the meta.dat flag bit."
-    )
-
     counts = bundle.get("counts", {})
     assert int(counts.get("source_views", 0)) >= 1, (
         "counts.source_views must be >=1 after a minified recording; got "
-        f"counts={counts}.  Likely regression: ``try_autoformat`` is "
+        f"counts={counts}.  Likely regression: the "
+        "`maybe_register_autoformat_view` hook in events.rs / "
+        "output_paths.rs is no longer forwarding the formatted view to "
+        "`TraceWriter::register_source_view`, ``try_autoformat`` is "
         "returning ``Skipped`` instead of ``Ok``, or the writer is "
-        "dropping the buffered view at close time."
+        "dropping the buffered view."
     )
 
     source_views = bundle.get("source_views", [])
@@ -433,8 +423,8 @@ def test_p6_2_py_recorder_no_source_view_for_normal_source(tmp_path: Path) -> No
 
     Strict assertions:
 
-    * ``metadata.flags.has_alternate_source_views`` is ``False`` — the
-      flag bit MUST NOT be set when no view was buffered.
+    * ``metadata.flags.has_alternate_source_views`` is ``False`` —
+      bit 5 is never set from ``meta.dat`` version 6 on.
     * ``counts.source_views == 0`` — the source_views interning table
       MUST be empty.
 
@@ -459,11 +449,9 @@ def test_p6_2_py_recorder_no_source_view_for_normal_source(tmp_path: Path) -> No
     metadata = bundle.get("metadata", {})
     flags = metadata.get("flags", {})
     assert flags.get("has_alternate_source_views") is False, (
-        "meta.dat must NOT carry FLAG_HAS_ALTERNATE_SOURCE_VIEWS when "
-        "the recorder buffered no alternate source views; got "
-        f"flags={flags}.  Likely regression: the writer is flipping the "
-        "flag bit unconditionally instead of gating on "
-        "``viewCount > 0`` at close time."
+        "meta.dat must NOT carry FLAG_HAS_ALTERNATE_SOURCE_VIEWS: from "
+        "version 6 on srcviews.dat is found by presence and bit 5 is "
+        f"never set; got flags={flags}."
     )
 
     counts = bundle.get("counts", {})
@@ -472,4 +460,27 @@ def test_p6_2_py_recorder_no_source_view_for_normal_source(tmp_path: Path) -> No
         f"got counts={counts}.  Likely regression: ``try_autoformat`` is "
         "no longer short-circuiting on ``looks_minified`` and is "
         "spuriously emitting views for hand-written sources."
+    )
+
+
+def test_p6_2_py_recorder_reads_the_entry_script_once(tmp_path: Path) -> None:
+    """The entry script is registered once, before the trace's first
+    record, with its line table and its alternate view; its first step
+    does not register it again.  A second registration re-reads the file
+    (a table the writer refuses if the file changed in between) and
+    buffers a second, duplicate source view for the same path.
+    """
+    if not _black_on_path():
+        pytest.skip("[p6.2] black is NOT on PATH — the entry view cannot be produced.")
+
+    ct_path = _record(tmp_path, _MINIFIED_FIXTURE, name="bundle.min.py")
+    bundle = _ct_print_full(ct_path)
+
+    entry_views = [
+        sv for sv in bundle.get("source_views", [])
+        if str(sv.get("view_name", "")).endswith("bundle.min.fmt.py")
+    ]
+    assert len(entry_views) == 1, (
+        "the entry script must carry exactly one alternate source view; "
+        f"got {len(entry_views)}: {entry_views}"
     )

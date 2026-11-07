@@ -49,6 +49,7 @@ nix-test:
     nix flake check
     nix build .#codetracer-pure-python-recorder --no-link
     nix build .#codetracer-python-recorder --no-link
+    just test-nix-package
 
 # Create a clean local virtualenv for Python tooling (without editable packages
 # installed).
@@ -63,6 +64,19 @@ venv version="":
 # Build the module in dev mode
 dev:
     uv run --directory codetracer-python-recorder maturin develop --uv --features integration-test
+
+# Build the `ct-print` decoder the Python tests shell out to, at the fixed
+# sibling path ../codetracer-trace-format-nim/ct-print where
+# tests/python/support/ctfs.py and test_cli_integration.py look for it (unless
+# CT_PRINT points elsewhere). `py-test` and `coverage-python` need it: their
+# CTFS round-trip tests fail with "ct-print binary missing" without it. Every
+# CI job that runs those recipes calls this one first, so the compile command
+# lives here once rather than in each job. `repro build` / `repro test` do not
+# use it: repro.nim constructs the same binary through the sibling's own
+# `buildCtPrint` edge.
+ct-print:
+    cd "{{ justfile_directory() }}/../codetracer-trace-format-nim" && \
+        nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
 
 # Run unit tests of dev build (dev ensures integration-test feature is built)
 test: dev cargo-test py-test verify-cli-convention
@@ -99,16 +113,28 @@ bench:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py -q
 
 py-test:
-    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder
+    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder tests/test_ci_sibling_provisioning.py
 
-lint: lint-rust lint-errors verify-cli-convention
+lint: lint-rust lint-errors verify-cli-convention verify-ci-siblings lint-python-indentation lint-rust-format
+
+# Every CI job takes the trace-format siblings at the revision repro.lock pins,
+# through setup-dev-env / clone-siblings and nothing else. Also part of
+# `just test` through `py-test`.
+verify-ci-siblings:
+    uv run --group dev pytest tests/test_ci_sibling_provisioning.py
+
+lint-rust-format:
+    uv run cargo fmt --manifest-path codetracer-python-recorder/Cargo.toml --all -- --check
 
 lint-rust:
     uv run cargo clippy --manifest-path codetracer-python-recorder/Cargo.toml --workspace --no-default-features -- -D clippy::panic
 
+lint-python-indentation:
+    uv run python3 tools/check_python_indentation.py
+
 lint-errors:
     uv run python3 codetracer-python-recorder/scripts/lint_no_unwraps.py
-    
+
 # Run tests only on the pure recorder
 test-pure:
     uv run --group dev --group test pytest codetracer-pure-python-recorder
@@ -143,7 +169,7 @@ coverage-rust:
 
 coverage-python:
     mkdir -p codetracer-python-recorder/target/coverage/python
-    uv run --group dev --group test pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python
+    uv run --group dev --group test --group web pytest --cov=codetracer_python_recorder --cov-report=term --cov-report=xml:codetracer-python-recorder/target/coverage/python/coverage.xml --cov-report=json:codetracer-python-recorder/target/coverage/python/coverage.json codetracer-python-recorder/tests/python
 
 # Build the module in release mode
 build:
@@ -201,7 +227,7 @@ bump-version component:
     python3 scripts/bump_version.py {{component}} --all
 
 # --- M13: Packaging UX Standardization ---
-# Implements Repo-Requirements.md §2.8 packaging UX for the Python
+# Implements Repo-Requirements.md §2.5 packaging UX for the Python
 # language-ecosystem recorder. The Python recorder publishes a single
 # channel (pypi); the shortcuts are kept for symmetry with the spec.
 
@@ -316,3 +342,18 @@ record-request-panel-fixture OUT FRAMEWORK="flask":
         test-programs/web/session_driver.py \
         --framework {{FRAMEWORK}} --trace-dir "{{OUT}}" --print-spans
     echo "[fixture] wrote {{OUT}}"
+
+# Entering the dev shell from another git repository must write nothing there.
+# Runs `nix develop`, so it is not part of the in-shell test recipes.
+test-dev-shell:
+    bash tests/test_dev_shell_writes_nothing_elsewhere.sh
+
+# The flake's recorder package builds without sibling checkouts, and the
+# store-built package records a program. Runs `nix build`, so like test-dev-shell
+# it is not part of the in-shell test recipes.
+test-nix-package:
+    bash tests/test_nix_package_builds.sh
+
+# Run every hook in .pre-commit-config.yaml over the whole tree.
+check-hooks:
+    PREK_NO_FAST_PATH=1 prek run --all-files

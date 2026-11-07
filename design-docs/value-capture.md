@@ -7,11 +7,11 @@ comprehensive test suite. Here is the spec for the task and the tests:
 
 In CPython, the accessible variables at a given execution point consist of:
 
-* Local variables of the current function or code block (including parameters).
+- Local variables of the current function or code block (including parameters).
 
-* Closure (nonlocal) variables that come from enclosing functions (if any).
+- Closure (nonlocal) variables that come from enclosing functions (if any).
 
-* Global variables defined at the module level (the current module’s namespace).
+- Global variables defined at the module level (the current module’s namespace).
 
 (Built-ins are also always accessible if not shadowed, but they are usually not included in “visible variables” snapshots for tracing.)
 
@@ -20,9 +20,10 @@ Each executing frame in CPython carries these variables in its namespace. To cap
 ## Using the CPython C API (via PyO3) to Get Variables
 
 1. **Access the current frame**: The sys.monitoring API’s line event callback does not directly provide a frame object. We can obtain the current PyFrameObject via the C API. Using PyO3’s FFI, you can call:
-* `PyEval_GetFrame()` - return current thread state's frame, NULL if no frame is executing
-* `PyThreadState_GetFrame(PyThreadState *tstate)` - return a given thread state's frame, NULL if on frame is currently executing.
-This yields the top-of-stack frame – if your callback is a C function, that should be the frame of the user code. If your callback is a Python function, you may need frame.f_back to get the user code’s frame.)
+
+- `PyEval_GetFrame()` - return current thread state's frame, NULL if no frame is executing
+- `PyThreadState_GetFrame(PyThreadState *tstate)` - return a given thread state's frame, NULL if on frame is currently executing.
+  This yields the top-of-stack frame – if your callback is a C function, that should be the frame of the user code. If your callback is a Python function, you may need frame.f_back to get the user code’s frame.)
 
 2. **Get all local and closure variables**: Once you have the `PyFrameObject *frame`, retrieve the frame’s local variables mapping. In Python 3.12+, `frame.f_locals` is a proxy that reflects both local variables and any closure (cell/free) variables with their current values. In C, you can use `PyFrame_GetLocals(frame)`
 
@@ -32,11 +33,12 @@ This yields the top-of-stack frame – if your callback is a C function, that sh
 
 ## Important Details and Edge Cases
 
-* **Closure (free) variables**: In modern CPython, closure variables are handled seamlessly via the frame’s locals proxy. You do not need to separately fetch function.__closure__ or outer frame variables – the frame’s local mapping already includes free vars. The PEP for frame proxies explicitly states that each access to `frame.f_locals` yields a mapping of local and closure variable names to their current values. This ensures that in a nested function, variables from an enclosing scope (nonlocals) appear in the inner frame’s locals mapping (bound to the value in the closure cell).
+- **Closure (free) variables**: In modern CPython, closure variables are handled seamlessly via the frame’s locals proxy. You do not need to separately fetch function.**closure** or outer frame variables – the frame’s local mapping already includes free vars. The PEP for frame proxies explicitly states that each access to `frame.f_locals` yields a mapping of local and closure variable names to their current values. This ensures that in a nested function, variables from an enclosing scope (nonlocals) appear in the inner frame’s locals mapping (bound to the value in the closure cell).
 
-* **Comprehensions and generators**: In Python 3, list comprehensions, generator expressions, and the like are implemented as separate function frames. The above approach still works since those have their own frames (with any needed closure variables included similarly). Just grab that frame’s locals and globals as usual.
+- **Comprehensions and generators**: In Python 3, list comprehensions, generator expressions, and the like are implemented as separate function frames. The above approach still works since those have their own frames (with any needed closure variables included similarly). Just grab that frame’s locals and globals as usual.
 
-* **Class bodies and module level**: A class body or module top-level code is executed in an unoptimized frame where `locals == globals` (module) or a new class namespace dict. You need to make sure that you don't record variables twice! Here's a sketch how to do this:
+- **Class bodies and module level**: A class body or module top-level code is executed in an unoptimized frame where `locals == globals` (module) or a new class namespace dict. You need to make sure that you don't record variables twice! Here's a sketch how to do this:
+
 ```rust
 use pyo3::prelude::*;
 use pyo3::ffi;
@@ -53,21 +55,19 @@ pub unsafe fn locals_is_globals_ffi(_py: Python<'_>, frame: *mut ffi::PyFrameObj
 }
 ```
 
-* **Builtins**: Typically, built-in names (from frame.f_builtins) are implicitly accessible if not shadowed, but they are usually not included in a variables snapshot. You should ignore the builtins
+- **Builtins**: Typically, built-in names (from frame.f_builtins) are implicitly accessible if not shadowed, but they are usually not included in a variables snapshot. You should ignore the builtins
 
-* **Name resolution order**: If needed, CPython 3.12 introduced PyFrame_GetVar(frame, name) which will retrieve a variable by name as the interpreter would – checking locals (including cells), then globals, then builtins. This could be used to fetch specific variables on demand. However, for capturing all variables, it’s more efficient to pull the mappings as described above rather than querying names one by one.
-
+- **Name resolution order**: If needed, CPython 3.12 introduced PyFrame_GetVar(frame, name) which will retrieve a variable by name as the interpreter would – checking locals (including cells), then globals, then builtins. This could be used to fetch specific variables on demand. However, for capturing all variables, it’s more efficient to pull the mappings as described above rather than querying names one by one.
 
 ## Putting It Together
 
 In your Rust/PyO3 tracing recorder, for each line event you can do something like:
 
-* Get the current frame (`frame_obj`).
+- Get the current frame (`frame_obj`).
 
-* Get the locals proxy via `PyFrame_GetLocals`. Iterate over each object, construct its representation via `encode_value` and then add it to the trace.
+- Get the locals proxy via `PyFrame_GetLocals`. Iterate over each object, construct its representation via `encode_value` and then add it to the trace.
 
-* If locals != globals, get the globals dict (`globals_dict = PyFrame_GetGlobals(frame_obj)`) and process it just like the locals
-
+- If locals != globals, get the globals dict (`globals_dict = PyFrame_GetGlobals(frame_obj)`) and process it just like the locals
 
 By using these facilities via PyO3, you can reliably capture all visible variables at each line of execution in your tracing recorder.
 
@@ -78,7 +78,6 @@ Python C-API – Frame Objects: functions to access frame attributes (locals, gl
 PEP 667 – Frame locals proxy (Python 3.13): frame.f_locals now reflects local + cell + free variables’ values.
 
 PEP 558 – Defined semantics for locals(): introduced Py
-
 
 # Comprehensive Test Suite for Python Tracing Recorder
 
@@ -142,7 +141,7 @@ result = global_test()
 after = counter
 ```
 
-_Expected_: The tracer should capture *GLOBAL_VAL* and counter as globals on relevant lines. At the module level, GLOBAL_VAL, counter, before, after, etc. are in the global namespace. Inside global_test(), it should capture local_copy and see GLOBAL_VAL as a global. The global counter declaration ensures counter is treated as global in that function and its updated value remains in the module scope.
+_Expected_: The tracer should capture _GLOBAL_VAL_ and counter as globals on relevant lines. At the module level, GLOBAL_VAL, counter, before, after, etc. are in the global namespace. Inside global_test(), it should capture local_copy and see GLOBAL_VAL as a global. The global counter declaration ensures counter is treated as global in that function and its updated value remains in the module scope.
 
 ## 4. Class Definition Scope and Metaclass
 
@@ -315,7 +314,7 @@ val, path = import_test()
 
 ## 11. Built-in Scope (Builtins)
 
-**Scope:** This test highlights built-in names, which are always available via Python’s built-in scope (e.g., `len`, `print`, `ValueError`). The tracer is not required to explicitly list all built-ins at each line (as that would be overwhelming), but we include this case to note that built-in functions or constants are accessible in any scope. We ensure usage of a built-in is traced like any other variable access, although the recorder 
+**Scope:** This test highlights built-in names, which are always available via Python’s built-in scope (e.g., `len`, `print`, `ValueError`). The tracer is not required to explicitly list all built-ins at each line (as that would be overwhelming), but we include this case to note that built-in functions or constants are accessible in any scope. We ensure usage of a built-in is traced like any other variable access, although the recorder
 may choose not to list the entire built-in namespace.
 
 ```python
@@ -335,19 +334,19 @@ result = builtins_test([5, 3, 7])
 
 # General Rules
 
-* This spec is for `/codetracer-python-recorder` project and NOT for `/codetracer-pure-python-recorder`
-* Code and tests should be added under `/codetracer-python-recorder/src/runtime/tracer/` (primarily `runtime_tracer.rs` and its collaborators)
-* Performance is important. Avoid using Python modules and functions and prefer PyO3 methods including the FFI API.
-* If you want to run Python do it like so `uv run python` This will set up the right venv. Similarly for running tests `uv run pytest`.
-* After every code change you need to run `just dev` to make sure that you are testing the new code. Otherwise some tests might run against the old code
+- This spec is for `/codetracer-python-recorder` project and NOT for `/codetracer-pure-python-recorder`
+- Code and tests should be added under `/codetracer-python-recorder/src/runtime/tracer/` (primarily `runtime_tracer.rs` and its collaborators)
+- Performance is important. Avoid using Python modules and functions and prefer PyO3 methods including the FFI API.
+- If you want to run Python do it like so `uv run python` This will set up the right venv. Similarly for running tests `uv run pytest`.
+- After every code change you need to run `just dev` to make sure that you are testing the new code. Otherwise some tests might run against the old code
 
-* Avoid defensive programming: when encountering edge cases which are
+- Avoid defensive programming: when encountering edge cases which are
   not explicitly mentioned in the specification, the default behaviour
   should be to crash (using `panic!`). We will only handle them after
   we receive a report from a user which confirms that the edge case
   does happen in real life.
-* Do not make any code changes to unrelated parts of the code. The only callback that should change behaviour is `on_line`
-* If the code has already implemented part of the specification described here find out what is missing and implement that
-* If a test fails repeatedly after three attempts to fix the code STOP. Let a human handle it. DON'T DELETE TESTS!!!
-* When writing tests be careful with concurrency. If two tests run at the same time using the same Python interpreter (or same Rust process?) they will both try to register callbacks via sys.monitoring and could deadlock.
-* If you want to test Rust code without using just, use `cargo nextest`, not `cargo test`
+- Do not make any code changes to unrelated parts of the code. The only callback that should change behaviour is `on_line`
+- If the code has already implemented part of the specification described here find out what is missing and implement that
+- If a test fails repeatedly after three attempts to fix the code STOP. Let a human handle it. DON'T DELETE TESTS!!!
+- When writing tests be careful with concurrency. If two tests run at the same time using the same Python interpreter (or same Rust process?) they will both try to register callbacks via sys.monitoring and could deadlock.
+- If you want to test Rust code without using just, use `cargo nextest`, not `cargo test`

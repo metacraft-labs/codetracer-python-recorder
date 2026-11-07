@@ -581,7 +581,7 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
         ``<toplevel> → <__main__> → main → make_greeting``; path table
         contains the canonical fixture; function table contains
         ``<toplevel>``, ``<__main__>``, ``main`` and ``make_greeting``.
-      - **IO event** — a single ``ioStdout`` write of ``"hello, world\\n"``.
+      - **IO event** — a single stdout ``Write`` of ``"hello, world\\n"``.
 
     The canonical fixture below exercises:
 
@@ -920,8 +920,9 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
         f"expected exactly 1 io event, got {len(io_events)}: {io_events!r}"
     )
     io = io_events[0]
-    assert io["io_kind"] == "ioStdout", (
-        f"io event should be ioStdout, got {io['io_kind']!r}"
+    # ``io_kind`` is the exact ``EventLogKind`` name; stdout is ``Write``.
+    assert io["io_kind"] == "Write", (
+        f"io event should be Write (stdout), got {io['io_kind']!r}"
     )
     # ``print`` appends a trailing newline; the recorder captures the
     # raw bytes written to stdout, so the newline must be present.
@@ -931,3 +932,85 @@ def test_recorded_trace_via_ct_print_json(tmp_path: Path) -> None:
     assert io["bytes_len"] == len("hello, world\n"), (
         f"io event bytes_len should be {len('hello, world\\n')}, got {io['bytes_len']}"
     )
+
+
+def _record_full(tmp_path: Path, body: str) -> tuple[Path, dict]:
+    script = tmp_path / "program.py"
+    _write_script(script, textwrap.dedent(body))
+    trace_dir = tmp_path / "trace"
+    result = _run_cli(["--out-dir", str(trace_dir), str(script)], cwd=tmp_path, env=_prepare_env())
+    assert result.returncode == 0, result.stderr
+    proc = subprocess.run(
+        [str(_ct_print_binary()), "--full", str(_find_ct_file(trace_dir))],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return script, json.loads(proc.stdout)
+
+
+def test_each_output_stream_is_recorded_under_its_exact_event_kind(tmp_path: Path) -> None:
+    """stdout is ``Write`` and stderr is ``WriteStderr``: every captured
+    stream carries the exact ``EventLogKind``, never the ``WriteOther``
+    catch-all, and the metadata still names the stream."""
+    _script, bundle = _record_full(
+        tmp_path,
+        """\
+        import sys
+        print("to stdout")
+        print("to stderr", file=sys.stderr)
+        sys.stderr.write("raw stderr\\n")
+        """,
+    )
+    kinds = {
+        e["text"]: e["io_kind"]
+        for e in bundle["events"]
+        if e["kind"] == "io" and e.get("text") in ("to stdout\n", "to stderr\n", "raw stderr\n")
+    }
+    assert kinds == {
+        "to stdout\n": "Write",
+        "to stderr\n": "WriteStderr",
+        "raw stderr\n": "WriteStderr",
+    }, kinds
+
+
+def test_output_from_exec_code_lands_on_the_calling_step(tmp_path: Path) -> None:
+    """Output written by ``exec``'d code (filename ``<string>``) belongs to
+    the traced step that ran the ``exec``. Synthetic code names are not
+    source files: steps skip them, and output capture must not give them a
+    ``paths.dat`` record (each would carry the ~10^8-position conventional
+    table)."""
+    script, bundle = _record_full(
+        tmp_path,
+        """\
+        x = 1
+        exec("print('from exec')")
+        y = 2
+        """,
+    )
+    assert not [p for p in bundle["paths"] if p.startswith("<")], bundle["paths"]
+    io = [e for e in bundle["events"] if e["kind"] == "io" and e.get("text") == "from exec\n"]
+    assert len(io) == 1, io
+    steps = {e["step_index"]: e for e in bundle["events"] if e["kind"] == "step"}
+    step = steps[io[0]["step_id"]]
+    assert step["path"] == str(script) and step["line"] == 2, step
+
+
+def test_output_from_synthetic_frames_names_the_nearest_source_file(tmp_path: Path) -> None:
+    """Output from a thread whose innermost frames are all ``exec``'d code,
+    before any traced step on that thread, is attributed to the nearest
+    frame with a real file, and no synthetic name enters ``paths.dat``."""
+    _script, bundle = _record_full(
+        tmp_path,
+        """\
+        import threading
+        namespace = {}
+        exec("def a():\\n    b()\\ndef b():\\n    c()\\ndef c():\\n    print('from a thread')\\n", namespace)
+        worker = threading.Thread(target=namespace["a"])
+        worker.start()
+        worker.join()
+        """,
+    )
+    assert not [p for p in bundle["paths"] if p.startswith("<")], bundle["paths"]
+    io = [e for e in bundle["events"] if e["kind"] == "io" and e.get("text") == "from a thread\n"]
+    assert len(io) == 1, io

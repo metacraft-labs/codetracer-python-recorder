@@ -2,13 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use codetracer_trace_types::{Line, PathId};
+use codetracer_trace_types::Line;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use recorder_errors::{enverr, ErrorCode};
 
 use crate::errors::Result;
-use crate::runtime::autoformat::{self, AutoformatOutcome, SkipReason};
+use crate::runtime::tracer::path_tables::PathTables;
 
 /// File layout for a trace session. Encapsulates the events file
 /// (canonical `.ct` CTFS container in CTFS mode) that needs to be
@@ -26,11 +26,14 @@ pub struct TraceOutputPaths {
 impl TraceOutputPaths {
     /// Build output paths for a given directory. The directory is expected to
     /// exist before initialisation; callers should ensure it is created.
-    pub fn new(root: &Path, format: TraceEventsFileFormat) -> Self {
+    ///
+    /// The CTFS writer names its container after the recorded program,
+    /// `<root>/<program stem>.ct`, so `program` must be the name the writer
+    /// was constructed with.
+    pub fn new(root: &Path, format: TraceEventsFileFormat, program: &str) -> Self {
         let events_name = match format {
-            TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Ctfs => "trace.ct",
-            _ => "trace.bin",
+            TraceEventsFileFormat::Ctfs => ctfs_container_name(program),
+            _ => "trace.bin".to_string(),
         };
         Self {
             events: root.join(events_name),
@@ -67,11 +70,19 @@ impl TraceOutputPaths {
     /// `decodeGlobalPositionIndex` round-trip.  Registering the path
     /// here, with the line lengths, before `start` is the cleanest
     /// fix.
+    ///
+    /// `before_first_record` runs after the writer is opened and before
+    /// `start`, the trace's first record. The CTFS writer commits
+    /// `meta.dat` at the first record and refuses every `meta.dat`-
+    /// affecting call after it (`ctfs-container.md` §6 "Durability"), so
+    /// filter provenance and any other `meta.dat` field belong there.
     pub fn configure_writer(
         &self,
         writer: &mut dyn TraceWriter,
         start_path: &Path,
         start_line: u32,
+        tables: &mut PathTables,
+        before_first_record: impl FnOnce(&mut dyn TraceWriter) -> Result<()>,
     ) -> Result<()> {
         TraceWriter::begin_writing_trace_events(writer, self.events()).map_err(|err| {
             enverr!(ErrorCode::Io, "failed to begin trace events")
@@ -85,154 +96,95 @@ impl TraceOutputPaths {
             // exercised by `events.rs::on_line`.
             TraceWriter::enable_column_aware_steps(writer);
 
-            // P1.3: register the activation path with its per-line
-            // column counts *before* `start` so the paths.dat record
-            // carries the Layout A line-length table the reader needs
-            // for column resolution.  `register_path_with_line_lengths`
-            // is best-effort: if the file isn't readable (rare for the
-            // activation path) we fall back to an empty slice and the
-            // reader surfaces column = 1 for steps on this file.
-            let line_lengths = read_line_lengths_for_path(start_path);
-            match TraceWriter::register_path_with_line_lengths(writer, start_path, &line_lengths) {
-                Ok(start_path_id) => {
-                    // P6.2: the activation path's first registration is
-                    // also the canonical hook point for the recorder-
-                    // side autoformat pass.  This catches minified
-                    // *entrypoints* — programs whose top-level file is
-                    // itself a packed bundle.  Steady-state hand-written
-                    // entrypoints land on
-                    // [`SkipReason::NotMinified`] inside the helper and
-                    // the call is essentially free.  See
-                    // [`maybe_register_autoformat_view_for_path`] for
-                    // the full decision tree.
-                    maybe_register_autoformat_view_for_path(writer, start_path_id, start_path);
-                }
-                Err(err) => {
-                    log::debug!(
-                        "[TraceOutputPaths] register_path_with_line_lengths failed for {}: {} \
-                         (column resolution will fall back to None for this file)",
-                        start_path.display(),
-                        err,
-                    );
-                }
-            }
+            // P1.3 / P6.2: register the activation path with its per-line
+            // table, and run the autoformat pass on it, before `start`
+            // interns it. Registered through the trace's `PathTables`, so
+            // its first step does not register it again.
+            tables.register(writer, start_path);
         }
+        before_first_record(writer)?;
         TraceWriter::start(writer, start_path, Line(start_line as i64));
         Ok(())
     }
 }
 
-/// P6.2: run the recorder-side autoformat pass on `source_path` and,
-/// on a successful outcome, buffer a ``black``-formatted view of the
-/// source into the CTFS writer's ``source_views.dat`` stream via
-/// [`TraceWriter::register_source_view`].
-///
-/// This is the activation-path counterpart of
-/// ``events.rs::maybe_register_autoformat_view`` — see that function's
-/// docstring for the full decision tree and naming conventions.  The
-/// only structural difference: this helper is called from
-/// `configure_writer` *before* any step events are emitted, so it
-/// covers the entrypoint script itself (a minified `bundle.py` invoked
-/// directly).  Steady-state hand-written entrypoints land on
-/// [`SkipReason::NotMinified`] inside `try_autoformat` and never make
-/// it past the heuristic.
-fn maybe_register_autoformat_view_for_path(
-    writer: &mut dyn TraceWriter,
-    path_id: PathId,
-    source_path: &Path,
-) {
-    let lossy = source_path.to_string_lossy();
-    if lossy.starts_with('<') && lossy.ends_with('>') {
-        return;
-    }
-    let content = match std::fs::read_to_string(source_path) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    match autoformat::try_autoformat(&content, source_path) {
-        AutoformatOutcome::Ok(result) => {
-            let stem = source_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("source");
-            let view_name = format!("{stem}.fmt.py");
-            // Spec ``view_kind = 2`` = ``black_format``.
-            const VIEW_KIND_BLACK_FORMAT: u8 = 2;
-            if let Err(err) = TraceWriter::register_source_view(
-                writer,
-                path_id,
-                VIEW_KIND_BLACK_FORMAT,
-                &view_name,
-                result.formatted_content.as_bytes(),
-                result.sourcemap_v3_json.as_bytes(),
-            ) {
-                log::error!(
-                    "[TraceOutputPaths] register_source_view failed for {}: {} \
-                     (formatted view will not appear in the trace)",
-                    source_path.display(),
-                    err,
-                );
-            }
-        }
-        AutoformatOutcome::Skipped(reason) => match reason {
-            SkipReason::ToolMissing => {
-                log::debug!(
-                    "[TraceOutputPaths] autoformat skipped for {}: black not on PATH \
-                     (formatted view will not appear in the trace)",
-                    source_path.display(),
-                );
-            }
-            SkipReason::ToolError(msg) => {
-                log::debug!(
-                    "[TraceOutputPaths] autoformat skipped for {}: black error: {} \
-                     (formatted view will not appear in the trace)",
-                    source_path.display(),
-                    msg,
-                );
-            }
-            SkipReason::NotMinified
-            | SkipReason::EnvDisabled
-            | SkipReason::SiblingMapExists
-            | SkipReason::NoChange => {
-                // Steady-state: don't log.
-            }
-        },
-    }
+/// The file name the CTFS writer gives the container of a recording of
+/// `program`: the program's file name without its directory and its last
+/// extension, plus `.ct`.
+fn ctfs_container_name(program: &str) -> String {
+    let stem = Path::new(program)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("{stem}.ct")
 }
 
-/// P1.3: read `path` and compute the per-line column counts used as
-/// the `paths.dat` Layout A `line_lengths` table.  Mirrors the
-/// `read_line_lengths` helper in `events.rs` — duplicated here so the
-/// `configure_writer` hot path doesn't have to dip into the tracer-
-/// events module.  Returns an empty Vec when the file isn't readable
-/// or is a synthetic Python path (`<...>`).
+/// Lines in the conventional `paths.dat` Layout A table, registered for a
+/// file whose source cannot be read (`internal-files.md` §"`paths.dat`
+/// Layout A"). It is the column-aware counterpart of the line-count
+/// table's `100000` ceiling.
+pub(crate) const CONVENTIONAL_LINE_COUNT: usize = 100_000;
+
+/// Positions per line in the conventional table. A step on such a file
+/// whose column exceeds it is recorded at this column.
+pub(crate) const CONVENTIONAL_LINE_POSITIONS: u32 = 1024;
+
+/// A file's `paths.dat` Layout A per-line table.
+pub(crate) struct SourceLineTable {
+    pub line_lengths: Vec<u32>,
+    /// The source could not be read and `line_lengths` is the conventional
+    /// table, so columns on this file are clamped to
+    /// [`CONVENTIONAL_LINE_POSITIONS`].
+    pub conventional: bool,
+}
+
+/// The `paths.dat` Layout A table for `path`: one entry per source line,
+/// the line's **byte length** without its newline. CPython's
+/// `co_positions()` `col_offset` is a UTF-8 byte offset into the line, so
+/// a byte count keeps the table in the unit of the columns the recorder
+/// emits through `write_delta_column`; a character count would shift
+/// columns by the number of multi-byte characters before the cursor.
 ///
-/// Each entry is the byte length of the source line (excluding the
-/// trailing newline), matching CPython's `co_positions()` `col_offset`
-/// reporting convention.  See `events.rs::read_line_lengths` for the
-/// full rationale.
-fn read_line_lengths_for_path(path: &Path) -> Vec<u32> {
-    let lossy = path.to_string_lossy();
-    if lossy.starts_with('<') && lossy.ends_with('>') {
-        return Vec::new();
-    }
-    let Ok(bytes) = std::fs::read(path) else {
-        return Vec::new();
-    };
-    let mut lines: Vec<u32> = Vec::new();
-    let mut current_len: u32 = 0;
-    for byte in &bytes {
-        if *byte == b'\n' {
-            lines.push(current_len);
-            current_len = 0;
-        } else {
-            current_len = current_len.saturating_add(1);
+/// A file whose lines hold no bytes gets one position on its first line,
+/// so an empty file is `[1]`. A file that cannot be read gets the
+/// conventional table
+/// ([`CONVENTIONAL_LINE_COUNT`] lines of [`CONVENTIONAL_LINE_POSITIONS`]):
+/// a Layout A table is never empty, and an empty one would give the file
+/// `file_size` 0 (`trace-events.md` §"Per-File Contiguous Integer
+/// Ranges").
+pub(crate) fn source_line_table(path: &Path) -> SourceLineTable {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let mut lines: Vec<u32> = Vec::new();
+            let mut current_len: u32 = 0;
+            for byte in &bytes {
+                if *byte == b'\n' {
+                    lines.push(current_len);
+                    current_len = 0;
+                } else {
+                    current_len = current_len.saturating_add(1);
+                }
+            }
+            // A file that does not end with a newline still has a final line.
+            if current_len > 0 || bytes.last() != Some(&b'\n') {
+                lines.push(current_len);
+            }
+            // A file that holds no bytes on any line (an empty `__init__.py`
+            // reads as `[0]`) would have `file_size` 0. Its first line gets
+            // one position, so an empty file is `[1]`.
+            if lines.iter().all(|&len| len == 0) {
+                lines[0] = 1;
+            }
+            SourceLineTable {
+                line_lengths: lines,
+                conventional: false,
+            }
         }
+        Err(_) => SourceLineTable {
+            line_lengths: vec![CONVENTIONAL_LINE_POSITIONS; CONVENTIONAL_LINE_COUNT],
+            conventional: true,
+        },
     }
-    if current_len > 0 || bytes.last() != Some(&b'\n') {
-        lines.push(current_len);
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -243,16 +195,18 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn json_paths_use_json_filenames() {
+    fn ctfs_paths_name_the_container_after_the_program() {
         let tmp = tempdir().expect("tempdir");
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
-        assert_eq!(paths.events(), tmp.path().join("trace.json").as_path());
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Ctfs, "/src/app/main.py");
+        assert_eq!(paths.events(), tmp.path().join("main.ct").as_path());
     }
 
     #[test]
     fn binary_paths_use_bin_extension() {
         let tmp = tempdir().expect("tempdir");
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0);
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
         assert_eq!(paths.events(), tmp.path().join("trace.bin").as_path());
     }
 
@@ -262,11 +216,18 @@ mod tests {
         let start_path = tmp.path().join("program.py");
         std::fs::write(&start_path, "print('hi')\n").expect("write script");
 
-        let paths = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+        let paths =
+            TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
         let mut writer = NonStreamingTraceWriter::new("program.py", &[]);
 
         paths
-            .configure_writer(&mut writer, &start_path, 123)
+            .configure_writer(
+                &mut writer,
+                &start_path,
+                123,
+                &mut PathTables::new(false),
+                |_| Ok(()),
+            )
             .expect("configure writer");
 
         let recorded_path = writer.events.iter().find_map(|event| match event {

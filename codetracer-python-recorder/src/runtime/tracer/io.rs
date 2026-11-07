@@ -4,6 +4,8 @@ use crate::runtime::io_capture::{
     IoCapturePipeline, IoCaptureSettings, IoChunk, IoChunkFlags, IoStream, ScopedMuteIoCapture,
 };
 use crate::runtime::line_snapshots::{FrameId, LineSnapshotStore};
+use crate::runtime::tracer::filtering::is_real_filename;
+use crate::runtime::tracer::path_tables::PathTables;
 use codetracer_trace_types::{EventLogKind, Line, PathId};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use pyo3::prelude::*;
@@ -43,27 +45,33 @@ impl IoCoordinator {
         &self,
         thread_id: ThreadId,
         writer: &mut dyn TraceWriter,
+        tables: &mut PathTables,
     ) -> bool {
         let Some(pipeline) = self.pipeline.as_ref() else {
             return false;
         };
 
         pipeline.flush_before_step(thread_id);
-        self.drain_chunks(pipeline, writer)
+        self.drain_chunks(pipeline, writer, tables)
     }
 
     /// Flush every buffered chunk regardless of thread affinity.
-    pub(crate) fn flush_all(&self, writer: &mut dyn TraceWriter) -> bool {
+    pub(crate) fn flush_all(&self, writer: &mut dyn TraceWriter, tables: &mut PathTables) -> bool {
         let Some(pipeline) = self.pipeline.as_ref() else {
             return false;
         };
 
         pipeline.flush_all();
-        self.drain_chunks(pipeline, writer)
+        self.drain_chunks(pipeline, writer, tables)
     }
 
     /// Drain remaining chunks and uninstall the capture pipeline.
-    pub(crate) fn teardown(&mut self, py: Python<'_>, writer: &mut dyn TraceWriter) -> bool {
+    pub(crate) fn teardown(
+        &mut self,
+        py: Python<'_>,
+        writer: &mut dyn TraceWriter,
+        tables: &mut PathTables,
+    ) -> bool {
         let Some(mut pipeline) = self.pipeline.take() else {
             return false;
         };
@@ -72,13 +80,13 @@ impl IoCoordinator {
         let mut recorded = false;
 
         for chunk in pipeline.drain_chunks() {
-            recorded |= self.record_chunk(writer, chunk);
+            recorded |= self.record_chunk(writer, tables, chunk);
         }
 
         pipeline.uninstall(py);
 
         for chunk in pipeline.drain_chunks() {
-            recorded |= self.record_chunk(writer, chunk);
+            recorded |= self.record_chunk(writer, tables, chunk);
         }
 
         recorded
@@ -100,25 +108,41 @@ impl IoCoordinator {
         self.snapshots.record(thread_id, path_id, line, frame_id);
     }
 
-    fn drain_chunks(&self, pipeline: &IoCapturePipeline, writer: &mut dyn TraceWriter) -> bool {
+    fn drain_chunks(
+        &self,
+        pipeline: &IoCapturePipeline,
+        writer: &mut dyn TraceWriter,
+        tables: &mut PathTables,
+    ) -> bool {
         let mut recorded = false;
         for chunk in pipeline.drain_chunks() {
-            recorded |= self.record_chunk(writer, chunk);
+            recorded |= self.record_chunk(writer, tables, chunk);
         }
         recorded
     }
 
-    fn record_chunk(&self, writer: &mut dyn TraceWriter, mut chunk: IoChunk) -> bool {
+    fn record_chunk(
+        &self,
+        writer: &mut dyn TraceWriter,
+        tables: &mut PathTables,
+        mut chunk: IoChunk,
+    ) -> bool {
         if chunk.path_id.is_none() {
-            if let Some(path) = chunk.path.as_deref() {
-                let path_id = TraceWriter::ensure_path_id(writer, Path::new(path));
+            // A synthetic code name is not a source file: it gets no
+            // `paths.dat` record (the enricher already passes over such
+            // frames; this keeps any other producer from naming one).
+            if let Some(path) = chunk.path.as_deref().filter(|path| is_real_filename(path)) {
+                // Output can be a file's first mention (untraced code in it
+                // writes before any traced step on the thread); the file
+                // still gets its real table.
+                let path_id = tables.intern(writer, Path::new(path));
                 chunk.path_id = Some(path_id);
             }
         }
 
         let kind = match chunk.stream {
             IoStream::Stdout => EventLogKind::Write,
-            IoStream::Stderr => EventLogKind::WriteOther,
+            IoStream::Stderr => EventLogKind::WriteStderr,
             IoStream::Stdin => EventLogKind::Read,
         };
 
@@ -130,7 +154,7 @@ impl IoCoordinator {
         // see `codetracer-trace-format/codetracer_trace_writer_nim/
         // src/lib.rs` line ~976) because the Nim writer streams events
         // directly to disk via dedicated FFI procs.  For event-log
-        // entries (Write/WriteOther/Read), the dedicated proc is
+        // entries (Write/WriteStderr/Read), the dedicated proc is
         // `register_special_event(kind, metadata, content)` which
         // forwards to `trace_writer_register_special_event`.  Without
         // this routing, Python `print(...)` calls reached the recorder

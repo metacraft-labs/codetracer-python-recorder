@@ -2,6 +2,7 @@ use super::events::suppress_events;
 use super::filtering::{FilterCoordinator, TraceDecision};
 use super::io::IoCoordinator;
 use super::lifecycle::LifecycleController;
+use super::path_tables::PathTables;
 use crate::code_object::CodeObjectWrapper;
 use crate::ffi;
 use crate::module_identity::{
@@ -161,19 +162,11 @@ pub struct RuntimeTracer {
     /// P1.1 / P1.2: whether this tracer is allowed to emit column-only
     /// `DeltaColumn` events.  Mirrors the writer's column-aware-mode
     /// flag — only the canonical CTFS multi-stream backend supports
-    /// it; on legacy formats (`Json`, `BinaryV0`) this stays `false`
+    /// it; on the legacy `BinaryV0` format this stays `false`
     /// and the recorder falls back to `register_step`-only.
     pub(super) column_aware: bool,
-    /// P1.3: set of source paths already registered with their per-line
-    /// column counts (paths.dat Layout A) so we don't re-read the file
-    /// or re-emit the line-length record for every `on_line` callback.
-    /// Membership in this set means "the writer has been told about
-    /// this path's `line_lengths` table"; absence triggers the first
-    /// `register_path_with_line_lengths` call on the next step into
-    /// that file.  Only populated when `column_aware` is on; on legacy
-    /// formats this stays empty and the recorder takes the legacy
-    /// `ensure_path_id` → `register_step` path.
-    pub(super) paths_with_line_lengths: std::collections::HashSet<std::path::PathBuf>,
+    /// The `paths.dat` Layout A table of every file this trace mentions.
+    pub(super) path_tables: PathTables,
     /// M15: monotonic counter mirroring the writer's call-record index so we
     /// can stamp `RValue::FunctionReturn { call_key }` with the
     /// most-recently-popped call.
@@ -213,7 +206,7 @@ impl RuntimeTracer {
             last_line_per_frame: HashMap::new(),
             last_column_per_frame: HashMap::new(),
             column_aware,
-            paths_with_line_lengths: std::collections::HashSet::new(),
+            path_tables: PathTables::new(column_aware),
             last_call_key: -1,
             session_exit: SessionExitState::default(),
         }
@@ -234,13 +227,16 @@ impl RuntimeTracer {
     }
 
     pub(super) fn flush_io_before_step(&mut self, thread_id: ThreadId) {
-        if self.io.flush_before_step(thread_id, &mut *self.writer) {
+        if self
+            .io
+            .flush_before_step(thread_id, &mut *self.writer, &mut self.path_tables)
+        {
             self.mark_event();
         }
     }
 
     pub(super) fn flush_pending_io(&mut self) {
-        if self.io.flush_all(&mut *self.writer) {
+        if self.io.flush_all(&mut *self.writer, &mut self.path_tables) {
             self.mark_event();
         }
     }
@@ -261,7 +257,13 @@ impl RuntimeTracer {
     /// Configure output files and write initial metadata records.
     pub fn begin(&mut self, outputs: &TraceOutputPaths, start_line: u32) -> PyResult<()> {
         self.lifecycle
-            .begin(&mut *self.writer, outputs, start_line)
+            .begin(
+                &mut *self.writer,
+                outputs,
+                start_line,
+                &self.filter,
+                &mut self.path_tables,
+            )
             .map_err(ffi::map_recorder_error)?;
         Ok(())
     }
@@ -331,6 +333,10 @@ impl RuntimeTracer {
         let name = self.function_name(py, code)?;
         let filename = code.filename(py)?;
         let first_line = code.first_line(py)?;
+        // A function registration interns its file; give the file its
+        // per-line table first.
+        self.path_tables
+            .register(&mut *self.writer, Path::new(filename));
         let function_id = TraceWriter::ensure_function_id(
             &mut *self.writer,
             name.as_str(),
@@ -488,7 +494,7 @@ mod tests {
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -585,7 +591,7 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 Some(script_path.as_path()),
                 None,
                 false,
@@ -637,7 +643,7 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 "snapshot_script.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -715,12 +721,13 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -810,12 +817,13 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -919,12 +927,13 @@ result = compute()\n"
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
             );
-            let outputs = TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::Json);
+            let outputs =
+                TraceOutputPaths::new(tmp.path(), TraceEventsFileFormat::BinaryV0, "program.py");
             tracer.begin(&outputs, 1).expect("begin tracer");
             tracer
                 .install_io_capture(py, &policy::policy_snapshot())
@@ -1180,7 +1189,7 @@ def start_call():
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -1305,7 +1314,7 @@ sensitive("s3cr3t")
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1418,7 +1427,7 @@ sensitive("s3cr3t")
             let tracer = RuntimeTracer::new(
                 "runner.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -1482,7 +1491,7 @@ dropper()
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1570,7 +1579,7 @@ initializer("omega")
             let mut tracer = RuntimeTracer::new(
                 script_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 Some(engine),
                 false,
@@ -1619,12 +1628,16 @@ initializer("omega")
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(
+                outputs_dir.path(),
+                TraceEventsFileFormat::BinaryV0,
+                "program.py",
+            );
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -1649,14 +1662,36 @@ initializer("omega")
         });
     }
 
-    // FIXME(follow-up #254 phase 2): rewrite using `MetaDatReader` once the
-    // crate exposes filter-provenance accessors.  The original assertion
-    // read the trace_filter chain from the `trace_metadata.json` sidecar,
-    // which the v3 CTFS rollout retired.  Filter provenance is still
-    // recorded — it just lives inside `meta.dat` now (see TF-M7 spec § 7).
-    #[ignore]
+    /// The trace-filter provenance block of a `meta.dat` buffer
+    /// (`internal-files.md` §"Flag bit 3 -- Trace filter provenance"):
+    /// `None` when flag bit 3 is clear, else the `(path, sha256 hex)`
+    /// entries in composition order.
+    fn decode_filter_provenance(meta_dat: &[u8]) -> Option<Vec<(String, String)>> {
+        let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(meta_dat)
+            .unwrap_or_else(|err| panic!("meta.dat does not decode: {err}"));
+        assert_eq!(
+            meta.flags & 0x07,
+            0,
+            "unexpected meta.dat blocks before provenance"
+        );
+        assert!(
+            meta.trailing.is_empty(),
+            "meta.dat carries {} bytes after its blocks",
+            meta.trailing.len()
+        );
+        meta.blocks.filter_provenance.map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| {
+                    let sha: String = entry.sha256.iter().map(|b| format!("{b:02x}")).collect();
+                    (entry.path, sha)
+                })
+                .collect()
+        })
+    }
+
     #[test]
-    fn trace_filter_metadata_includes_summary() {
+    fn trace_filter_provenance_is_recorded_in_meta_dat() {
         Python::with_gil(|py| {
             reset_policy(py);
             ensure_test_module(py);
@@ -1683,46 +1718,39 @@ initializer("omega")
                 value_default = "allow"
 
                 [[scope.rules.value_patterns]]
-                selector = "arg:password"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
                 selector = "local:password"
                 action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "local:secret"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "global:shared_secret"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "ret:literal:app.sec.sensitive"
-                action = "redact"
-
-                [[scope.rules.value_patterns]]
-                selector = "local:internal"
-                action = "drop"
                 "#,
             );
-            let config = TraceFilterConfig::from_paths(&[filter_path]).expect("load filter");
+            let config =
+                TraceFilterConfig::from_paths(&[filter_path.clone()]).expect("load filter");
             let engine = Arc::new(TraceFilterEngine::new(config));
+            let expected: Vec<(String, String)> = engine
+                .summary()
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.path.to_string_lossy().into_owned(),
+                        entry.sha256.clone(),
+                    )
+                })
+                .collect();
+            assert!(
+                expected
+                    .iter()
+                    .any(|(path, _)| Path::new(path) == filter_path),
+                "the filter chain should name {}: {expected:?}",
+                filter_path.display()
+            );
 
             let app_dir = project_root.join("app");
             fs::create_dir_all(&app_dir).expect("create app dir");
             let script_path = app_dir.join("sec.py");
             let body = r#"
-shared_secret = "initial"
-
 def sensitive(password):
     secret = "token"
-    internal = "hidden"
-    public = "visible"
-    globals()['shared_secret'] = password
     snapshot()
-    emit_return(password)
     return password
 
 sensitive("s3cr3t")
@@ -1731,13 +1759,14 @@ sensitive("s3cr3t")
             fs::write(&script_path, script).expect("write script");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
-
             let program = script_path.to_string_lossy().into_owned();
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+
             let mut tracer = RuntimeTracer::new(
                 &program,
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::Ctfs,
                 None,
                 Some(engine),
                 false,
@@ -1759,12 +1788,519 @@ sensitive("s3cr3t")
 
             tracer.finish(py).expect("finish tracer");
 
-            // Filter chain provenance is now embedded in `meta.dat` inside
-            // the CTFS container (TF-M7 spec § 7).  This test is gated with
-            // `#[ignore]` above until the `MetaDatReader` exposes filter-
-            // provenance accessors; the original assertions read the
-            // retired `trace_metadata.json` sidecar.
-            let _ = outputs;
+            // The Nim writer names the container after the recorded program.
+            let containers: Vec<_> = fs::read_dir(outputs_dir.path())
+                .expect("list outputs dir")
+                .map(|entry| entry.expect("dir entry").path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+                .collect();
+            assert_eq!(
+                containers.len(),
+                1,
+                "expected one .ct container: {containers:?}"
+            );
+            let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
+            let meta_dat = reader.read_file("meta.dat").expect("read meta.dat");
+            let recorded = decode_filter_provenance(&meta_dat)
+                .expect("meta.dat flag bit 3 (trace-filter provenance) is clear");
+            assert_eq!(recorded, expected, "meta.dat filter provenance");
+        });
+    }
+
+    /// The per-line byte lengths of `source`: one entry per line, the line's
+    /// bytes without its newline.
+    fn source_line_lengths(source: &str) -> Vec<u32> {
+        let mut lines: Vec<u32> = source.split('\n').map(|line| line.len() as u32).collect();
+        if source.ends_with('\n') {
+            lines.pop();
+        }
+        lines
+    }
+
+    /// `trace-events.md` §"Per-File Contiguous Integer Ranges": in a
+    /// column-aware trace every `paths.dat` record carries its file's
+    /// per-line table, and `file_size` (the table's sum) is never zero.
+    /// The table must be the source's, for files first reached by a call
+    /// or an import as much as for the activation script.
+    #[test]
+    fn every_column_aware_path_record_carries_its_source_line_table() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let helper_path = project_root.join("ct_path_table_helper.py");
+            // The helper reports its own call and line events, so it is first
+            // reached through a call record, as an imported module is.
+            let helper_source = "import inspect\nfrom test_tracer import capture_line, capture_py_start\n\n\ndef double(value):\n    frame = inspect.currentframe()\n    capture_py_start(frame.f_code, frame.f_lasti)\n    doubled = value * 2\n    capture_line(frame.f_code, frame.f_lineno)\n    return doubled\n";
+            fs::write(&helper_path, helper_source).expect("write helper");
+
+            let script_path = project_root.join("main.py");
+            let body = r#"
+import ct_path_table_helper
+
+result = ct_path_table_helper.double(21)
+snapshot()
+"#;
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, &script).expect("write script");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let program = script_path.to_string_lossy().into_owned();
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Ctfs,
+                None,
+                None,
+                false,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\")",
+                    project_root.display(),
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+            tracer.finish(py).expect("finish tracer");
+
+            let containers: Vec<_> = fs::read_dir(outputs_dir.path())
+                .expect("list outputs dir")
+                .map(|entry| entry.expect("dir entry").path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+                .collect();
+            assert_eq!(
+                containers.len(),
+                1,
+                "expected one .ct container: {containers:?}"
+            );
+            let mut reader = codetracer_ctfs::CtfsReader::open(&containers[0])
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", containers[0].display()));
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            assert!(
+                tables.is_column_aware(),
+                "the CTFS trace should be column-aware"
+            );
+
+            let expected: std::collections::HashMap<String, Vec<u32>> = [
+                (
+                    script_path.to_string_lossy().into_owned(),
+                    source_line_lengths(&script),
+                ),
+                (
+                    helper_path.to_string_lossy().into_owned(),
+                    source_line_lengths(helper_source),
+                ),
+            ]
+            .into_iter()
+            .collect();
+            let mut seen = Vec::new();
+            for id in 0..tables.path_count() as u64 {
+                let path = tables.path_str(id).expect("path");
+                let line_lengths = tables.path_line_lengths(id).expect("line lengths");
+                assert!(
+                    line_lengths.iter().any(|&len| len > 0),
+                    "paths.dat record {id} ({path}) has file_size 0: line table {line_lengths:?}"
+                );
+                if let Some(want) = expected.get(&path) {
+                    assert_eq!(
+                        &line_lengths, want,
+                        "paths.dat record {id} ({path}) line table"
+                    );
+                    seen.push(path);
+                }
+            }
+            for path in expected.keys() {
+                assert!(
+                    seen.contains(path),
+                    "{path} has no paths.dat record; recorded {seen:?}"
+                );
+            }
+        });
+    }
+
+    /// The single `.ct` container a recording wrote into `dir`.
+    fn recorded_container(dir: &Path) -> std::path::PathBuf {
+        let containers: Vec<_> = fs::read_dir(dir)
+            .expect("list outputs dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+            .collect();
+        assert_eq!(
+            containers.len(),
+            1,
+            "expected one .ct container: {containers:?}"
+        );
+        containers[0].clone()
+    }
+
+    /// `internal-files.md` §"`paths.dat` Layout A": a file whose source
+    /// cannot be read is registered with the conventional table, 100000
+    /// lines of 1024 positions, and a step on it whose column exceeds 1024
+    /// is recorded at column 1024.
+    #[test]
+    fn an_unreadable_source_gets_the_conventional_table_and_clamped_columns() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            // Compiled under a path that does not exist on disk, as code
+            // whose file was deleted after import is.
+            let gone_path = project_root.join("gone.py");
+            let padding = vec!["1"; 600].join(" + ");
+            let far_line = format!(
+                "    ({padding}); far_store = 5; capture_line(frame.f_code, frame.f_lineno)"
+            );
+            let gone_source = format!(
+                "import inspect\nfrom test_tracer import capture_line, capture_py_start\n\n\ndef far():\n    frame = inspect.currentframe()\n    capture_py_start(frame.f_code, frame.f_lasti)\n{far_line}\n    return far_store\n"
+            );
+            let far_lineno = 8u32;
+            let store_column = far_line.find("far_store").expect("store") as u32 + 1;
+            assert!(
+                store_column > 1024,
+                "the store must sit past column 1024: {store_column}"
+            );
+
+            let script_path = project_root.join("main.py");
+            let body = format!(
+                "\nnamespace = {{}}\nexec(compile({gone_source:?}, {gone:?}, \"exec\"), namespace)\nnamespace[\"far\"]()\nsnapshot()\n",
+                gone = gone_path.to_string_lossy()
+            );
+            let script = format!("{PRELUDE}\n{body}", PRELUDE = PRELUDE, body = body);
+            fs::write(&script_path, &script).expect("write script");
+
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            let program = script_path.to_string_lossy().into_owned();
+            let outputs =
+                TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+            let mut tracer = RuntimeTracer::new(
+                &program,
+                &[],
+                TraceEventsFileFormat::Ctfs,
+                None,
+                None,
+                false,
+            );
+            tracer.begin(&outputs, 1).expect("begin tracer");
+            {
+                let _guard = ScopedTracer::new(&mut tracer);
+                LAST_OUTCOME.with(|cell| cell.set(None));
+                let run_code = format!(
+                    "import runpy\nrunpy.run_path(r\"{}\")",
+                    script_path.display()
+                );
+                let run_code_c = CString::new(run_code).expect("script contains nul byte");
+                py.run(run_code_c.as_c_str(), None, None)
+                    .expect("execute script");
+            }
+            tracer.finish(py).expect("finish tracer");
+
+            let container = recorded_container(outputs_dir.path());
+            let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            let mut all_tables = Vec::new();
+            let mut gone_id = None;
+            for id in 0..tables.path_count() as u64 {
+                let path = tables.path_str(id).expect("path");
+                let line_lengths = tables.path_line_lengths(id).expect("line lengths");
+                if Path::new(&path) == gone_path {
+                    gone_id = Some(id);
+                    assert!(
+                        line_lengths.len() == 100_000
+                            && line_lengths.iter().all(|&len| len == 1024),
+                        "{path} is unreadable and should carry the conventional table \
+                         (100000 lines of 1024); got {} line(s), first {:?}",
+                        line_lengths.len(),
+                        &line_lengths[..line_lengths.len().min(4)]
+                    );
+                }
+                all_tables.push(line_lengths);
+            }
+            let gone_id = gone_id.expect("gone.py has a paths.dat record");
+
+            let decoder = codetracer_trace_reader::global_position_decoder::GlobalPositionDecoder::from_line_lengths(all_tables);
+            let mut steps =
+                codetracer_trace_reader::step_stream_reader::StepStreamReader::open(&mut reader)
+                    .expect("open steps")
+                    .expect("the trace has a step stream");
+            let far_columns: Vec<u32> = steps
+                .read_all()
+                .expect("read steps")
+                .into_iter()
+                .filter_map(|record| match record {
+                    codetracer_trace_writer::step_stream::StepStreamRecord::Step {
+                        global_line_index,
+                    } => Some(global_line_index),
+                    codetracer_trace_writer::step_stream::StepStreamRecord::DeltaColumn {
+                        global_position_index,
+                        ..
+                    } => Some(global_position_index),
+                    _ => None,
+                })
+                .map(|position| {
+                    decoder
+                        .decode_global_position_index(position)
+                        .expect("decode step")
+                })
+                .filter(|pos| pos.file == gone_id && pos.line == far_lineno)
+                .map(|pos| pos.column)
+                .collect();
+            assert_eq!(
+                far_columns.last().copied(),
+                Some(1024),
+                "the step on gone.py line {far_lineno} (store at column {store_column}) should be recorded at column 1024; \
+                 columns on that line: {far_columns:?}"
+            );
+        });
+    }
+
+    /// `internal-files.md` §"`paths.dat` Layout A": a file that exists but
+    /// holds nothing is registered with the table `[1]`, so its size is not
+    /// zero.
+    #[test]
+    fn an_empty_module_is_registered_with_one_position() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            ensure_test_module(py);
+
+            let project = tempfile::tempdir().expect("project dir");
+            let project_root = project.path();
+            let package_dir = project_root.join("ct_empty_pkg");
+            fs::create_dir(&package_dir).expect("create package");
+            let empty_module = package_dir.join("__init__.py");
+            fs::write(&empty_module, "").expect("write empty module");
+
+            // A real sys.monitoring session, so the import reports the empty
+            // module's code object as sys.monitoring does.
+            let script_path = project_root.join("main.py");
+            fs::write(&script_path, "import ct_empty_pkg\nvalue = 1\n").expect("write script");
+            let outputs_dir = tempfile::tempdir().expect("outputs dir");
+            // The session names the program, and its container, after argv[0].
+            let argv = CString::new(format!(
+                "import sys\nsys.argv = [r\"{}\"]",
+                script_path.display()
+            ))
+            .expect("argv code");
+            py.run(argv.as_c_str(), None, None).expect("set sys.argv");
+            crate::session::start_tracing(
+                &outputs_dir.path().to_string_lossy(),
+                "ctfs",
+                Some(&script_path.to_string_lossy()),
+                None,
+                None,
+            )
+            .expect("start tracing");
+            let run_code = format!(
+                "import runpy, sys\nsys.path.insert(0, r\"{}\")\nrunpy.run_path(r\"{}\", run_name='__main__')",
+                project_root.display(),
+                script_path.display()
+            );
+            let run_code_c = CString::new(run_code).expect("script contains nul byte");
+            let run = py.run(run_code_c.as_c_str(), None, None);
+            crate::session::stop_tracing(Some(0)).expect("stop tracing");
+            run.expect("execute script");
+
+            let container = recorded_container(outputs_dir.path());
+            let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+                .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+            let tables =
+                codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+                    &mut reader,
+                )
+                .expect("read interning tables")
+                .expect("the trace has interning tables");
+            let recorded: Vec<(String, Vec<u32>)> = (0..tables.path_count() as u64)
+                .map(|id| {
+                    (
+                        tables.path_str(id).expect("path"),
+                        tables.path_line_lengths(id).expect("line lengths"),
+                    )
+                })
+                .collect();
+            let empty = recorded
+                .iter()
+                .find(|(path, _)| Path::new(path) == empty_module)
+                .unwrap_or_else(|| {
+                    panic!("the empty module has no paths.dat record: {recorded:?}")
+                });
+            assert_eq!(empty.1, vec![1], "the empty module's line table");
+        });
+    }
+
+    /// Run `code` under a real sys.monitoring session that writes a CTFS
+    /// trace into `outputs`, with `argv0` as the program and `filters` as
+    /// the trace-filter chain, and return every `paths.dat` record.
+    fn record_session_paths(
+        py: Python<'_>,
+        outputs: &Path,
+        argv0: &str,
+        filters: Option<Vec<String>>,
+        code: &str,
+    ) -> Vec<(String, Vec<u32>)> {
+        let argv = CString::new(format!("import sys\nsys.argv = [{argv0:?}]")).expect("argv code");
+        py.run(argv.as_c_str(), None, None).expect("set sys.argv");
+        crate::session::start_tracing(&outputs.to_string_lossy(), "ctfs", None, filters, None)
+            .expect("start tracing");
+        let code_c = CString::new(code).expect("code contains nul byte");
+        let run = py.run(code_c.as_c_str(), None, None);
+        crate::session::stop_tracing(Some(0)).expect("stop tracing");
+        run.expect("execute code");
+
+        let container = recorded_container(outputs);
+        let mut reader = codetracer_ctfs::CtfsReader::open(&container)
+            .unwrap_or_else(|err| panic!("open {}: {err:?}", container.display()));
+        let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(
+            &mut reader,
+        )
+        .expect("read interning tables")
+        .expect("the trace has interning tables");
+        (0..tables.path_count() as u64)
+            .map(|id| {
+                (
+                    tables.path_str(id).expect("path"),
+                    tables.path_line_lengths(id).expect("line lengths"),
+                )
+            })
+            .collect()
+    }
+
+    /// Output written by untraced code in a file, before any traced step on
+    /// the thread, names that file. The file's first mention must still
+    /// carry its real line table: the writer fixes a table at the first
+    /// mention and refuses a different one later.
+    #[test]
+    fn a_file_first_named_by_output_keeps_its_real_line_table() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            policy::configure_policy_py(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+            )
+            .expect("capture output through the line proxies");
+            let project = tempfile::tempdir().expect("project dir");
+            let root = project.path();
+            let helper_path = root.join("ct_io_helper.py");
+            // Output capture names the file of the frame two levels above the
+            // write, so the print sits three calls deep inside the helper.
+            let helper_source = "def quiet():\n    _relay()\n\n\ndef _relay():\n    _say()\n\n\ndef _say():\n    print('from an untraced function')\n\n\ndef loud():\n    value = 1\n    return value\n";
+            fs::write(&helper_path, helper_source).expect("write helper");
+            fs::write(root.join("ct_io_traced.py"), "marker = 1\n").expect("write traced module");
+            let launcher = root.join("launcher.py");
+            fs::write(&launcher, "pass\n").expect("write launcher");
+            let filter = root.join("filter.toml");
+            fs::write(
+                &filter,
+                r#"
+[meta]
+name = "untraced-quiet"
+version = 1
+
+[scope]
+default_exec = "trace"
+default_value_action = "allow"
+
+[[scope.rules]]
+selector = "pkg:ct_io_helper"
+exec = "skip"
+
+[[scope.rules]]
+selector = "obj:ct_io_helper.loud"
+exec = "trace"
+"#,
+            )
+            .expect("write filter");
+
+            let outputs = tempfile::tempdir().expect("outputs dir");
+            let code = format!(
+                "import sys\nsys.path.insert(0, r\"{root}\")\nimport ct_io_helper\nct_io_helper.quiet()\nimport ct_io_traced\nct_io_helper.loud()\n",
+                root = root.display()
+            );
+            let recorded = record_session_paths(
+                py,
+                outputs.path(),
+                &launcher.to_string_lossy(),
+                Some(vec![filter.to_string_lossy().into_owned()]),
+                &code,
+            );
+            let helper = recorded
+                .iter()
+                .find(|(path, _)| Path::new(path) == helper_path)
+                .unwrap_or_else(|| panic!("ct_io_helper.py has no paths.dat record: {recorded:?}"));
+            let want = source_line_lengths(helper_source);
+            assert!(
+                helper.1 == want,
+                "ct_io_helper.py should carry its source's table {want:?}; got {} line(s) starting {:?}",
+                helper.1.len(),
+                &helper.1[..helper.1.len().min(4)]
+            );
+        });
+    }
+
+    /// A program named by a relative argv[0] and the absolute filename
+    /// Python gives its code are one file, with one `paths.dat` record.
+    #[test]
+    fn a_relative_program_path_and_its_code_filename_are_one_path() {
+        Python::with_gil(|py| {
+            reset_policy(py);
+            let project = tempfile::tempdir().expect("project dir");
+            let root = project.path();
+            let script = root.join("ct_rel_main.py");
+            fs::write(&script, "value = 1\nvalue += 1\n").expect("write script");
+            let chdir = CString::new(format!("import os\nos.chdir(r\"{}\")", root.display()))
+                .expect("chdir code");
+            py.run(chdir.as_c_str(), None, None).expect("chdir");
+
+            let outputs = tempfile::tempdir().expect("outputs dir");
+            let code = format!(
+                "import runpy\nrunpy.run_path(r\"{}\", run_name='__main__')\n",
+                script.display()
+            );
+            let recorded = record_session_paths(py, outputs.path(), "ct_rel_main.py", None, &code);
+            let named: Vec<&(String, Vec<u32>)> = recorded
+                .iter()
+                .filter(|(path, _)| Path::new(path).file_name() == script.file_name())
+                .collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "ct_rel_main.py should have one paths.dat record: {recorded:?}"
+            );
+            assert_eq!(
+                Path::new(&named[0].0),
+                script,
+                "the record names the absolute path"
+            );
         });
     }
 
@@ -2229,12 +2765,16 @@ snapshot()
             std::fs::write(&program_path, "print('hi')\n").expect("write program");
 
             let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
+            let outputs = TraceOutputPaths::new(
+                outputs_dir.path(),
+                TraceEventsFileFormat::BinaryV0,
+                "program.py",
+            );
 
             let mut tracer = RuntimeTracer::new(
                 program_path.to_string_lossy().as_ref(),
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,
@@ -2254,32 +2794,60 @@ snapshot()
         });
     }
 
+    /// The `.ct` containers in `dir`: what a failed recording leaves behind.
+    fn ct_containers(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .expect("read outputs dir")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "ct"))
+            .collect()
+    }
+
+    /// Begin a real CTFS recording of `program.py` into a fresh directory and
+    /// mark it failed, so `finish` has to decide about the container the
+    /// writer actually created.
+    fn failed_ctfs_recording() -> (tempfile::TempDir, tempfile::TempDir, RuntimeTracer) {
+        let script_dir = tempfile::tempdir().expect("script dir");
+        let program_path = script_dir.path().join("program.py");
+        std::fs::write(&program_path, "print('hi')\n").expect("write program");
+
+        let outputs_dir = tempfile::tempdir().expect("outputs dir");
+        let program = program_path.to_string_lossy().into_owned();
+        let outputs =
+            TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Ctfs, &program);
+
+        let mut tracer = RuntimeTracer::new(
+            &program,
+            &[],
+            TraceEventsFileFormat::Ctfs,
+            None,
+            None,
+            false,
+        );
+        tracer.begin(&outputs, 1).expect("begin tracer");
+        assert_eq!(
+            ct_containers(outputs_dir.path()),
+            vec![outputs_dir.path().join("program.ct")],
+            "the writer must have created the recording's container"
+        );
+        tracer.mark_failure();
+        (script_dir, outputs_dir, tracer)
+    }
+
     #[test]
     fn finish_removes_partial_outputs_when_policy_forbids_keep() {
         Python::with_gil(|py| {
             reset_policy(py);
 
-            let script_dir = tempfile::tempdir().expect("script dir");
-            let program_path = script_dir.path().join("program.py");
-            std::fs::write(&program_path, "print('hi')\n").expect("write program");
-
-            let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
-
-            let mut tracer = RuntimeTracer::new(
-                program_path.to_string_lossy().as_ref(),
-                &[],
-                TraceEventsFileFormat::Json,
-                None,
-                None,
-                false,
-            );
-            tracer.begin(&outputs, 1).expect("begin tracer");
-            tracer.mark_failure();
-
+            let (_script_dir, outputs_dir, mut tracer) = failed_ctfs_recording();
             tracer.finish(py).expect("finish after failure");
 
-            assert!(!outputs.events().exists(), "expected events file removed");
+            assert_eq!(
+                ct_containers(outputs_dir.path()),
+                Vec::<PathBuf>::new(),
+                "a failed recording's container must be removed when the policy does not keep \
+                 partial traces"
+            );
         });
     }
 
@@ -2300,27 +2868,14 @@ snapshot()
             )
             .expect("enable keep_partial policy");
 
-            let script_dir = tempfile::tempdir().expect("script dir");
-            let program_path = script_dir.path().join("program.py");
-            std::fs::write(&program_path, "print('hi')\n").expect("write program");
-
-            let outputs_dir = tempfile::tempdir().expect("outputs dir");
-            let outputs = TraceOutputPaths::new(outputs_dir.path(), TraceEventsFileFormat::Json);
-
-            let mut tracer = RuntimeTracer::new(
-                program_path.to_string_lossy().as_ref(),
-                &[],
-                TraceEventsFileFormat::Json,
-                None,
-                None,
-                false,
-            );
-            tracer.begin(&outputs, 1).expect("begin tracer");
-            tracer.mark_failure();
-
+            let (_script_dir, outputs_dir, mut tracer) = failed_ctfs_recording();
             tracer.finish(py).expect("finish after failure");
 
-            assert!(outputs.events().exists(), "expected events file retained");
+            assert_eq!(
+                ct_containers(outputs_dir.path()),
+                vec![outputs_dir.path().join("program.ct")],
+                "a failed recording's container must be kept when the policy keeps partial traces"
+            );
 
             reset_policy(py);
         });
@@ -2391,7 +2946,7 @@ snapshot()
             let mut tracer = RuntimeTracer::new(
                 "test.py",
                 &[],
-                TraceEventsFileFormat::Json,
+                TraceEventsFileFormat::BinaryV0,
                 None,
                 None,
                 false,

@@ -15,6 +15,8 @@ import pytest
 
 from codetracer_python_recorder import trace
 
+from ..support.ctfs import ct_print_meta, find_ct_file
+
 CALLS_PER_BATCH = 1_000
 LOCALS_PER_CALL = 50
 FUNCTIONS_PER_MODULE = 10
@@ -199,15 +201,11 @@ def test_trace_filter_perf_smoke(tmp_path: Path) -> None:
         assert glob.duration_seconds > 0
         assert regex.duration_seconds > 0
 
+        # meta.dat records the filter chain's provenance (path + sha256)
+        # only; per-run filter counters are not part of a recording.
         assert baseline.filter_names == ["builtin-default", "bench-baseline"]
         assert "bench-glob" in glob.filter_names
         assert "bench-regex" in regex.filter_names
-
-        assert glob.scopes_skipped > 0
-
-        assert baseline.value_redactions.get("local", 0) == 0
-        assert glob.value_redactions.get("local", 0) > 0
-        assert regex.value_redactions.get("local", 0) > 0
 
         baseline_time = baseline.duration_seconds
         assert baseline_time > 0 and math.isfinite(baseline_time)
@@ -230,7 +228,6 @@ def run_scenario(workspace: PerfWorkspace, scenario: PerfScenario) -> PerfResult
     trace_dir = workspace.root / f"trace-{scenario.label}"
     with trace(
         trace_dir,
-        format="json",
         trace_filter=str(scenario.filter_path),
     ):
         prewarm_dataset(dataset)
@@ -242,9 +239,9 @@ def run_scenario(workspace: PerfWorkspace, scenario: PerfScenario) -> PerfResult
     filter_meta = metadata.get("trace_filter", {}) if metadata else {}
     filters = filter_meta.get("filters") or []
     filter_names = [
-        entry.get("name")  # type: ignore[union-attr]
+        Path(str(entry["path"]).strip("<>").removeprefix("inline:")).stem
         for entry in filters
-        if isinstance(entry, dict) and entry.get("name")
+        if isinstance(entry, dict) and entry.get("path")
     ]
     stats = filter_meta.get("stats") or {}
     scopes_skipped = int(stats.get("scopes_skipped") or 0)
@@ -283,10 +280,7 @@ def run_workload(dataset: PerfDataset) -> None:
 
 
 def _load_metadata(trace_dir: Path) -> dict[str, object]:
-    metadata_path = trace_dir / "trace_metadata.json"
-    if not metadata_path.exists():
-        raise AssertionError(f"trace metadata not generated for {trace_dir}")
-    return json.loads(metadata_path.read_text(encoding="utf-8"))
+    return ct_print_meta(find_ct_file(trace_dir))["metadata"]
 
 
 def _result_by_label(results: Sequence[PerfResult], label: str) -> PerfResult:

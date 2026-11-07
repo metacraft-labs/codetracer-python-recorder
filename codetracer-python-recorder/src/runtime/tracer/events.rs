@@ -168,60 +168,6 @@ pub(super) fn suppress_events() -> bool {
     false
 }
 
-/// P1.3: read `path` and compute the per-line column counts used as the
-/// `paths.dat` Layout A `line_lengths` table.  Each entry is the
-/// **byte length** of the source line (excluding the trailing
-/// newline), matching CPython's ``co_positions()`` ``col_offset``
-/// reporting convention — see
-/// https://docs.python.org/3/reference/datamodel.html#codeobject.co_positions
-/// (col_offset is a UTF-8 byte offset into the source line, not a
-/// Unicode character index).
-///
-/// We deliberately use a byte count so the line_lengths table stays
-/// consistent with the columns the recorder emits via
-/// ``write_delta_column``.  The reader's
-/// ``decodeGlobalPositionIndex`` round-trip uses these counts to map
-/// ``(line, column)`` → ``global_position_index`` and back; any
-/// inconsistency in the unit would shift columns by the count of
-/// multi-byte UTF-8 characters preceding the cursor.
-///
-/// Returns `None` when the file isn't readable (subprocess source the
-/// recorder lost access to, in-memory module like `<string>`, the
-/// `<frozen importlib>` synthetic file, etc.) so the caller can fall
-/// back to registering the path with an empty slice — at read time the
-/// reader's `decodeGlobalPositionIndex` returns `None` when no per-line
-/// data is available, which keeps the trace valid.
-fn read_line_lengths(path: &Path) -> Option<Vec<u32>> {
-    // Synthetic / in-memory filenames Python uses for `eval`,
-    // `compile`, frozen imports, etc.  They aren't actual files; skip
-    // the disk read.  The reader will surface `None` for any step
-    // referencing one of these.
-    let lossy = path.to_string_lossy();
-    if lossy.starts_with('<') && lossy.ends_with('>') {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    // Split on b'\n'; an `\r\n` terminator is represented as a trailing
-    // CR byte at the end of the line, which is fine — it shifts the
-    // column-range by 1 byte (matching Python's source-position table
-    // for the same source bytes).
-    let mut lines: Vec<u32> = Vec::new();
-    let mut current_len: u32 = 0;
-    for byte in &bytes {
-        if *byte == b'\n' {
-            lines.push(current_len);
-            current_len = 0;
-        } else {
-            current_len = current_len.saturating_add(1);
-        }
-    }
-    // A file that does not end with a newline still has a final line.
-    if current_len > 0 || bytes.last() != Some(&b'\n') {
-        lines.push(current_len);
-    }
-    Some(lines)
-}
-
 /// P6.2: run the recorder-side autoformat pass on `source_path` and, on
 /// a successful outcome, buffer a ``black``-formatted view of the source
 /// into the CTFS writer's ``source_views.dat`` stream via
@@ -265,13 +211,13 @@ fn read_line_lengths(path: &Path) -> Option<Vec<u32>> {
 /// ``codetracer-trace-format-spec/internal-files.md`` §
 /// "Alternate Source Views (Deminification Support)" for the
 /// canonical ``view_kind`` enum.
-fn maybe_register_autoformat_view(
-    writer: &mut (dyn TraceWriter + Send),
+pub(crate) fn maybe_register_autoformat_view(
+    writer: &mut dyn TraceWriter,
     path_id: PathId,
     source_path: &Path,
 ) {
     // Skip synthetic / in-memory paths early — same gate
-    // ``read_line_lengths`` uses, mirroring Python's ``<string>``,
+    // ``source_line_table`` uses, mirroring Python's ``<string>``,
     // ``<frozen ...>``, etc. naming convention.
     let lossy = source_path.to_string_lossy();
     if lossy.starts_with('<') && lossy.ends_with('>') {
@@ -543,15 +489,7 @@ impl Tracer for RuntimeTracer {
 
         if let Ok(filename) = code.filename(py) {
             let path = Path::new(filename);
-            let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-
-            // P1.3: ensure the writer's paths.dat per-line offset table is
-            // populated for this path before any step references it (the
-            // first sighting also fires the autoformat pass). Shared with
-            // `register_entry_step` so a call's definition-line entry step
-            // can't register the path *without* its line-lengths and
-            // corrupt later column/GLI resolution for that file.
-            self.ensure_path_line_lengths(path);
+            let path_id = self.intern_path(path);
 
             // P1.2: emit either a column-only DeltaColumn (tag 0x07)
             // event — when this step lands on the *same* line as the
@@ -562,7 +500,7 @@ impl Tracer for RuntimeTracer {
             // CTFS spec, so we follow it with a DeltaColumn to land at
             // the desired column when `column_for_step > 1`.
             if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-                let new_column = column_line.0;
+                let new_column = self.path_tables.step_column(path, column_line.0);
                 let prev_line = self.last_line_per_frame.get(&frame_raw).copied();
                 let prev_column = self.last_column_per_frame.get(&frame_raw).copied();
                 let same_line = prev_line == Some(lineno);
@@ -747,16 +685,16 @@ impl Tracer for RuntimeTracer {
         self.flush_pending_io();
         // For non-streaming formats we can update the events file.
         match self.format {
-            TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+            TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
+                // Streaming writer: no partial flush to avoid closing the stream.
+            }
+            _ => {
                 TraceWriter::finish_writing_trace_events(&mut *self.writer).map_err(|err| {
                     ffi::map_recorder_error(
                         enverr!(ErrorCode::Io, "failed to finalise trace events")
                             .with_context("source", err.to_string()),
                     )
                 })?;
-            }
-            TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
-                // Streaming writer: no partial flush to avoid closing the stream.
             }
         }
         self.filter.clear_caches();
@@ -775,7 +713,10 @@ impl Tracer for RuntimeTracer {
         let _trace_scope = self.lifecycle.trace_id_scope();
         let policy = policy_snapshot();
 
-        if self.io.teardown(py, &mut *self.writer) {
+        if self
+            .io
+            .teardown(py, &mut *self.writer, &mut self.path_tables)
+        {
             self.mark_event();
         }
 
@@ -1039,53 +980,9 @@ fn build_rvalue(writer: &mut dyn TraceWriter, shape: &RValueShape, latest_call_k
 }
 
 impl RuntimeTracer {
-    /// P1.3: ensure the writer's `paths.dat` per-line offset table is
-    /// populated for `path` the first time it is seen in column-aware mode,
-    /// and fire the one-shot autoformat source-view pass on first sighting.
-    ///
-    /// Shared by `on_line` and `register_entry_step` so that *every* path
-    /// gets its line-lengths registered before the first Step that
-    /// references it. If a Step were emitted for a path that had only been
-    /// interned via `ensure_path_id` (no line-lengths), the reader's
-    /// `decodeGlobalPositionIndex` round-trip would mis-resolve that file's
-    /// `(line, column)` pairs for the rest of the trace.
-    ///
-    /// If the source file isn't readable (subprocess source the recorder
-    /// lost access to, in-memory module, etc.) the path is registered with
-    /// an empty `line_lengths` slice — column resolution at read time then
-    /// falls back to surfacing `None`, the spec-sanctioned back-compat
-    /// default. Idempotent: recorded once per path.
-    fn ensure_path_line_lengths(&mut self, path: &Path) {
-        if !self.column_aware || self.paths_with_line_lengths.contains(path) {
-            return;
-        }
-        let line_lengths = read_line_lengths(path).unwrap_or_default();
-        let registration =
-            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
-        match registration {
-            Ok(registered_path_id) => {
-                // P6.2: first sighting of this source path on the writer —
-                // fire the recorder-side autoformat pass once and, on a
-                // successful outcome, buffer the formatted view into
-                // ``source_views.dat``. Best-effort: any error path is
-                // absorbed inside the helper and the recorder keeps going.
-                maybe_register_autoformat_view(&mut *self.writer, registered_path_id, path);
-            }
-            Err(err) => {
-                // Soft failure: the trace is still usable without per-line
-                // column counts (resolution falls back to None). Log once
-                // and move on; skip the autoformat pass too (without a
-                // registered path id the source-view emit would fail with
-                // "unknown path").
-                log::debug!(
-                    "[RuntimeTracer] register_path_with_line_lengths failed for {}: {} \
-                     (column resolution will fall back to None for this file)",
-                    path.display(),
-                    err,
-                );
-            }
-        }
-        self.paths_with_line_lengths.insert(path.to_path_buf());
+    /// Intern `path`, registering its table first (see `path_tables.rs`).
+    pub(super) fn intern_path(&mut self, path: &Path) -> PathId {
+        self.path_tables.intern(&mut *self.writer, path)
     }
 
     /// Emit the Step that anchors a call record's `entry_step` at the
@@ -1103,7 +1000,7 @@ impl RuntimeTracer {
     /// so this method emits the missing def-line anchor.
     ///
     /// The emission funnels through the same path-registration and
-    /// column-aware machinery as `on_line` (via `ensure_path_line_lengths`
+    /// column-aware machinery as `on_line` (via `intern_path`
     /// and the leftmost-STORE column from the bytecode line table) so the
     /// def-line step is byte-compatible with the body steps that follow.
     /// It updates the per-frame line/column cursors so the first body LINE
@@ -1118,11 +1015,7 @@ impl RuntimeTracer {
             Err(_) => return,
         };
         let path = Path::new(filename);
-        let path_id = TraceWriter::ensure_path_id(&mut *self.writer, path);
-
-        // P1.3: register line-lengths before the first Step references the
-        // path (same invariant on_line relies on).
-        self.ensure_path_line_lengths(path);
+        let path_id = self.intern_path(path);
 
         let line_value = Line(def_line as i64);
 
@@ -1151,7 +1044,7 @@ impl RuntimeTracer {
         // writer's column cursor to 1; a DeltaColumn(N-1) follows when the
         // resolved column is N>1.
         if let (true, Some(column_line)) = (self.column_aware, column_for_step) {
-            let new_column = column_line.0;
+            let new_column = self.path_tables.step_column(path, column_line.0);
             TraceWriter::register_step(&mut *self.writer, path, line_value);
             if new_column > 1 {
                 TraceWriter::write_delta_column(&mut *self.writer, new_column - 1);

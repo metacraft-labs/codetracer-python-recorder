@@ -55,13 +55,14 @@ def test_cli_disable_policy_detaches_on_internal_error(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert trace_dir.is_dir()
-    # CTFS-only: the recorder writes ``trace.ct`` (no JSON sidecar);
-    # the disable-policy path must clean every artefact away.
-    events = trace_dir / "trace.ct"
+    # The recorder names its container after the program (``app.ct``); the
+    # disable-policy path must clean every artefact away.
     legacy_events = trace_dir / "trace.json"
     metadata = trace_dir / "trace_metadata.json"
     paths = trace_dir / "trace_paths.json"
-    assert not events.exists()
+    assert not list(trace_dir.glob("*.ct")), (
+        f"the failed recording's container was left behind: {sorted(trace_dir.iterdir())}"
+    )
     assert not legacy_events.exists(), (
         "trace.json must never be written (CTFS-only)"
     )
@@ -116,11 +117,8 @@ def test_cli_require_trace_fails_when_no_events_recorded(tmp_path: Path) -> None
         env=env,
     )
 
-    # Check injection support - events file existence indicates it's not working.
-    # CTFS-only: the recorder writes ``trace.ct``; ``trace.json`` is
-    # forbidden and would also indicate injection isn't wired up.
-    events = trace_dir / "trace.ct"
-    if result.returncode == 0 and events.exists():
+    # Check injection support - a container on success means it's not working.
+    if result.returncode == 0 and list(trace_dir.glob("*.ct")):
         pytest.fail(
             "Recorder built without integration-test hooks.\n"
             "Run `just dev` (or `just test` which includes it) to build with "

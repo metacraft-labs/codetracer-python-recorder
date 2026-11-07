@@ -133,7 +133,7 @@ mod tests {
                 TraceSessionBootstrap::prepare(
                     py,
                     trace_dir.as_path(),
-                    "json",
+                    "ctfs",
                     Some(activation.as_path()),
                     None,
                 )
@@ -142,7 +142,7 @@ mod tests {
             let bootstrap = result.expect("bootstrap");
             assert!(trace_dir.is_dir());
             assert_eq!(bootstrap.trace_directory(), trace_dir.as_path());
-            assert!(matches!(bootstrap.format(), TraceEventsFileFormat::Json));
+            assert!(matches!(bootstrap.format(), TraceEventsFileFormat::Ctfs));
             assert_eq!(bootstrap.activation_path(), Some(activation.as_path()));
             assert_eq!(bootstrap.program(), program_str);
             let expected_args: Vec<String> = vec!["--verbose".to_string()];
@@ -161,7 +161,7 @@ mod tests {
             let result = with_sys_argv(
                 py,
                 ProgramArgs::new([script_path.to_str().expect("utf8 path")]),
-                || TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None, None),
+                || TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "ctfs", None, None),
             );
 
             let bootstrap = result.expect("bootstrap");
@@ -192,7 +192,7 @@ mod tests {
             let result = with_sys_argv(
                 py,
                 ProgramArgs::new([script_path.to_str().expect("utf8 path")]),
-                || TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "json", None, None),
+                || TraceSessionBootstrap::prepare(py, trace_dir.as_path(), "ctfs", None, None),
             );
 
             let bootstrap = result.expect("bootstrap");
@@ -226,7 +226,7 @@ mod tests {
                     TraceSessionBootstrap::prepare(
                         py,
                         trace_dir.as_path(),
-                        "json",
+                        "ctfs",
                         None,
                         Some(explicit.as_slice()),
                     )

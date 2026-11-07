@@ -7,6 +7,7 @@ pub(crate) mod events;
 pub(crate) mod filtering;
 pub(crate) mod io;
 pub(crate) mod lifecycle;
+pub(crate) mod path_tables;
 
 mod runtime_tracer;
 

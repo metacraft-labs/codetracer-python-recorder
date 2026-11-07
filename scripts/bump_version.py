@@ -6,9 +6,9 @@ Usage:
 
 Without ``--all`` bumps only the production recorder (Rust + Python
 pair, version-locked by ``scripts/check_recorder_version.py``). With
-``--all`` also bumps the workspace root ``pyproject.toml`` and the
-pure-Python reference recorder. Each manifest is bumped relative to
-its own current version.
+``--all`` also bumps the workspace root ``pyproject.toml``. Each
+manifest is bumped relative to its own current version. The
+pure-Python test oracle is not released, so it is never bumped.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def main() -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="also bump the workspace root and the pure-Python reference recorder",
+        help="also bump the workspace root pyproject.toml",
     )
     args = parser.parse_args()
 
@@ -73,12 +73,7 @@ def main() -> int:
         REPO_ROOT / "codetracer-python-recorder" / "pyproject.toml",
     ]
     if args.all:
-        targets.extend(
-            [
-                REPO_ROOT / "pyproject.toml",
-                REPO_ROOT / "codetracer-pure-python-recorder" / "pyproject.toml",
-            ]
-        )
+        targets.append(REPO_ROOT / "pyproject.toml")
 
     missing = [p for p in targets if not p.exists()]
     if missing:

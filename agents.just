@@ -38,7 +38,7 @@ review-change:
 	   - DO NOT make any other changes in the code except adding the above-mentioned review comments.
 	   - DO NOT review code which is unrelated to the change under review. You can review code not in the diff, if its functionality was indirectly changed by the diff under review.
 	   - DO NOT write positive review comments. You can write positive statements in the review summary. Use review comments ONLY to point out potential problems or improvements.
-   	   
+
 	4. Examine the changes and update the list of issues in 'issues.md'
 	   - If the change affects a specific issue update its status
 	   - If the change partially solves an issue update its status and create new issues for the part which is not yet solved
@@ -124,4 +124,3 @@ continue-work:
 	  [ -f next-issue.md ] || break
 	  just agents::ai-work-step
 	done
-	

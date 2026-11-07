@@ -2,15 +2,17 @@
 
 ## Overview
 
-The Python Monitoring API delivers a generic `CodeType` object to every tracing callback.  The current `Tracer` trait surfaces this object as `&Bound<'_, PyAny>`, forcing every implementation to perform attribute lookups and type conversions manually.  This document proposes a `CodeObjectWrapper` type that exposes a stable, typed interface to the underlying code object while minimizing per-event overhead.
+The Python Monitoring API delivers a generic `CodeType` object to every tracing callback. The current `Tracer` trait surfaces this object as `&Bound<'_, PyAny>`, forcing every implementation to perform attribute lookups and type conversions manually. This document proposes a `CodeObjectWrapper` type that exposes a stable, typed interface to the underlying code object while minimizing per-event overhead.
 
 ## Goals
+
 - Provide a strongly typed API for common `CodeType` attributes needed by tracers and recorders.
 - Ensure lookups are cheap by caching values and avoiding repeated Python attribute access.
 - Maintain a stable identity for each code object to correlate events across callbacks.
 - Avoid relying on the unstable `PyCodeObject` layout from the C API.
 
 ## Non-Goals
+
 - Full re‑implementation of every `CodeType` attribute. Only the fields required for tracing and time‑travel debugging are exposed.
 - Direct mutation of `CodeType` objects. The wrapper offers read‑only access.
 
@@ -90,7 +92,7 @@ impl CodeObjectRegistry {
 
 `CodeObjectWrapper::new` remains available, but production code is expected to
 obtain instances via `CodeObjectRegistry::get_or_insert` so each unique code
-object is wrapped only once.  The registry is designed to be thread‑safe
+object is wrapped only once. The registry is designed to be thread‑safe
 (`DashMap`) and the wrappers are reference counted (`Arc`) so multiple threads
 can hold references without additional locking.
 
@@ -122,6 +124,7 @@ Once cached, subsequent callbacks referencing the same `CodeType` will reuse the
 existing wrapper without recomputing any attributes.
 
 ## Performance Considerations
+
 - `Py<PyCode>` allows cloning the wrapper without holding the GIL, enabling cheap event propagation.
 - Methods bind the owned reference to `Bound<'py, PyCode>` on demand, following PyO3's `Bound`‑first guidance and avoiding accidental `Py` clones.
 - Fields are loaded lazily and stored inside `OnceCell` containers to avoid repeated attribute lookups.
@@ -131,6 +134,7 @@ existing wrapper without recomputing any attributes.
   discovery happen at most once per `CodeType`.
 
 ## Open Questions
+
 - Additional attributes such as `co_consts` or `co_varnames` may be required for richer debugging features; these can be added later as new `OnceCell` fields.
 - Thread‑safety requirements may necessitate wrapping the cache in `UnsafeCell` or providing internal mutability strategies compatible with `Send`/`Sync`.
 - The registry currently grows unbounded; strategies for eviction or weak
@@ -138,5 +142,6 @@ existing wrapper without recomputing any attributes.
   transient code objects.
 
 ## References
+
 - [Python `CodeType` objects](https://docs.python.org/3/reference/datamodel.html#code-objects)
 - [Python monitoring API](https://docs.python.org/3/library/sys.monitoring.html)
