@@ -60,16 +60,10 @@ jobs:
         run: dev-exec just venv ${{matrix.python-version}} dev
 
       - name: Build ct-print binary
-        # tests/python/test_cli_integration.py shells out to
-        # ../codetracer-trace-format-nim/ct-print to decode CTFS
-        # trace bundles back into the legacy JSON shape used by the
-        # pure-python recorder reference oracle.  Compile it from
-        # codetracer_ct_print.nim into the expected path.
-        run: |
-          dev-exec bash -c '
-            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-            nim c -d:release -p:src -o:ct-print src/codetracer_ct_print.nim
-          '
+        # The Python tests shell out to ../codetracer-trace-format-nim/ct-print
+        # to decode the CTFS bundles they record. `just ct-print` compiles it
+        # there; the coverage job runs the same tests and calls it too.
+        run: dev-exec just ct-print
 
       - name: Verify recorder version metadata
         run: dev-exec python3 scripts/check_recorder_version.py
@@ -116,6 +110,12 @@ jobs:
 
       - name: Prepare dev environment (Python 3.12)
         run: dev-exec just venv 3.12 dev
+
+      - name: Build ct-print binary
+        # `just coverage` runs the Python tests, which need ct-print just as
+        # the nix-tests job's `just py-test` does. This job has its own runner
+        # and checkout, so nothing nix-tests built is here.
+        run: dev-exec just ct-print
 
       - name: Collect coverage
         id: coverage-run
