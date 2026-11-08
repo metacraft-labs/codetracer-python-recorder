@@ -63,6 +63,10 @@ indent_size = unset
 [/tests/test_ci_sibling_provisioning.py]
 indent_size = unset
 
+# Same: its workflow fixtures are YAML in string literals, indented in twos.
+[/tests/test_ci_python_lanes.py]
+indent_size = unset
+
 [/codetracer-python-recorder/tests/python/test_pytest_integration.py]
 indent_size = unset
 

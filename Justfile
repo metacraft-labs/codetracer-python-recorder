@@ -54,12 +54,31 @@ nix-test:
 # Create a clean local virtualenv for Python tooling (without editable packages
 # installed).
 #
-# With no argument this is `uv sync`, which reads `.python-version` -- the
-# single source. Pass a version only to deliberately exercise another
-# interpreter from PY_VERSIONS; that is what the multi-version CI matrix does,
-# and it is the ONLY thing that should ever pass one.
-venv version="":
-    uv sync {{ if version == "" { "" } else { "-p " + version } }}
+# This is `uv sync`, which reads `.python-version` -- the single source. To
+# exercise another interpreter from PY_VERSIONS, set `UV_PYTHON` for the whole
+# session (`UV_PYTHON=3.13 just venv dev test`); that is what the multi-version
+# CI matrix does, and it is the ONLY thing that should ever override it.
+#
+# This recipe used to take the version as an argument and pass it as
+# `uv sync -p`. That governed this one `uv sync` and nothing after it: every
+# later recipe calls `uv run`, which re-resolves the interpreter from
+# `.python-version` and recreates `.venv` when the two disagree. So
+# `just venv 3.13 dev` built and tested on 3.12, and CI's "Python 3.13" lane
+# never ran on 3.13. `UV_PYTHON` is read by every uv invocation, so it cannot
+# be dropped half way. `check-python` below asserts the result.
+venv:
+    uv sync
+
+# Fail unless the interpreter `uv run` resolves is Python VERSION (major.minor).
+#
+# Every CI job that names a Python version runs this before its first test
+# step, so a lane cannot test on a different interpreter than its name says.
+# It asks `uv run` itself rather than reading `.venv/pyvenv.cfg`: the
+# environment the tests see is whatever `uv run` resolves at that moment, and
+# that resolution is what used to go wrong (see `venv`).
+# tests/test_ci_python_lanes.py checks that the workflows call it.
+check-python version:
+    uv run python scripts/check_python_version.py '{{ version }}'
 
 # Build the module in dev mode
 dev:
@@ -102,7 +121,7 @@ bench:
         PYTHON_BIN="$ROOT/.venv/Scripts/python.exe"; \
     fi; \
     if [ ! -x "$PYTHON_BIN" ]; then \
-        echo "Python interpreter not found. Run 'just venv <version>' first."; \
+        echo "Python interpreter not found. Run 'just venv' first."; \
         exit 1; \
     fi; \
     PERF_DIR="$ROOT/codetracer-python-recorder/target/perf"; \
@@ -113,7 +132,7 @@ bench:
     uv run --group dev --group test pytest codetracer-python-recorder/tests/python/perf/test_trace_filter_perf.py -q
 
 py-test:
-    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder tests/test_ci_sibling_provisioning.py
+    uv run --group dev --group test --group web pytest codetracer-python-recorder/tests/python codetracer-pure-python-recorder tests/test_ci_sibling_provisioning.py tests/test_ci_python_lanes.py
 
 lint: lint-rust lint-errors verify-cli-convention verify-ci-siblings lint-python-indentation lint-rust-format
 

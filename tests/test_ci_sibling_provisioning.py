@@ -289,7 +289,7 @@ jobs:
     "command",
     [
         "nix develop --command bash -c 'just test'",
-        "dev-exec just venv 3.12 dev",
+        "dev-exec just venv dev",
         "cargo build --release",
         "uv run cargo nextest run --workspace",
         "maturin build --release --out dist",

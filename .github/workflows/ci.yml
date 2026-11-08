@@ -26,6 +26,14 @@ jobs:
       matrix:
         #python-version: ["3.10","3.11","3.12","3.13"]
         python-version: ["3.12", "3.13"]
+    env:
+      # Every uv invocation in the lane -- `uv sync`, and each `uv run` that a
+      # later recipe makes -- takes the lane's interpreter from here.
+      # `.python-version` (3.12) would otherwise win at the first `uv run` and
+      # recreate `.venv` on 3.12, which is how the 3.13 lane used to test on
+      # 3.12 (`just venv 3.13` passed `-p` to one `uv sync` only).
+      # `dev-exec` is `nix develop --command`, which keeps this environment.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +65,12 @@ jobs:
         run: dev-exec just check-hooks
 
       - name: Prepare dev environment
-        run: dev-exec just venv ${{matrix.python-version}} dev
+        run: dev-exec just venv dev
+
+      - name: Check the lane's interpreter
+        # Before the first test step, so a lane named for one version cannot
+        # test on another. tests/test_ci_python_lanes.py requires this step.
+        run: dev-exec just check-python ${{matrix.python-version}}
 
       - name: Build ct-print binary
         # The Python tests shell out to ../codetracer-trace-format-nim/ct-print
@@ -83,6 +96,10 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
+    env:
+      # The interpreter the job's name states, for every uv invocation (see
+      # the nix-tests job).
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v4
 
@@ -109,7 +126,10 @@ jobs:
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
       - name: Prepare dev environment (Python 3.12)
-        run: dev-exec just venv 3.12 dev
+        run: dev-exec just venv dev
+
+      - name: Check the job's interpreter
+        run: dev-exec just check-python 3.12
 
       - name: Build ct-print binary
         # `just coverage` runs the Python tests, which need ct-print just as

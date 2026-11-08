@@ -9,7 +9,10 @@
    - Regenerate or update documentation if required (`README.md`, API docs).
    - Add a changelog entry in `codetracer-python-recorder/CHANGELOG.md` summarising the release.
 3. **Validate locally**
-   - Execute `just venv 3.12 dev` (or preferred interpreter) and run `just test`.
+   - Execute `just venv dev test` on the interpreter `.python-version` declares, then
+     `UV_PYTHON=3.13 just venv dev check-python 3.13 test` for each other supported
+     interpreter (`UV_PYTHON` must cover the whole session: a `-p` given to one `uv`
+     command is dropped by the next `uv run`).
    - Build wheels and sdist (`just build` or `maturin build --release --sdist`) and perform a smoke install in a clean virtualenv (`python -m pip install dist/*.whl` and run `python -m codetracer_python_recorder --help`).
 4. **Prepare the release tag**
    - Commit changes following Conventional Commits (`feat:`/`fix:` etc.).
