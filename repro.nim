@@ -17,11 +17,17 @@ package codetracer_python_recorder:
   # provisioning is required ... refusing implicit PATH fallback"), and CI's
   # `dev-exec repro build|test` no longer appends `--tool-provisioning=path`
   # (metacraft-github-actions ecbf182, "honor the project's provisioning
-  # mode"). "path" is the mode every CI leg already ran in through that flag,
-  # so declaring it leaves CI's tool resolution unchanged. No Windows
-  # `tarball` arm: the python-recorder-*-sdk packages (python_sdk_tools.nim)
-  # declare only `nixPackage` provisioning, so there is no tarball to select.
-  defaultToolProvisioning "path"
+  # mode"). On Linux and macOS it is "path", the mode every CI leg already
+  # ran in through that flag: the dev shell puts every declared tool on PATH,
+  # and the python-recorder-*-sdk packages are realised from their Nix SDK
+  # when PATH has none. On Windows it is "tarball": there is no dev shell and
+  # no Nix, so every declared tool, the three SDK tools of
+  # python_sdk_tools.nim included, is realised from the archive its package
+  # pins instead of taken from whatever the runner's PATH lists first. For
+  # the ct-print edge's gcc that matters most: path mode takes the first
+  # gcc.exe on PATH, which need not be a working MinGW gcc, while tarball mode
+  # realises the pinned WinLibs gcc that the zstd-dev archive is built for.
+  defaultToolProvisioning (when defined(windows): tarball else: path)
   uses:
     "python-recorder-python-sdk"
     "python-recorder-uv-sdk"
