@@ -292,11 +292,11 @@
         "standard-hooks-src": "standard-hooks-src"
       },
       "locked": {
-        "lastModified": 1793939734,
-        "narHash": "sha256-AEJ/52LVtoNcqJC4N3yD1bnTbhlfAHF3DqImTElH+EY=",
+        "lastModified": 1794404852,
+        "narHash": "sha256-tCM4iOit2zNMi8e4BS9RxdLQMtA5+L/T9G19dCBezUQ=",
         "owner": "metacraft-labs",
         "repo": "codetracer-trace-format-nim",
-        "rev": "d282be4c45f3f31ce6b666f79a1bd8b6813010c7",
+        "rev": "30bf1a17decefeadb23606bb8c1af5fe56a5d264",
         "type": "github"
       },
       "original": {
