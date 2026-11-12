@@ -71,6 +71,12 @@ package codetracer_python_recorder:
     var nativeRefs = @["python-recorder-python-sdk", "python-recorder-maturin-sdk", "cargo", "rustc", "nim", "nimble", "git", "capnp", "zstd"]
     when defined(linux): nativeRefs.add(@["gcc", "pkg-config", "openssl"])
     elif defined(macosx): nativeRefs.add(@["clang", "pkg-config", "openssl"])
+    # uv, maturin and maturin's sdist mode all write into an existing `--out`
+    # directory without emptying it, and runtime assembly refuses a wheel
+    # directory holding more than one wheel. Each producer's directory is
+    # therefore an opaque output (`removeBeforeRun`): the engine removes it
+    # before the action runs, so nothing an earlier run left there, such as a
+    # wheel built under another platform tag, survives into this run.
     let archive = base / "pure/source.tar.gz"
     let archiveManifest = base / "pure/source-manifest.json"
     let stageCall = publicCliCall("python-recorder-python-sdk", "python-recorder-python-sdk", "", "python.pure-stage", @[
@@ -82,21 +88,21 @@ package codetracer_python_recorder:
     let pureCall = publicCliCall("python-recorder-uv-sdk", "python-recorder-uv-sdk", "", "python.pure-wheel", @[
       cliArgSeq("args", @["build", archive, "--wheel", "--out-dir", base / "pure/wheels", "--python", "python", "--no-build-isolation", "--no-managed-python", "--offline"], kind = cpkPositional)])
     let pureWheel = buildAction("python.pure-wheel", pureCall, deps = @[stage.id],
-      inputs = sdkInputs & @[archive, archiveManifest], outputs = @[base / "pure/wheels"], declaredOutputs = @[base / "pure/wheels"],
+      inputs = sdkInputs & @[archive, archiveManifest], outputs = @[base / "pure/wheels"], declaredOutputs = @[base / "pure/wheels"], removeBeforeRun = @[base / "pure/wheels"],
       scratchDirs = @[base / "pure/cache"], env = @[("UV_CACHE_DIR", root / base / "pure/cache")],
       toolIdentityRefs = @["python-recorder-uv-sdk", "python-recorder-python-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let nativeInputs = sdkInputs & @["codetracer-python-recorder/Cargo.toml", "codetracer-python-recorder/Cargo.lock", "codetracer-python-recorder/pyproject.toml", "codetracer-python-recorder/README.md", "codetracer-python-recorder/LICENSE", "codetracer-python-recorder/src", "codetracer-python-recorder/codetracer_python_recorder", "../codetracer-trace-format/Cargo.toml", "../codetracer-trace-format/Cargo.lock", "../codetracer-trace-format/*/Cargo.toml", "../codetracer-trace-format/*/build.rs", "../codetracer-trace-format/*/src", "../codetracer-trace-format-nim/src", "../codetracer-trace-format-nim/build_ffi.nims", "../codetracer-trace-format-nim/build_ffi_flags.nim", "../codetracer-trace-format-nim/codetracer_trace_format.nimble"]
     let nativeCall = publicCliCall("python-recorder-maturin-sdk", "python-recorder-maturin-sdk", "", "python.native-integration-wheel", @[
       cliArgSeq("args", @["build", "--locked", "--manifest-path", "codetracer-python-recorder/Cargo.toml", "--features", "integration-test", "--interpreter", "python", "--out", base / "native-test/wheels"], kind = cpkPositional)])
     let nativeWheel = buildAction("python.native-integration-wheel", nativeCall,
-      inputs = nativeInputs, outputs = @[base / "native-test/wheels"], declaredOutputs = @[base / "native-test/wheels"],
+      inputs = nativeInputs, outputs = @[base / "native-test/wheels"], declaredOutputs = @[base / "native-test/wheels"], removeBeforeRun = @[base / "native-test/wheels"],
       scratchDirs = @[base / "native-test/cargo"], env = @[("CARGO_TARGET_DIR", root / base / "native-test/cargo"), ("CARGO_BUILD_JOBS", "2")],
       toolIdentityRefs = nativeRefs, dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let shippingCall = publicCliCall("python-recorder-maturin-sdk", "python-recorder-maturin-sdk", "", "python.shipping-wheel-sdist", @[
       cliArgSeq("args", @["build", "--locked", "--manifest-path", "codetracer-python-recorder/Cargo.toml", "--release", "--sdist", "--interpreter", "python", "--out", base / "shipping/artifacts"], kind = cpkPositional)])
     let shipping = buildAction("python.shipping-wheel-sdist", shippingCall,
       inputs = nativeInputs & @["codetracer-python-recorder/tests"],
-      outputs = @[base / "shipping/artifacts"], declaredOutputs = @[base / "shipping/artifacts"],
+      outputs = @[base / "shipping/artifacts"], declaredOutputs = @[base / "shipping/artifacts"], removeBeforeRun = @[base / "shipping/artifacts"],
       scratchDirs = @[base / "shipping/cargo"], env = @[("CARGO_TARGET_DIR", root / base / "shipping/cargo"), ("CARGO_BUILD_JOBS", "2")],
       toolIdentityRefs = nativeRefs, dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let sourceManifest = base / "source/identity.json"
