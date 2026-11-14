@@ -53,6 +53,15 @@ package codetracer_python_recorder:
       "pkg-config"
       "openssl"
       "zstd-dev"
+    # Workspace siblings, resolved BY PATH: the crate's Cargo.toml
+    # path-depends on codetracer-trace-format's crates (types, writer,
+    # ctfs, filter, reader and the Nim-backed codetracer_trace_writer_nim),
+    # and that adapter's build script compiles codetracer-trace-format-nim's
+    # Nim library. The storage-contract conformance test calls
+    # codetracer_ctfs::recorder_conformance. Naming them here is what puts
+    # their pinned revisions in this repo's repro.lock.
+    "codetracer-trace-format"
+    "codetracer-trace-format-nim"
   library codetracerPythonRecorder
   build:
     let base = ".repro/build/python-complete-graph"
