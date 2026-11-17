@@ -17,6 +17,36 @@ import "../codetracer-trace-format-nim/build_writer_artifacts"
 # so PYO3_PYTHON and PYTHON_RECORDER_PYTHON below cannot name another one.
 const runtimeInterpreter = (when defined(windows): "Scripts/python.exe" else: "bin/python")
 
+proc requireWindowsGraphCapabilities() =
+  ## The Windows graph cannot be qualified with the reprobuild capabilities
+  ## that exist today, so on Windows it fails here, before any action runs,
+  ## naming what is missing. It is never skipped and never reported green.
+  ##
+  ## python_sdk_tools.nim realizes the three SDK tools on Windows from pinned
+  ## archives, but the rest of the graph also needs:
+  ##
+  ## * an identity record of each tarball-realized SDK tool (its archive URL
+  ##   and sha256) that the graph's helper frontends can read. Reprobuild
+  ##   seals the record into the realized prefix and gives an action no
+  ##   supported way to read it, and the helpers never infer an identity from
+  ##   a path (tools/python_sdk_identity.py);
+  ## * setuptools and wheel, provisioned by reprobuild into the
+  ##   `uv build --no-build-isolation --offline` environment. The
+  ##   python-build-standalone interpreter ships neither, and reprobuild
+  ##   provisions no Python build backend;
+  ## * reprobuild's per-tool provisioning overrides, which realize these tools
+  ##   and SDK dependencies on Windows and keep them in the shared binary
+  ##   cache. They are not in any reprobuild release.
+  when defined(windows):
+    raise newException(ValueError,
+      "capability unavailable: the codetracer-python-recorder graph cannot " &
+      "run on Windows yet. Missing: (1) an identity record (archive URL and " &
+      "sha256) of the tarball-realized python-recorder-python-sdk, " &
+      "python-recorder-uv-sdk and python-recorder-maturin-sdk that an action " &
+      "can read; (2) reprobuild provisioning of the setuptools and wheel build " &
+      "backend for the pure wheel; (3) reprobuild per-tool provisioning " &
+      "overrides, which are not in any reprobuild release.")
+
 package codetracer_python_recorder:
   # Tool provisioning is declared here, not left to the caller. Reprobuild
   # refuses a recipe with `uses:` and no provisioning mode ("typed tool
@@ -80,6 +110,7 @@ package codetracer_python_recorder:
     "codetracer-trace-format-nim"
   library codetracerPythonRecorder
   build:
+    requireWindowsGraphCapabilities()
     let base = ".repro/build/python-complete-graph"
     let root = activeProviderProjectRoot()
     let sdkInputs = @["tools/python-sdk/default.nix", "flake.lock", "nix/python.nix", ".python-version", "python_sdk_tools.nim", "repro.nim", "tools/python_sdk_identity.py"]

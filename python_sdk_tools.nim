@@ -26,11 +26,12 @@
 ##   root.
 ##
 ## These arms provision the tools only. The graph's helper frontends in
-## ``tools/`` still validate the SDK through the Nix SDK's identity marker
-## (``RECORDER_TEST_BUILD_SDK`` and ``codetracer-python-sdk-identity.json``
-## under ``/nix/store``), and the python-build-standalone archive ships pip
-## without the setuptools and wheel build backend the Nix SDK's interpreter
-## carries, so the Windows graph is not yet qualified.
+## ``tools/`` validate the SDK through the identity record its realization
+## provides (``tools/python_sdk_identity.py``). The Nix SDK writes one that
+## names its flake.lock selection; a tarball realization gives an action no
+## record to read, and the python-build-standalone archive ships pip without
+## the setuptools and wheel build backend, so the Windows graph is not yet
+## qualified and ``repro.nim`` fails on Windows with "capability unavailable".
 import blake3
 import repro_project_dsl
 
