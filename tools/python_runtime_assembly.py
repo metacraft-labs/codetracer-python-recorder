@@ -6,7 +6,7 @@ one owned runtime. It never invokes workspace/source package builders.
 """
 from python_sdk_identity import owning_sdk
 import argparse, configparser, email, hashlib, json, os
-import pathlib, shutil, subprocess, tomllib, zipfile
+import pathlib, shutil, subprocess, sysconfig, tomllib, zipfile
 from setuptools._vendor.packaging.tags import parse_tag, sys_tags
 from setuptools._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
 
@@ -91,6 +91,23 @@ def wheel_record(directory,project,backend,require_pure):
                 raise RuntimeError("pure wheel console scripts differ from pyproject")
     return {"path":str(path),"sha256":digest(path),"name":project["name"],"version":project["version"],"tags":sorted(map(str,tags)),"generator":shape.get("Generator")}
 
+def runtime_interpreter(runtime,declared):
+    """The runtime's interpreter, as its realized venv layout places it.
+
+    The recipe declares the interpreter path its consumers use (PYO3_PYTHON,
+    PYTHON_RECORDER_PYTHON). That path must be the one the venv layout of the
+    owning interpreter's platform defines (``bin/python`` on POSIX,
+    ``Scripts\\python.exe`` on Windows), or the consumers would run another
+    interpreter. See https://docs.python.org/3/library/sysconfig.html#installation-paths
+    for the ``venv`` scheme.
+    """
+    scripts=pathlib.Path(sysconfig.get_path("scripts",scheme="venv",vars={"base":str(runtime),"platbase":str(runtime)}))
+    layout=scripts/("python.exe" if os.name=="nt" else "python")
+    if pathlib.PurePath(declared).is_absolute() or runtime/declared!=layout:
+        raise RuntimeError(f"declared runtime interpreter {declared!r} differs from the venv layout {layout}")
+    if not layout.is_file():raise RuntimeError(f"assembled runtime has no interpreter at {layout}")
+    return layout
+
 def run(uv,args,root,environment):
     command=[str(uv),*args]
     subprocess.run(command,cwd=root,env=environment,check=True)
@@ -132,7 +149,7 @@ def assemble(args):
     environment=dict(os.environ,UV_CACHE_DIR=str(cache),UV_PROJECT_ENVIRONMENT=str(runtime),PYTHONDONTWRITEBYTECODE="1")
     uv=sdk/"bin/uv";commands=[]
     commands.append(run(uv,["sync","--locked","--all-groups","--no-install-workspace","--no-build","--python",str(sdk/"bin/python"),"--no-managed-python","--no-python-downloads","--offline"],root,environment))
-    python=runtime/("Scripts/python.exe" if os.name=="nt" else "bin/python")
+    python=runtime_interpreter(runtime,args.interpreter)
     for item in [native,pure]:
         commands.append(run(uv,["pip","install","--python",str(python),"--no-deps","--no-build","--offline","--no-index",item["path"]],root,environment))
     code="import importlib.metadata,json,codetracer_python_recorder,codetracer_pure_python_recorder;print(json.dumps({'nativeVersion':importlib.metadata.version('codetracer-python-recorder'),'pureVersion':importlib.metadata.version('codetracer-pure-python-recorder'),'nativeModule':codetracer_python_recorder.__file__,'pureModule':codetracer_pure_python_recorder.__file__}))"
@@ -142,8 +159,8 @@ def assemble(args):
     for name in ["nativeModule","pureModule"]:pathlib.Path(actual[name]).resolve().relative_to(runtime)
     if digest(root/"uv.lock")!=lock_before:raise RuntimeError("runtime assembly mutated locked source")
     manifest.parent.mkdir(parents=True,exist_ok=True)
-    manifest.write_text(json.dumps({"sdk":identity,"uvLockSha256":digest(root/"uv.lock"),"nativeWheel":native,"pureWheel":pure,"commands":commands,"installed":actual},indent=2))
+    manifest.write_text(json.dumps({"sdk":identity,"uvLockSha256":digest(root/"uv.lock"),"nativeWheel":native,"pureWheel":pure,"commands":commands,"installed":actual,"interpreter":args.interpreter},indent=2))
 
 parser=argparse.ArgumentParser()
-for name in ["root","runtime","scratch","manifest","native-wheels","pure-wheels","external-cache","external-manifest","source-manifest"]:parser.add_argument("--"+name,required=True)
+for name in ["root","runtime","scratch","manifest","native-wheels","pure-wheels","external-cache","external-manifest","source-manifest","interpreter"]:parser.add_argument("--"+name,required=True)
 if __name__=="__main__":assemble(parser.parse_args())

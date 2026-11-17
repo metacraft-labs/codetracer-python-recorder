@@ -104,7 +104,8 @@ class InstalledCliTests(unittest.TestCase):
             raise AssertionError(wheels[0].name)
         cls.run_required([cls.uv, "venv", str(cls.root / "venv"), "--python", str(sdk_python),
                           "--no-managed-python", "--offline"])
-        cls.python = cls.root / "venv/bin/python"
+        # The interpreter sits where the venv layout of this platform puts it.
+        cls.python = cls.root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         cls.run_required([cls.uv, "pip", "install", "--python", str(cls.python), "--no-deps", "--no-build",
                           "--offline", str(wheels[0])])
         cls.program = cls.root / "only-program/program.py"

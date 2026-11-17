@@ -11,6 +11,12 @@ import repro_project_dsl
 import python_sdk_tools
 import "../codetracer-trace-format-nim/build_writer_artifacts"
 
+# The assembled runtime is a uv venv, so its interpreter sits where the venv
+# layout of the host platform puts it. tools/python_runtime_assembly.py
+# receives this path and refuses it unless it is that layout's interpreter,
+# so PYO3_PYTHON and PYTHON_RECORDER_PYTHON below cannot name another one.
+const runtimeInterpreter = (when defined(windows): "Scripts/python.exe" else: "bin/python")
+
 package codetracer_python_recorder:
   # Tool provisioning is declared here, not left to the caller. Reprobuild
   # refuses a recipe with `uses:` and no provisioning mode ("typed tool
@@ -132,7 +138,7 @@ package codetracer_python_recorder:
     let runtime = base / "runtime"
     let runtimeManifest = base / "runtime-manifest.json"
     let assemblyCall = publicCliCall("python-recorder-python-sdk", "python-recorder-python-sdk", "", "python.runtime-assembly", @[
-      cliArgSeq("args", @["tools/python_runtime_assembly.py", "--root", root, "--runtime", runtime, "--scratch", base / "assembly", "--manifest", runtimeManifest, "--native-wheels", base / "native-test/wheels", "--pure-wheels", base / "pure/wheels", "--external-cache", externalCache, "--external-manifest", externalManifest, "--source-manifest", sourceManifest], kind = cpkPositional)])
+      cliArgSeq("args", @["tools/python_runtime_assembly.py", "--root", root, "--runtime", runtime, "--scratch", base / "assembly", "--manifest", runtimeManifest, "--native-wheels", base / "native-test/wheels", "--pure-wheels", base / "pure/wheels", "--external-cache", externalCache, "--external-manifest", externalManifest, "--source-manifest", sourceManifest, "--interpreter", runtimeInterpreter], kind = cpkPositional)])
     let runtimeAssembly = buildAction("python.runtime-assembly", assemblyCall, deps = @[externalFetch.id, nativeWheel.id, pureWheel.id],
       inputs = sdkInputs & @["tools/python_runtime_assembly.py", sourceManifest, externalCache, externalManifest, base / "native-test/wheels", base / "pure/wheels", "uv.lock", "pyproject.toml", "codetracer-python-recorder/pyproject.toml", "codetracer-python-recorder/Cargo.toml", "codetracer-pure-python-recorder/pyproject.toml"],
       outputs = @[runtime, runtimeManifest], declaredOutputs = @[runtime, runtimeManifest], scratchDirs = @[base / "assembly"],
@@ -141,7 +147,7 @@ package codetracer_python_recorder:
     let decoder = buildCtPrint(nimRoot)
     let decoderArtifact = ctPrintPath(nimRoot)
     let testInputs = nativeInputs & @[runtime, runtimeManifest, decoderArtifact, "codetracer-python-recorder/tests", "codetracer-pure-python-recorder", "tools/python-sdk/default.nix", ".git/index"]
-    let runtimeEnv = @[("PYTHONDONTWRITEBYTECODE", "1"), ("UV_PROJECT_ENVIRONMENT", root / runtime), ("PYO3_PYTHON", root / runtime / "bin/python"), ("CARGO_BUILD_JOBS", "2")]
+    let runtimeEnv = @[("PYTHONDONTWRITEBYTECODE", "1"), ("UV_PROJECT_ENVIRONMENT", root / runtime), ("PYO3_PYTHON", root / runtime / runtimeInterpreter), ("CARGO_BUILD_JOBS", "2")]
     let nextestCall = publicCliCall("python-recorder-uv-sdk", "python-recorder-uv-sdk", "", "python.native-tests", @[
       cliArgSeq("args", @["run", "--no-sync", "cargo", "nextest", "run", "--manifest-path", "codetracer-python-recorder/Cargo.toml", "--workspace", "--no-default-features"], kind = cpkPositional)])
     let nativeTests = buildAction("python.native-tests", nextestCall, deps = @[runtimeAssembly.id, decoder.id],
@@ -157,7 +163,7 @@ package codetracer_python_recorder:
       cliArgSeq("args", @["codetracer-python-recorder/tests/verify-cli-convention-no-silent-skip.sh"], kind = cpkPositional)])
     let guard = buildAction("python.cli-guard", guardCall, deps = @[runtimeAssembly.id],
       inputs = testInputs & @["codetracer-python-recorder/tests/verify-cli-convention-no-silent-skip.sh"],
-      env = runtimeEnv & @[("PYTHON_RECORDER_PYTHON", root / runtime / "bin/python")],
+      env = runtimeEnv & @[("PYTHON_RECORDER_PYTHON", root / runtime / runtimeInterpreter)],
       toolIdentityRefs = @["bash", "dirname", "grep", "python-recorder-python-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let rustBenchCall = publicCliCall("python-recorder-uv-sdk", "python-recorder-uv-sdk", "", "python.rust-bench", @[
       cliArgSeq("args", @["run", "--no-sync", "cargo", "bench", "--manifest-path", "codetracer-python-recorder/Cargo.toml", "--no-default-features", "--bench", "trace_filter"], kind = cpkPositional)])
