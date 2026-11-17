@@ -4,44 +4,15 @@ Compilation belongs to separate typed maturin and UV/setuptools actions.
 This frontend validates their actual artifacts and installs them offline into
 one owned runtime. It never invokes workspace/source package builders.
 """
-import argparse, configparser, email, hashlib, importlib.metadata, json, os
-import pathlib, shutil, subprocess, sys, tomllib, zipfile
+from python_sdk_identity import owning_sdk
+import argparse, configparser, email, hashlib, json, os
+import pathlib, shutil, subprocess, tomllib, zipfile
 from setuptools._vendor.packaging.tags import parse_tag, sys_tags
 from setuptools._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-def sdk_record(root):
-    sdk=pathlib.Path(os.environ["RECORDER_TEST_BUILD_SDK"]).resolve()
-    sdk.relative_to("/nix/store")
-    record=json.loads((sdk/"codetracer-python-sdk-identity.json").read_text())
-    source_files=["tools/python-sdk/default.nix","flake.lock","nix/python.nix",".python-version"]
-    encoded=json.dumps([(root/p).read_text() for p in source_files],ensure_ascii=False,separators=(",",":")).encode()
-    expected=hashlib.sha256(encoded).hexdigest()
-    if record["sourceId"]!=expected or os.environ["RECORDER_TEST_BUILD_SDK_SOURCE_ID"]!=expected:
-        raise RuntimeError("SDK source identity mismatch")
-    for field in ["underlyingPython","underlyingUv","underlyingMaturin"]:
-        pathlib.Path(record[field]).resolve().relative_to("/nix/store")
-    if pathlib.Path(sys.executable).resolve()!=pathlib.Path(record["underlyingPython"]).resolve():
-        raise RuntimeError("frontend is not executing the owning SDK interpreter")
-    if sys.version_info[:2]!=(3,12):
-        raise RuntimeError("frontend ABI differs from the approved Python3.12 SDK")
-    record["setuptoolsActual"]=importlib.metadata.version("setuptools")
-    record["wheelActual"]=importlib.metadata.version("wheel")
-    import setuptools, wheel
-    record["setuptoolsModule"]=setuptools.__file__;record["wheelModule"]=wheel.__file__
-    backend_root = pathlib.Path(record["underlyingPython"]).parent.parent
-    for field, package in [("setuptoolsModule", "setuptools"), ("wheelModule", "wheel")]:
-        actual_module = pathlib.Path(record[field]).resolve(strict=True)
-        selected_module = backend_root / "lib" / "python3.12" / "site-packages" / package / "__init__.py"
-        if actual_module != selected_module.resolve(strict=True):
-            raise RuntimeError("backend module differs from the selected SDK package: " + package)
-        actual_module.relative_to("/nix/store")
-    actual=subprocess.check_output([str(sdk/"bin/uv"),"--version"],text=True).split()
-    if actual[:2]!=["uv",record["uvVersion"]]:
-        raise RuntimeError("UV frontend differs from the immutable SDK marker")
-    return sdk,record
 
 def owned(root,path):
     path=path.resolve();base=root/".repro/build/python-complete-graph";path.relative_to(base)
@@ -126,7 +97,7 @@ def run(uv,args,root,environment):
     return command
 
 def assemble(args):
-    root=pathlib.Path(args.root).resolve();sdk,identity=sdk_record(root)
+    root=pathlib.Path(args.root).resolve();sdk,identity=owning_sdk(root)
     runtime=owned(root,pathlib.Path(args.runtime));scratch=owned(root,pathlib.Path(args.scratch))
     manifest=owned(root,pathlib.Path(args.manifest))
     if overlaps(runtime,scratch) or overlaps(manifest,runtime) or overlaps(manifest,scratch):

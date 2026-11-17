@@ -76,7 +76,7 @@ package codetracer_python_recorder:
   build:
     let base = ".repro/build/python-complete-graph"
     let root = activeProviderProjectRoot()
-    let sdkInputs = @["tools/python-sdk/default.nix", "flake.lock", "nix/python.nix", ".python-version", "python_sdk_tools.nim", "repro.nim"]
+    let sdkInputs = @["tools/python-sdk/default.nix", "flake.lock", "nix/python.nix", ".python-version", "python_sdk_tools.nim", "repro.nim", "tools/python_sdk_identity.py"]
     var nativeRefs = @["python-recorder-python-sdk", "python-recorder-maturin-sdk", "cargo", "rustc", "nim", "nimble", "git", "capnp", "zstd"]
     when defined(linux): nativeRefs.add(@["gcc", "pkg-config", "openssl"])
     elif defined(macosx): nativeRefs.add(@["clang", "pkg-config", "openssl"])

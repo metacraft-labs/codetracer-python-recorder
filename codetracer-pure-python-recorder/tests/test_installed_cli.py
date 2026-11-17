@@ -24,16 +24,24 @@ REPO_ROOT = PACKAGE_ROOT.parent
 class InstalledCliTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # The SDK's identity is the record its realization provides, checked
+        # against the committed sources; it is never inferred from where the
+        # SDK sits on disk. A missing record fails the fixture.
         cls.sdk = Path(os.environ["RECORDER_TEST_BUILD_SDK"]).resolve()
-        cls.sdk.relative_to("/nix/store")
         cls.identity = json.loads((cls.sdk / "codetracer-python-sdk-identity.json").read_text())
+        lock = json.loads((REPO_ROOT / "flake.lock").read_text())
+        nixpkgs = lock["nodes"][lock["root"]]["inputs"]["nixpkgs"]
+        if cls.identity["provisioning"] != {"kind": "nix-flake-lock", "flakeLockInput": nixpkgs,
+                                            "locked": lock["nodes"][nixpkgs]["locked"]}:
+            raise AssertionError(("SDK record does not name the committed flake.lock selection", cls.identity["provisioning"]))
         sources = ["tools/python-sdk/default.nix", "flake.lock", "nix/python.nix", ".python-version"]
         encoded = json.dumps([(REPO_ROOT / p).read_bytes().decode("utf-8") for p in sources],
                              ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if cls.identity["sourceId"] != hashlib.sha256(encoded).hexdigest():
             raise AssertionError("SDK source identity does not match the owning source bytes")
         for key in ["underlyingPython", "underlyingUv", "underlyingMaturin"]:
-            Path(cls.identity[key]).resolve().relative_to("/nix/store")
+            if not Path(cls.identity[key]).is_file():
+                raise AssertionError((key, cls.identity[key]))
         sdk_python = cls.sdk / "bin/python"
         version = subprocess.check_output([str(sdk_python), "--version"], text=True).strip()
         if version != "Python " + cls.identity["pythonVersion"] or not version.startswith("Python 3.12."):
@@ -80,8 +88,11 @@ class InstalledCliTests(unittest.TestCase):
         underlying = json.loads(cls.run_required([cls.identity["underlyingPython"], "-c", runtime_code]).stdout)
         if actual != underlying:
             raise AssertionError("Wrapper does not preserve the declared backend interpreter closure")
-        for field in ["setuptoolsModule", "wheelModule"]:
-            Path(actual[field]).resolve().relative_to("/nix/store")
+        # The build backend is the SDK interpreter's own package closure.
+        backend_site = Path(cls.identity["underlyingPython"]).parent.parent / "lib/python3.12/site-packages"
+        for field, package in [("setuptoolsModule", "setuptools"), ("wheelModule", "wheel")]:
+            if Path(actual[field]).resolve() != (backend_site / package / "__init__.py").resolve(strict=True):
+                raise AssertionError((field, actual[field], str(backend_site)))
         (cls.root / "sdk-runtime.json").write_text(json.dumps({"declared": cls.identity, "actual": actual}, indent=2))
         cls.run_required([cls.uv, "build", str(cls.staged_package), "--wheel", "--out-dir", str(cls.root / "wheels"),
                           "--python", str(sdk_python), "--no-build-isolation", "--no-managed-python", "--offline"])

@@ -5,40 +5,11 @@ The native action retains automatic monitoring and cacheable=false because
 immutable766 documents incomplete network scope for native fetch actions.
 This manifest proves source/artifact integrity, not complete network capture.
 """
-import argparse, hashlib, importlib.metadata, json, os, pathlib, shutil, subprocess, sys
+from python_sdk_identity import owning_sdk
+import argparse, hashlib, json, os, pathlib, shutil, subprocess
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-def sdk_record(root):
-    sdk=pathlib.Path(os.environ["RECORDER_TEST_BUILD_SDK"]).resolve()
-    sdk.relative_to("/nix/store")
-    record=json.loads((sdk/"codetracer-python-sdk-identity.json").read_text())
-    source_files=["tools/python-sdk/default.nix","flake.lock","nix/python.nix",".python-version"]
-    encoded=json.dumps([(root/p).read_text() for p in source_files],ensure_ascii=False,separators=(",",":")).encode()
-    expected=hashlib.sha256(encoded).hexdigest()
-    if record["sourceId"]!=expected or os.environ["RECORDER_TEST_BUILD_SDK_SOURCE_ID"]!=expected:
-        raise RuntimeError("SDK source identity mismatch")
-    for field in ["underlyingPython","underlyingUv","underlyingMaturin"]:
-        pathlib.Path(record[field]).resolve().relative_to("/nix/store")
-    if pathlib.Path(sys.executable).resolve()!=pathlib.Path(record["underlyingPython"]).resolve():
-        raise RuntimeError("frontend is not executing the owning SDK interpreter")
-    if sys.version_info[:2]!=(3,12):
-        raise RuntimeError("frontend ABI differs from the approved Python3.12 SDK")
-    record["setuptoolsActual"]=importlib.metadata.version("setuptools")
-    record["wheelActual"]=importlib.metadata.version("wheel")
-    import setuptools, wheel
-    record["setuptoolsModule"]=setuptools.__file__;record["wheelModule"]=wheel.__file__
-    backend_root = pathlib.Path(record["underlyingPython"]).parent.parent
-    for field, package in [("setuptoolsModule", "setuptools"), ("wheelModule", "wheel")]:
-        actual_module = pathlib.Path(record[field]).resolve(strict=True)
-        selected_module = backend_root / "lib" / "python3.12" / "site-packages" / package / "__init__.py"
-        if actual_module != selected_module.resolve(strict=True):
-            raise RuntimeError("backend module differs from the selected SDK package: " + package)
-        actual_module.relative_to("/nix/store")
-    actual=subprocess.check_output([str(sdk/"bin/uv"),"--version"],text=True).split()
-    if actual[:2]!=["uv",record["uvVersion"]]:
-        raise RuntimeError("UV frontend differs from the immutable SDK marker")
-    return sdk,record
 
 def cache_link_target(source, path):
     # UV emits absolute links inside its owned cache. Canonicalize only those
@@ -69,7 +40,7 @@ def cache_inventory(source):
 
 
 def provision(args):
-    root=pathlib.Path(args.root).resolve();sdk,identity=sdk_record(root)
+    root=pathlib.Path(args.root).resolve();sdk,identity=owning_sdk(root)
     lock=root/"uv.lock";before=digest(lock)
     expected=json.loads(pathlib.Path(args.source_manifest).read_text())
     if before!=expected["uvLockSha256"] or identity["sourceId"]!=expected["sdkSourceId"]:

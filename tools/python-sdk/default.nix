@@ -26,8 +26,17 @@ let
     (builtins.readFile ../../.python-version)
   ];
   sourceId = builtins.hashString "sha256" sourceBytes;
+  # The record names the pinned source this provisioning mode realized: the
+  # nixpkgs node the committed flake.lock selects. The graph's helpers compare
+  # it with the committed flake.lock and refuse a record that does not name
+  # it; they never derive an identity from where the SDK sits on disk.
   identity = builtins.toJSON {
     inherit sourceId;
+    provisioning = {
+      kind = "nix-flake-lock";
+      flakeLockInput = key;
+      inherit locked;
+    };
     pythonVersion = python.version;
     uvVersion = pkgs.uv.version;
     maturinVersion = pkgs.maturin.version;
