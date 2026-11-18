@@ -79,6 +79,14 @@ package codetracer_python_recorder:
     "bash"
     "dirname"
     "grep"
+    # tests/test_ci_python_lanes.py replays CI's version-named lanes through
+    # the real `just` and the real Justfile, and has uv resolve each lane's
+    # interpreter. The full pytest edge therefore names `just` and the 3.13
+    # interpreter of the support matrix (3.12 is the SDK's own python). The
+    # edge's PATH holds only the tools it names, so without `python3.13` uv
+    # downloads a generic-Linux CPython that cannot run on NixOS.
+    "just"
+    "python3.13"
     # `zstd` above is the CLI only. `buildCtPrint` compiles and links
     # ct-print against `zstd.h`/libzstd and names the C compiler and
     # `zstd-dev` on its edge on every host; a constructor called from
@@ -151,12 +159,17 @@ package codetracer_python_recorder:
       outputs = @[base / "shipping/artifacts"], declaredOutputs = @[base / "shipping/artifacts"], removeBeforeRun = @[base / "shipping/artifacts"],
       scratchDirs = @[base / "shipping/cargo"], env = @[("CARGO_TARGET_DIR", root / base / "shipping/cargo"), ("CARGO_BUILD_JOBS", "2")],
       toolIdentityRefs = nativeRefs, dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
+    # The source-identity, external-fetch and runtime-assembly helpers import
+    # tools/python_sdk_identity.py. Without this the SDK interpreter caches
+    # that module's bytecode in tools/__pycache__, inside the source tree the
+    # graph reads; the test edges' runtimeEnv below disables it the same way.
+    let helperEnv = @[("PYTHONDONTWRITEBYTECODE", "1")]
     let sourceManifest = base / "source/identity.json"
     let identityCall = publicCliCall("python-recorder-python-sdk", "python-recorder-python-sdk", "", "python.source-identity", @[
       cliArgSeq("args", @["tools/python_source_identity.py", "--root", root, "--manifest", sourceManifest], kind = cpkPositional)])
     let sourceIdentity = buildAction("python.source-identity", identityCall,
       inputs = sdkInputs & @["uv.lock", "pyproject.toml", "codetracer-python-recorder/pyproject.toml", "codetracer-python-recorder/Cargo.toml", "codetracer-pure-python-recorder/pyproject.toml", "tools/python_source_identity.py"], outputs = @[sourceManifest], declaredOutputs = @[sourceManifest],
-      toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
+      env = helperEnv, toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let externalCache = base / "external/cache"
     let externalManifest = base / "external/manifest.json"
     let fetchCall = publicCliCall("python-recorder-python-sdk", "python-recorder-python-sdk", "", "python.external-fetch", @[
@@ -164,7 +177,7 @@ package codetracer_python_recorder:
     let externalFetch = buildAction("python.external-fetch", fetchCall, deps = @[sourceIdentity.id],
       inputs = sdkInputs & @[sourceManifest, "tools/python_external_cache_provisioning.py", "codetracer-python-recorder/Cargo.toml", "uv.lock", "pyproject.toml", "codetracer-python-recorder/pyproject.toml", "codetracer-pure-python-recorder/pyproject.toml"],
       outputs = @[externalCache, externalManifest], declaredOutputs = @[externalCache, externalManifest],
-      scratchDirs = @[base / "external/provisioner"], toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"],
+      scratchDirs = @[base / "external/provisioner"], env = helperEnv, toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"],
       dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let runtime = base / "runtime"
     let runtimeManifest = base / "runtime-manifest.json"
@@ -173,7 +186,7 @@ package codetracer_python_recorder:
     let runtimeAssembly = buildAction("python.runtime-assembly", assemblyCall, deps = @[externalFetch.id, nativeWheel.id, pureWheel.id],
       inputs = sdkInputs & @["tools/python_runtime_assembly.py", sourceManifest, externalCache, externalManifest, base / "native-test/wheels", base / "pure/wheels", "uv.lock", "pyproject.toml", "codetracer-python-recorder/pyproject.toml", "codetracer-python-recorder/Cargo.toml", "codetracer-pure-python-recorder/pyproject.toml"],
       outputs = @[runtime, runtimeManifest], declaredOutputs = @[runtime, runtimeManifest], scratchDirs = @[base / "assembly"],
-      toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
+      env = helperEnv, toolIdentityRefs = @["python-recorder-python-sdk", "python-recorder-uv-sdk"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     const nimRoot = "../codetracer-trace-format-nim"
     let decoder = buildCtPrint(nimRoot)
     let decoderArtifact = ctPrintPath(nimRoot)
@@ -185,11 +198,22 @@ package codetracer_python_recorder:
       inputs = testInputs, scratchDirs = @[base / "native-tests/cargo", base / "native-tests/uv-cache"],
       env = runtimeEnv & @[("CARGO_TARGET_DIR", root / base / "native-tests/cargo"), ("UV_CACHE_DIR", root / base / "native-tests/uv-cache")],
       toolIdentityRefs = nativeRefs & @["python-recorder-uv-sdk", "cargo-nextest"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
+    # The same pytest invocation as `just py-test`: both recorders' suites and
+    # the two CI-shape tests under tests/. Those read every workflow, the
+    # sibling list and repro.lock, and replay the version-named lanes through
+    # the real Justfile (with its `agents` module), the stub project built
+    # from pyproject.toml and .python-version, and
+    # scripts/check_python_version.py. The lane replays run uv with this
+    # edge's environment, so interpreter downloads are refused and uv's
+    # managed-interpreter directory is owned scratch: each lane resolves the
+    # declared python3.13 or the SDK's 3.12, never a host-installed or
+    # freshly downloaded CPython.
+    let ciWorkflowTestInputs = @["tests/test_ci_sibling_provisioning.py", "tests/test_ci_python_lanes.py", ".github/workflows", ".github/sibling-repos", "repro.lock", "Justfile", "agents.just", "pyproject.toml", "scripts/check_python_version.py"]
     let pytestCall = publicCliCall("python-recorder-uv-sdk", "python-recorder-uv-sdk", "", "python.full-pytest", @[
-      cliArgSeq("args", @["run", "--no-sync", "--group", "dev", "--group", "test", "--group", "web", "python", "-m", "pytest", "codetracer-python-recorder/tests/python", "codetracer-pure-python-recorder", "--basetemp", base / "pytest/tmp", "-o", "cache_dir=" & (base / "pytest/cache")], kind = cpkPositional)])
+      cliArgSeq("args", @["run", "--no-sync", "--group", "dev", "--group", "test", "--group", "web", "python", "-m", "pytest", "codetracer-python-recorder/tests/python", "codetracer-pure-python-recorder", "tests/test_ci_sibling_provisioning.py", "tests/test_ci_python_lanes.py", "--basetemp", base / "pytest/tmp", "-o", "cache_dir=" & (base / "pytest/cache")], kind = cpkPositional)])
     let pytest = buildAction("python.full-pytest", pytestCall, deps = @[runtimeAssembly.id, decoder.id],
-      inputs = testInputs, scratchDirs = @[base / "pytest", ".repro/build/python-installed-wheel-tests"], env = runtimeEnv & @[("TMPDIR", root / base / "pytest"), ("UV_CACHE_DIR", root / base / "pytest/uv-cache"), ("PYTHONDONTWRITEBYTECODE", "1"), ("CODETRACER_TRACE_FILTER_PERF", "1"), ("CODETRACER_TRACE_FILTER_PERF_OUTPUT", root / base / "pytest/trace_filter_py.json")],
-      toolIdentityRefs = nativeRefs & @["python-recorder-uv-sdk", "bash"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
+      inputs = testInputs & ciWorkflowTestInputs, scratchDirs = @[base / "pytest", ".repro/build/python-installed-wheel-tests"], env = runtimeEnv & @[("TMPDIR", root / base / "pytest"), ("UV_CACHE_DIR", root / base / "pytest/uv-cache"), ("PYTHONDONTWRITEBYTECODE", "1"), ("CODETRACER_TRACE_FILTER_PERF", "1"), ("CODETRACER_TRACE_FILTER_PERF_OUTPUT", root / base / "pytest/trace_filter_py.json"), ("UV_PYTHON_DOWNLOADS", "never"), ("UV_PYTHON_INSTALL_DIR", root / base / "pytest/uv-python")],
+      toolIdentityRefs = nativeRefs & @["python-recorder-uv-sdk", "bash", "just", "python3.13"], dependencyPolicy = automaticMonitorPolicy(), cacheable = false)
     let guardCall = publicCliCall("bash", "bash", "", "python.cli-guard", @[
       cliArgSeq("args", @["codetracer-python-recorder/tests/verify-cli-convention-no-silent-skip.sh"], kind = cpkPositional)])
     let guard = buildAction("python.cli-guard", guardCall, deps = @[runtimeAssembly.id],
