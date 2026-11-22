@@ -8,6 +8,7 @@
 ## documented immutable766 network-monitor loss rather than bypassing it.
 import std/os
 import repro_project_dsl
+import repro_dsl_stdlib/foreign_env
 import python_sdk_tools
 import "../codetracer-trace-format-nim/build_writer_artifacts"
 
@@ -63,6 +64,21 @@ package codetracer_python_recorder:
     "codetracer-trace-format"
     "codetracer-trace-format-nim"
   library codetracerPythonRecorder
+  # The development environment `repro exec`, `repro shell` and the shell
+  # hook enter. Under "path" provisioning a `uses:` tool comes from PATH and
+  # from nowhere else: since reprobuild 0.2.31 a tool PATH lacks is no longer
+  # realized from its Nix package. The python-recorder-*-sdk packages declare
+  # only Nix provisioning, so outside a Nix shell `repro exec` here had no
+  # `uv` and no `maturin`, and `just dev` failed with "uv: command not found".
+  # The flake dev shell puts every tool this recipe names on PATH (uv,
+  # maturin, python, cargo, nim, ...), which is the PATH CI's legs already
+  # resolve against, so path mode finds them in `repro exec` too. This is
+  # the arrangement every other recorder recipe in the workspace uses.
+  # Windows has no flake shell; there `env.ps1` provides the tools.
+  devEnv:
+    when not defined(windows):
+      useFlakeDevShell()
+    activity "default"
   build:
     let base = ".repro/build/python-complete-graph"
     let root = activeProviderProjectRoot()
